@@ -57,10 +57,10 @@ export default function Auth() {
     <div className="min-h-screen flex items-center justify-center bg-white p-4">
       {/* Premium Background */}
       <div className="absolute inset-0 bg-gradient-to-br from-white via-orange-50 to-white" />
-      
+
       {/* Subtle Grid Pattern */}
       <div className="absolute inset-0 bg-grid-orange-100/[0.05] bg-[size:100px_100px]" />
-      
+
       {/* Sophisticated Background Accents */}
       <div className="absolute top-0 left-0 w-full h-full">
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-orange-200/10 rounded-full blur-3xl" />
@@ -73,7 +73,11 @@ export default function Auth() {
           <div className="hidden lg:block text-center lg:text-left">
             <div className="mb-8">
               <div className="inline-flex items-center justify-center mb-6 p-1 bg-white rounded-full shadow-lg">
-                <img src="/src/assets/logo.png" alt="SerpY ERP Logo" className="h-16 w-16 rounded-full object-cover" />
+                {/* <img
+                  src="/src/assets/logo.png"
+                  alt="SerpY ERP Logo"
+                  className="h-16 w-16 rounded-full object-cover"
+                /> */}
               </div>
               <h1 className="text-5xl font-bold bg-gradient-to-r from-gray-900 via-orange-600 to-gray-900 bg-clip-text text-transparent mb-4">
                 SerpY ERP
@@ -82,11 +86,11 @@ export default function Auth() {
                 Enterprise Resource Planning System
               </p>
               <p className="text-gray-500 text-lg leading-relaxed">
-                Transform your business operations with intelligent automation, 
+                Transform your business operations with intelligent automation,
                 real-time insights, and seamless workflow management.
               </p>
             </div>
-            
+
             {/* Premium Feature Highlights */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-4">
               <div className="flex items-center space-x-3 p-3 bg-white/50 backdrop-blur-sm rounded-lg border border-white/20">
@@ -94,8 +98,12 @@ export default function Auth() {
                   <Users className="h-5 w-5 text-orange-600" />
                 </div>
                 <div className="text-left">
-                  <h3 className="font-semibold text-gray-800">Team Collaboration</h3>
-                  <p className="text-sm text-gray-600">Work together seamlessly</p>
+                  <h3 className="font-semibold text-gray-800">
+                    Team Collaboration
+                  </h3>
+                  <p className="text-sm text-gray-600">
+                    Work together seamlessly
+                  </p>
                 </div>
               </div>
               <div className="flex items-center space-x-3 p-3 bg-white/50 backdrop-blur-sm rounded-lg border border-white/20">
@@ -103,25 +111,26 @@ export default function Auth() {
                   <BarChart3 className="h-5 w-5 text-orange-600" />
                 </div>
                 <div className="text-left">
-                  <h3 className="font-semibold text-gray-800">Real-time Analytics</h3>
+                  <h3 className="font-semibold text-gray-800">
+                    Real-time Analytics
+                  </h3>
                   <p className="text-sm text-gray-600">Data-driven decisions</p>
                 </div>
               </div>
             </div>
           </div>
-          
+
           {/* Right Side - Login Form */}
           <div className="flex justify-center">
             <Card className="w-full max-w-md border-0 shadow-2xl bg-white/95 backdrop-blur-sm">
               <CardHeader className="text-center pb-6 pt-8">
                 <div className="lg:hidden flex justify-center mb-6 p-1 bg-white rounded-full shadow-lg">
-                  <img
-    src={logo}
-    alt="SerpY ERP Logo"
-    className="h-14 w-14 rounded-full object-cover"
-  />
+                  {/* <img
+                    src={logo}
+                    alt="SerpY ERP Logo"
+                    className="h-14 w-14 rounded-full object-cover"
+                  /> */}
 
-                  {/* <img src="/src/assets/logo.png" alt="SerpY ERP Logo" className="h-14 w-14 rounded-full object-cover" /> */}
                 </div>
                 <CardTitle className="text-2xl font-bold text-gray-800 mb-2">
                   Welcome Back
@@ -133,14 +142,14 @@ export default function Auth() {
               <CardContent className="px-8 pb-8">
                 <Tabs defaultValue="signin" className="w-full">
                   <TabsList className="grid w-full grid-cols-2 mb-6 bg-orange-50/50 backdrop-blur-xl p-1.5 rounded-2xl border border-orange-200/30">
-                    <TabsTrigger 
-                      value="signin" 
+                    <TabsTrigger
+                      value="signin"
                       className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-orange-200/60 data-[state=active]:to-orange-300/60 data-[state=active]:shadow-xl text-gray-600 data-[state=active]:text-gray-900 font-semibold rounded-xl transition-all duration-500"
                     >
                       Sign In
                     </TabsTrigger>
-                    <TabsTrigger 
-                      value="signup" 
+                    <TabsTrigger
+                      value="signup"
                       className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-orange-200/60 data-[state=active]:to-orange-300/60 data-[state=active]:shadow-xl text-gray-600 data-[state=active]:text-gray-900 font-semibold rounded-xl transition-all duration-500"
                     >
                       Sign Up
@@ -150,7 +159,10 @@ export default function Auth() {
                   <TabsContent value="signin" className="space-y-5">
                     <form onSubmit={handleSignIn} className="space-y-5">
                       <div className="space-y-4">
-                        <Label htmlFor="signin-email" className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+                        <Label
+                          htmlFor="signin-email"
+                          className="text-sm font-semibold text-gray-700 uppercase tracking-wide"
+                        >
                           Email Address
                         </Label>
                         <Input
@@ -165,7 +177,10 @@ export default function Auth() {
                         />
                       </div>
                       <div className="space-y-4">
-                        <Label htmlFor="signin-password" className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+                        <Label
+                          htmlFor="signin-password"
+                          className="text-sm font-semibold text-gray-700 uppercase tracking-wide"
+                        >
                           Password
                         </Label>
                         <div className="relative">
@@ -194,12 +209,14 @@ export default function Auth() {
                           </Button>
                         </div>
                       </div>
-                      <Button 
-                        type="submit" 
-                        className="w-full h-14 bg-gradient-to-r from-orange-500 via-orange-600 to-orange-700 hover:from-orange-600 hover:via-orange-700 hover:to-orange-800 font-bold text-white text-lg rounded-2xl shadow-2xl hover:shadow-orange-500/25 transition-all duration-500 transform hover:scale-[1.02] tracking-wide" 
+                      <Button
+                        type="submit"
+                        className="w-full h-14 bg-gradient-to-r from-orange-500 via-orange-600 to-orange-700 hover:from-orange-600 hover:via-orange-700 hover:to-orange-800 font-bold text-white text-lg rounded-2xl shadow-2xl hover:shadow-orange-500/25 transition-all duration-500 transform hover:scale-[1.02] tracking-wide"
                         disabled={isLoading}
                       >
-                        {isLoading ? "Authenticating..." : "Sign In to Enterprise Portal"}
+                        {isLoading
+                          ? "Authenticating..."
+                          : "Sign In to Enterprise Portal"}
                       </Button>
                     </form>
                   </TabsContent>
@@ -207,7 +224,10 @@ export default function Auth() {
                   <TabsContent value="signup" className="space-y-5">
                     <form onSubmit={handleSignUp} className="space-y-5">
                       <div className="space-y-4">
-                        <Label htmlFor="signup-name" className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+                        <Label
+                          htmlFor="signup-name"
+                          className="text-sm font-semibold text-gray-700 uppercase tracking-wide"
+                        >
                           Full Name
                         </Label>
                         <Input
@@ -222,7 +242,10 @@ export default function Auth() {
                         />
                       </div>
                       <div className="space-y-4">
-                        <Label htmlFor="signup-email" className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+                        <Label
+                          htmlFor="signup-email"
+                          className="text-sm font-semibold text-gray-700 uppercase tracking-wide"
+                        >
                           Email Address
                         </Label>
                         <Input
@@ -237,7 +260,10 @@ export default function Auth() {
                         />
                       </div>
                       <div className="space-y-4">
-                        <Label htmlFor="signup-password" className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+                        <Label
+                          htmlFor="signup-password"
+                          className="text-sm font-semibold text-gray-700 uppercase tracking-wide"
+                        >
                           Password
                         </Label>
                         <div className="relative">
@@ -267,12 +293,14 @@ export default function Auth() {
                           </Button>
                         </div>
                       </div>
-                      <Button 
-                        type="submit" 
-                        className="w-full h-14 bg-gradient-to-r from-orange-500 via-orange-600 to-orange-700 hover:from-orange-600 hover:via-orange-700 hover:to-orange-800 font-bold text-white text-lg rounded-2xl shadow-2xl hover:shadow-orange-500/25 transition-all duration-500 transform hover:scale-[1.02] tracking-wide" 
+                      <Button
+                        type="submit"
+                        className="w-full h-14 bg-gradient-to-r from-orange-500 via-orange-600 to-orange-700 hover:from-orange-600 hover:via-orange-700 hover:to-orange-800 font-bold text-white text-lg rounded-2xl shadow-2xl hover:shadow-orange-500/25 transition-all duration-500 transform hover:scale-[1.02] tracking-wide"
                         disabled={isLoading}
                       >
-                        {isLoading ? "Creating Account..." : "Create Enterprise Account"}
+                        {isLoading
+                          ? "Creating Account..."
+                          : "Create Enterprise Account"}
                       </Button>
                     </form>
                   </TabsContent>
@@ -281,15 +309,11 @@ export default function Auth() {
             </Card>
           </div>
         </div>
-        
+
         {/* Mobile Branding */}
         <div className="lg:hidden text-center mt-8">
-          <h2 className="text-2xl font-bold text-slate-800 mb-2">
-            SerpY ERP
-          </h2>
-          <p className="text-slate-600">
-            Enterprise Resource Planning System
-          </p>
+          <h2 className="text-2xl font-bold text-slate-800 mb-2">SerpY ERP</h2>
+          <p className="text-slate-600">Enterprise Resource Planning System</p>
         </div>
       </div>
     </div>
