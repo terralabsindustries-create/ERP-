@@ -19,7 +19,7 @@ app.use(compression());
 app.use(cors({
   origin: [
     'https://serpy.synxautomate.com',
-    'https://serpy-silk.vercel.app/auth',
+    'https://serpy-silk.vercel.app',
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
