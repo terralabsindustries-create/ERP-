@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Building2, Eye, EyeOff, Shield, Users, BarChart3 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import logo from "../assets/logo.png";
 
 export default function Auth() {
   const { user, signIn, signUp, loading } = useAuth();
@@ -114,7 +115,13 @@ export default function Auth() {
             <Card className="w-full max-w-md border-0 shadow-2xl bg-white/95 backdrop-blur-sm">
               <CardHeader className="text-center pb-6 pt-8">
                 <div className="lg:hidden flex justify-center mb-6 p-1 bg-white rounded-full shadow-lg">
-                  <img src="/src/assets/logo.png" alt="SerpY ERP Logo" className="h-14 w-14 rounded-full object-cover" />
+                  <img
+    src={logo}
+    alt="SerpY ERP Logo"
+    className="h-14 w-14 rounded-full object-cover"
+  />
+
+                  {/* <img src="/src/assets/logo.png" alt="SerpY ERP Logo" className="h-14 w-14 rounded-full object-cover" /> */}
                 </div>
                 <CardTitle className="text-2xl font-bold text-gray-800 mb-2">
                   Welcome Back
