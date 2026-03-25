@@ -1,5 +1,4 @@
-// API Client for Print Arts Fall-backend
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4001/api';
+const BASE_URL = import.meta.env.VITE_API_URL || 'https://serpy.synxautomate.com/api';
 
 interface ApiResponse<T = any> {
   status: 'success' | 'error';
