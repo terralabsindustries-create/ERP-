@@ -44,10 +44,10 @@ export function DashboardShortcuts({
     setShowCreateJob(false);
   };
 
-  const handlePaymentCreated = () => {
-    onPaymentCreated?.();
-    setShowReceivePayment(false);
-  };
+  // const handlePaymentCreated = () => {
+  //   onPaymentCreated?.();
+  //   setShowReceivePayment(false);
+  // };
 
   const handleQuotationCreated = () => {
     onQuotationCreated?.();
@@ -78,14 +78,14 @@ export function DashboardShortcuts({
         </Button>
 
         {/* Receive Payment */}
-        <Button
+        {/* <Button
           onClick={() => setShowReceivePayment(true)}
           size="sm"
           className="bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white shadow-lg transition-all duration-200 hover:scale-105"
         >
           <DollarSign className="h-4 w-4 mr-1" />
           Receive Payment
-        </Button>
+        </Button> */}
 
         {/* Create Quotation */}
         <CreateQuotationDialog onQuotationCreated={handleQuotationCreated}>
@@ -111,10 +111,10 @@ export function DashboardShortcuts({
         onCustomersUpdate={() => { }} // Will be handled by refresh
       />
 
-      <CreatePaymentDialog
+      {/* <CreatePaymentDialog
         open={showReceivePayment}
         onOpenChange={setShowReceivePayment}
-      />
+      /> */}
 
       <PurchaseOrderDialog
         open={showPurchaseOrder}
