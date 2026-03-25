@@ -116,7 +116,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       toast({
         title: "Account Created!",
-        description: "Welcome to Print Arts Management System.",
+        description: "Welcome to SerpY ERP System.",
       });
 
       return { error: null };

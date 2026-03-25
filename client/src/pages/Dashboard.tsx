@@ -197,7 +197,7 @@ export default function Dashboard() {
       <div className="p-3 md:p-4">
         <div className="flex items-center justify-center h-64">
           <div className="text-center">
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">Welcome to Print Arts Management</h2>
+            <h2 className="text-xl font-semibold text-gray-900 mb-2">Welcome to SerpY ERP</h2>
             <p className="text-gray-600 mb-4">Please login to access your dashboard</p>
             <Button onClick={() => navigate('/auth')} className="bg-blue-600 hover:bg-blue-700">
               Go to Login

@@ -9,17 +9,6 @@ const xss = require('xss-clean');
 const path = require('path');
 
 
-
-setInterval(() => {
-  const m = process.memoryUsage();
-
-  console.log({
-    heapUsedMB: (m.heapUsed / 1024 / 1024).toFixed(2),
-    rssMB: (m.rss / 1024 / 1024).toFixed(2)
-  });
-}, 5000);
-
-
 const app = express();
 
 // Security Middleware
@@ -109,7 +98,7 @@ app.use('/api/settings', require('./routes/settings'));
 app.get('/api/health', (req, res) => {
   res.status(200).json({
     status: 'success',
-    message: 'Print Arts Flow API is running',
+    message: 'SerpY ERP API is running',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development'
   });
