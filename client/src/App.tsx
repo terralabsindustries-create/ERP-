@@ -39,6 +39,9 @@ import GeneralLedger from "./pages/GeneralLedger";
 import NotFound from "./pages/NotFound";
 import CreateLogin from "./pages/CreateLogin";
 import HiddenCreateLogin from "./pages/HiddenCreateLogin";
+import TermsAndConditions from "./pages/TermsAndConditions";
+import PrivacyPolicy from "./pages/PrivacyPolicy";
+import DataPolicy from "./pages/DataPolicy";
 
 const queryClient = new QueryClient();
 
@@ -51,6 +54,9 @@ const App = () => (
         <AuthProvider>
           <Routes>
             <Route path="/auth" element={<Auth />} />
+            <Route path="/terms-and-conditions" element={<TermsAndConditions />} />
+            <Route path="/privacy-policy" element={<PrivacyPolicy />} />
+            <Route path="/data-security-policy" element={<DataPolicy />} />
             <Route
               path="/*"
               element={

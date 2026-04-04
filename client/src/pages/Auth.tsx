@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Navigate } from "react-router-dom";
+import { Navigate, Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,107 +54,103 @@ export default function Auth() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-white p-4">
+    <div className="min-h-screen max-h-screen flex flex-col bg-white overflow-hidden">
       {/* Premium Background */}
-      <div className="absolute inset-0 bg-gradient-to-br from-white via-orange-50 to-white" />
-
-      {/* Subtle Grid Pattern */}
-      <div className="absolute inset-0 bg-grid-orange-100/[0.05] bg-[size:100px_100px]" />
-
-      {/* Sophisticated Background Accents */}
-      <div className="absolute top-0 left-0 w-full h-full">
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-orange-200/10 rounded-full blur-3xl" />
-        <div className="absolute bottom-1/4 right-1/4 w-[500px] h-[500px] bg-orange-300/10 rounded-full blur-3xl" />
-        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-gradient-to-r from-orange-200/8 to-orange-300/8 rounded-full blur-3xl" />
+      <div className="absolute inset-0 bg-gradient-to-br from-orange-50 via-white to-orange-50" />
+      <div className="absolute inset-0 bg-grid-orange-100/[0.03] bg-[size:120px_120px]" />
+      
+      {/* Background Accents */}
+      <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none">
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-orange-200/8 rounded-full blur-3xl" />
+        <div className="absolute bottom-1/4 right-1/4 w-[500px] h-[500px] bg-orange-300/8 rounded-full blur-3xl" />
       </div>
-      <div className="relative z-10 w-full max-w-6xl mx-auto">
-        <div className="grid lg:grid-cols-2 gap-8 items-center">
-          {/* Left Side - Branding */}
-          <div className="hidden lg:block text-center lg:text-left">
-            <div className="mb-8">
-              <div className="inline-flex items-center justify-center mb-6 p-1 bg-white rounded-full shadow-lg">
-                {/* <img
-                  src="/src/assets/logo.png"
-                  alt="SerpY ERP Logo"
-                  className="h-16 w-16 rounded-full object-cover"
-                /> */}
-              </div>
-              <h1 className="text-5xl font-bold bg-gradient-to-r from-gray-900 via-orange-600 to-gray-900 bg-clip-text text-transparent mb-4">
-                SerpY ERP
-              </h1>
-              <p className="text-xl text-gray-600 font-medium mb-2">
-                Enterprise Resource Planning System
-              </p>
-              <p className="text-gray-500 text-lg leading-relaxed">
-                Transform your business operations with intelligent automation,
-                real-time insights, and seamless workflow management.
-              </p>
-            </div>
 
-            {/* Premium Feature Highlights */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-4">
-              <div className="flex items-center space-x-3 p-3 bg-white/50 backdrop-blur-sm rounded-lg border border-white/20">
-                <div className="p-2 bg-orange-100 rounded-lg">
-                  <Users className="h-5 w-5 text-orange-600" />
+      {/* Main Content - Perfectly Centered */}
+      <div className="relative z-10 flex-1 flex items-center justify-center p-4">
+        <div className="w-full max-w-5xl">
+          <div className="grid lg:grid-cols-2 gap-8 lg:gap-16 items-center">
+            
+            {/* Left Side - Branding */}
+            <div className="hidden lg:flex flex-col justify-center">
+              <div className="space-y-6">
+                <div className="flex items-center justify-start">
+                  <div className="p-3 bg-gradient-to-r from-orange-100 to-orange-200 rounded-2xl shadow-lg">
+                    <Building2 className="h-8 w-8 text-orange-600" />
+                  </div>
                 </div>
-                <div className="text-left">
-                  <h3 className="font-semibold text-gray-800">
-                    Team Collaboration
-                  </h3>
-                  <p className="text-sm text-gray-600">
-                    Work together seamlessly
+                <div className="space-y-4">
+                  <h1 className="text-5xl font-bold bg-gradient-to-r from-gray-900 via-orange-600 to-gray-900 bg-clip-text text-transparent leading-tight">
+                    SerpY ERP
+                  </h1>
+                  <p className="text-xl text-gray-600 font-medium">
+                    Enterprise Resource Planning System
+                  </p>
+                  <p className="text-gray-500 text-lg leading-relaxed">
+                    Transform your business operations with intelligent automation,
+                    real-time insights, and seamless workflow management.
                   </p>
                 </div>
               </div>
-              <div className="flex items-center space-x-3 p-3 bg-white/50 backdrop-blur-sm rounded-lg border border-white/20">
-                <div className="p-2 bg-orange-100 rounded-lg">
-                  <BarChart3 className="h-5 w-5 text-orange-600" />
+
+              {/* Feature Cards */}
+              <div className="grid grid-cols-1 gap-4 mt-8">
+                <div className="flex items-center space-x-4 p-4 bg-white/60 backdrop-blur-sm rounded-xl border border-orange-100/50 shadow-sm">
+                  <div className="p-3 bg-gradient-to-r from-orange-100 to-orange-200 rounded-xl flex-shrink-0">
+                    <Users className="h-6 w-6 text-orange-600" />
+                  </div>
+                  <div className="text-left">
+                    <h3 className="font-semibold text-gray-800 text-base">
+                      Team Collaboration
+                    </h3>
+                    <p className="text-sm text-gray-600">
+                      Work together seamlessly
+                    </p>
+                  </div>
                 </div>
-                <div className="text-left">
-                  <h3 className="font-semibold text-gray-800">
-                    Real-time Analytics
-                  </h3>
-                  <p className="text-sm text-gray-600">Data-driven decisions</p>
+                <div className="flex items-center space-x-4 p-4 bg-white/60 backdrop-blur-sm rounded-xl border border-orange-100/50 shadow-sm">
+                  <div className="p-3 bg-gradient-to-r from-orange-100 to-orange-200 rounded-xl flex-shrink-0">
+                    <BarChart3 className="h-6 w-6 text-orange-600" />
+                  </div>
+                  <div className="text-left">
+                    <h3 className="font-semibold text-gray-800 text-base">
+                      Real-time Analytics
+                    </h3>
+                    <p className="text-sm text-gray-600">Data-driven decisions</p>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
 
-          {/* Right Side - Login Form */}
-          <div className="flex justify-center">
-            <Card className="w-full max-w-md border-0 shadow-2xl bg-white/95 backdrop-blur-sm">
-              <CardHeader className="text-center pb-6 pt-8">
-                <div className="lg:hidden flex justify-center mb-6 p-1 bg-white rounded-full shadow-lg">
-                  {/* <img
-                    src={logo}
-                    alt="SerpY ERP Logo"
-                    className="h-14 w-14 rounded-full object-cover"
-                  /> */}
-
-                </div>
-                <CardTitle className="text-2xl font-bold text-gray-800 mb-2">
-                  Welcome Back
-                </CardTitle>
-                <p className="text-gray-600">
-                  Sign in to access your ERP dashboard
-                </p>
-              </CardHeader>
-              <CardContent className="px-8 pb-8">
-                <Tabs defaultValue="signin" className="w-full">
-                  <TabsList className="grid w-full grid-cols-2 mb-6 bg-orange-50/50 backdrop-blur-xl p-1.5 rounded-2xl border border-orange-200/30">
-                    <TabsTrigger
-                      value="signin"
-                      className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-orange-200/60 data-[state=active]:to-orange-300/60 data-[state=active]:shadow-xl text-gray-600 data-[state=active]:text-gray-900 font-semibold rounded-xl transition-all duration-500"
-                    >
-                      Sign In
-                    </TabsTrigger>
-                    <TabsTrigger
-                      value="signup"
-                      className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-orange-200/60 data-[state=active]:to-orange-300/60 data-[state=active]:shadow-xl text-gray-600 data-[state=active]:text-gray-900 font-semibold rounded-xl transition-all duration-500"
-                    >
-                      Sign Up
-                    </TabsTrigger>
-                  </TabsList>
+            {/* Right Side - Login Form */}
+            <div className="flex justify-center">
+              <Card className="w-full max-w-md border-0 shadow-2xl bg-white/95 backdrop-blur-sm">
+                <CardHeader className="text-center pb-6 pt-8">
+                  <div className="lg:hidden flex justify-center mb-6 p-3 bg-gradient-to-r from-orange-100 to-orange-200 rounded-2xl shadow-lg">
+                    <Building2 className="h-8 w-8 text-orange-600" />
+                  </div>
+                  <CardTitle className="text-2xl font-bold text-gray-800 mb-2">
+                    Welcome Back
+                  </CardTitle>
+                  <p className="text-gray-600">
+                    Sign in to access your ERP dashboard
+                  </p>
+                </CardHeader>
+                <CardContent className="px-8 pb-8">
+                  <Tabs defaultValue="signin" className="w-full">
+                    <TabsList className="grid w-full grid-cols-2 mb-6 bg-gradient-to-r from-orange-50 to-orange-100/50 backdrop-blur-xl p-1.5 rounded-2xl border border-orange-200/30">
+                      <TabsTrigger
+                        value="signin"
+                        className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-orange-200/60 data-[state=active]:to-orange-300/60 data-[state=active]:shadow-xl text-gray-600 data-[state=active]:text-gray-900 font-semibold rounded-xl transition-all duration-500"
+                      >
+                        Sign In
+                      </TabsTrigger>
+                      <TabsTrigger
+                        value="signup"
+                        className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-orange-200/60 data-[state=active]:to-orange-300/60 data-[state=active]:shadow-xl text-gray-600 data-[state=active]:text-gray-900 font-semibold rounded-xl transition-all duration-500"
+                      >
+                        Sign Up
+                      </TabsTrigger>
+                    </TabsList>
 
                   <TabsContent value="signin" className="space-y-5">
                     <form onSubmit={handleSignIn} className="space-y-5">
@@ -311,11 +307,46 @@ export default function Auth() {
         </div>
 
         {/* Mobile Branding */}
-        <div className="lg:hidden text-center mt-8">
+        <div className="lg:hidden text-center mb-4">
+          <div className="flex justify-center mb-4 p-3 bg-gradient-to-r from-orange-100 to-orange-200 rounded-2xl shadow-lg">
+            <Building2 className="h-8 w-8 text-orange-600" />
+          </div>
           <h2 className="text-2xl font-bold text-slate-800 mb-2">SerpY ERP</h2>
           <p className="text-slate-600">Enterprise Resource Planning System</p>
         </div>
+
+        {/* Footer */}
+        <div className="relative z-10 pt-16 pb-4 px-4">
+          <div className="text-center space-y-2">
+            <p className="text-xs text-gray-600 font-medium">
+              © 2026 Synx Automation Private Limited. All rights reserved.
+            </p>
+            <div className="flex flex-wrap justify-center items-center gap-3 text-xs">
+              <Link
+                to="/terms-and-conditions"
+                className="text-gray-600 hover:text-orange-600 transition-colors duration-200 font-medium hover:underline underline-offset-2"
+              >
+                Terms & Conditions
+              </Link>
+              <span className="text-gray-300">•</span>
+              <Link
+                to="/privacy-policy"
+                className="text-gray-600 hover:text-orange-600 transition-colors duration-200 font-medium hover:underline underline-offset-2"
+              >
+                Privacy Policy
+              </Link>
+              <span className="text-gray-300">•</span>
+              <Link
+                to="/data-security-policy"
+                className="text-gray-600 hover:text-orange-600 transition-colors duration-200 font-medium hover:underline underline-offset-2"
+              >
+                Data Security Policy
+              </Link>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
+  </div>
   );
 }
