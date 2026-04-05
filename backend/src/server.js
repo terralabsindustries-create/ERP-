@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -20,7 +21,8 @@ app.use(cors({
   origin: [
     'https://serpy.synxautomate.com',
     'https://serpy-silk.vercel.app',
-    'http://localhost:8081'
+    'http://localhost:8081',
+    'http://localhost:8080'  // Added port 8080 for frontend
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -88,6 +90,7 @@ app.use('/api/portal', require('./routes/portal'));
 app.use('/api/activity-log', require('./routes/activityLog'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/settings', require('./routes/settings'));
+app.use('/api/email', require('./routes/email'));
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

@@ -147,13 +147,38 @@ export default function CreateLogin() {
 
       console.log("✅ User created successfully:", response);
 
+      // Send welcome email to staff member
+      try {
+        const emailData = {
+          to: formData.email.toLowerCase().trim(),
+          subject: "Welcome to SerpY ERP - Your Login Credentials",
+          template: "staff-welcome",
+          data: {
+            fullName: formData.fullName.trim(),
+            email: formData.email.toLowerCase().trim(),
+            password: formData.password,
+            role: formData.role,
+            loginUrl: window.location.origin + "/auth",
+            companyName: "Synx Automation Private Limited",
+            supportEmail: "support@serpy.in"
+          }
+        };
+
+        console.log("📧 Sending welcome email to:", formData.email);
+        const emailResponse = await apiClient.sendEmail(emailData);
+        console.log("✅ Welcome email sent successfully:", emailResponse);
+      } catch (emailError) {
+        console.error("❌ Error sending welcome email:", emailError);
+        // Continue with success message even if email fails
+      }
+
       // Show success message
       const permissionText = formData.role === 'admin'
         ? 'full access (all features)'
         : `${permissions.length} permissions`;
       setMessage({
         type: "success",
-        text: `✓ Login created successfully for ${formData.email} with ${formData.role} role and ${permissionText}. User saved to database.`,
+        text: `✓ Login created successfully for ${formData.email} with ${formData.role} role and ${permissionText}. User saved to database and welcome email sent.`,
       });
 
       // Reset form after 2 seconds

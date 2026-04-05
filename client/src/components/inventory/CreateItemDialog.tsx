@@ -64,8 +64,7 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
     unit: "",
     unitCost: "",
     minStockLevel: "",
-    supplier: "",
-    location: "",
+    vendor: "",
     hsnCode: "",
     gstRate: "18",
     isFreeItem: false,
@@ -75,11 +74,8 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
   const [loading, setLoading] = useState(false);
   const [hsnCodes, setHsnCodes] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<string[]>([]);
-  const [locations, setLocations] = useState<string[]>([]);
   const [showNewSupplier, setShowNewSupplier] = useState(false);
-  const [showNewLocation, setShowNewLocation] = useState(false);
   const [newSupplier, setNewSupplier] = useState("");
-  const [newLocation, setNewLocation] = useState("");
   const [showUnitConverter, setShowUnitConverter] = useState(false);
   const { toast } = useToast();
 
@@ -100,7 +96,6 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
     if (open) {
       fetchHsnCodes();
       fetchSuppliers();
-      fetchLocations();
     }
   }, [open]);
 
@@ -121,37 +116,6 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
     } catch (error) {
       console.error('Error fetching suppliers:', error);
       setSuppliers([]);
-    }
-  };
-
-  const fetchLocations = async () => {
-    try {
-      const response = await apiClient.getInventory();
-      const uniqueLocations = [...new Set(
-        response.items?.map((item: any) => item.location).filter(Boolean)
-      )] as string[];
-      setLocations(uniqueLocations);
-    } catch (error) {
-      console.error('Error fetching locations:', error);
-      setLocations([]);
-    }
-  };
-
-  const handleAddSupplier = () => {
-    if (newSupplier.trim() && !suppliers.includes(newSupplier.trim())) {
-      setSuppliers([...suppliers, newSupplier.trim()]);
-      setFormData(prev => ({ ...prev, supplier: newSupplier.trim() }));
-      setNewSupplier("");
-      setShowNewSupplier(false);
-    }
-  };
-
-  const handleAddLocation = () => {
-    if (newLocation.trim() && !locations.includes(newLocation.trim())) {
-      setLocations([...locations, newLocation.trim()]);
-      setFormData(prev => ({ ...prev, location: newLocation.trim() }));
-      setNewLocation("");
-      setShowNewLocation(false);
     }
   };
 
@@ -246,8 +210,7 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
         unit: formData.unit,
         unitCost: parseFloat(formData.unitCost),
         minStockLevel: parseFloat(formData.minStockLevel) || 0,
-        supplier: formData.supplier || undefined,
-        location: formData.location || undefined,
+        vendor: formData.vendor || undefined,
         hsnCode: formData.hsnCode || undefined,
         gstRate: parseFloat(formData.gstRate),
         status: 'active', // Backend status (active/inactive)
@@ -275,8 +238,7 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
         unit: "",
         unitCost: "",
         minStockLevel: "",
-        supplier: "",
-        location: "",
+        vendor: "",
         hsnCode: "",
         gstRate: "18",
         isFreeItem: false,
@@ -396,11 +358,6 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
               </div>
             </div>
 
-            <UnitConverterDialog
-              open={showUnitConverter}
-              onOpenChange={setShowUnitConverter}
-            />
-
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="unitCost">Unit Cost *</Label>
@@ -459,77 +416,29 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
             </div>
           </div>
 
-          {/* Supplier & Location */}
+          {/* Vendor */}
           <div className="space-y-4 p-4 bg-slate-50 rounded-lg border border-slate-200">
-            <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wide">Supplier & Location</h3>
+            <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wide">Vendor</h3>
 
             <div className="space-y-2">
-              <Label htmlFor="supplier">Supplier</Label>
-              {!showNewSupplier ? (
-                <div className="flex gap-2">
-                  <Select value={formData.supplier} onValueChange={(value) => {
-                    if (value === "__new__") {
-                      setShowNewSupplier(true);
-                    } else {
-                      setFormData(prev => ({ ...prev, supplier: value }));
-                    }
-                  }}>
-                    <SelectTrigger className="flex-1">
-                      <SelectValue placeholder="Select supplier" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__new__">+ Add New Supplier</SelectItem>
-                      {suppliers.map(sup => (
-                        <SelectItem key={sup} value={sup}>{sup}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+              <Label htmlFor="vendor">Vendor</Label>
+              {suppliers.length === 0 ? (
+                <div className="flex items-center justify-center p-4 border-2 border-dashed border-slate-300 rounded-lg bg-slate-50">
+                  <span className="text-sm text-slate-500">No vendor available</span>
                 </div>
               ) : (
-                <div className="flex gap-2">
-                  <Input
-                    value={newSupplier}
-                    onChange={(e) => setNewSupplier(e.target.value)}
-                    placeholder="Enter new supplier name"
-                  />
-                  <Button type="button" onClick={handleAddSupplier} size="sm">Add</Button>
-                  <Button type="button" onClick={() => setShowNewSupplier(false)} variant="outline" size="sm">Cancel</Button>
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="location">Storage Location</Label>
-              {!showNewLocation ? (
-                <div className="flex gap-2">
-                  <Select value={formData.location} onValueChange={(value) => {
-                    if (value === "__new__") {
-                      setShowNewLocation(true);
-                    } else {
-                      setFormData(prev => ({ ...prev, location: value }));
-                    }
-                  }}>
-                    <SelectTrigger className="flex-1">
-                      <SelectValue placeholder="Select location" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__new__">+ Add New Location</SelectItem>
-                      {locations.map(loc => (
-                        <SelectItem key={loc} value={loc}>{loc}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              ) : (
-                <div className="flex gap-2">
-                  <Input
-                    value={newLocation}
-                    onChange={(e) => setNewLocation(e.target.value)}
-                    placeholder="Enter new location"
-                  />
-                  <Button type="button" onClick={handleAddLocation} size="sm">Add</Button>
-                  <Button type="button" onClick={() => setShowNewLocation(false)} variant="outline" size="sm">Cancel</Button>
-                </div>
+                <Select value={formData.vendor} onValueChange={(value) => {
+                  setFormData(prev => ({ ...prev, vendor: value }));
+                }}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select vendor" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {suppliers.map(sup => (
+                      <SelectItem key={sup} value={sup}>{sup}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               )}
             </div>
           </div>
@@ -580,17 +489,7 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
               </div>
             </div>
 
-            {parseFloat(formData.gstRate) > 0 && !formData.hsnCode && (
-              <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded">
-                <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5" />
-                <p className="text-xs text-amber-800">
-                  HSN Code is recommended for GST compliance on taxable items.
-                </p>
-              </div>
-            )}
-          </div>
-
-          {/* Notes */}
+            {/* Notes */}
           <div className="space-y-2">
             <Label htmlFor="notes">Notes (Optional)</Label>
             <Textarea
@@ -601,15 +500,16 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
               rows={3}
             />
           </div>
+        </div>
 
-          <DialogFooter className="flex flex-col sm:flex-row gap-2 sm:gap-0">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} className="w-full sm:w-auto">
-              Cancel
-            </Button>
-            <Button type="submit" disabled={loading} className="w-full sm:w-auto">
-              {loading ? "Creating..." : "Create Item"}
-            </Button>
-          </DialogFooter>
+        <DialogFooter className="flex flex-col sm:flex-row gap-2 sm:gap-0">
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} className="w-full sm:w-auto">
+            Cancel
+          </Button>
+          <Button type="submit" disabled={loading} className="w-full sm:w-auto">
+            {loading ? "Creating..." : "Create Item"}
+          </Button>
+        </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>

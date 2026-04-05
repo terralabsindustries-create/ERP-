@@ -3,7 +3,9 @@ const router = express.Router();
 const Task = require('../models/Task');
 const Schedule = require('../models/Schedule');
 const User = require('../models/User');
-const { protect } = require('../middleware/auth');
+const ActivityLog = require('../models/ActivityLog');
+const { protect, authorize } = require('../middleware/auth');
+const bcrypt = require('bcryptjs');
 
 // Apply auth middleware to all routes
 router.use(protect );
@@ -200,6 +202,192 @@ router.get('/schedule/overview', async (req, res) => {
   } catch (error) {
     console.error('Error fetching schedule overview:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch schedule overview' });
+  }
+});
+
+// ============= STAFF MANAGEMENT ROUTES =============
+
+// PUT /api/staff/:staffId/email - Change staff email (admin only)
+router.put('/:staffId/email', authorize('admin', 'manager'), async (req, res) => {
+  try {
+    const { staffId } = req.params;
+    const { newEmail } = req.body;
+
+    // Validate new email
+    if (!newEmail || !newEmail.includes('@')) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Valid email is required' 
+      });
+    }
+
+    // Verify staff member exists and belongs to same dataScope
+    const staff = await User.findOne({ 
+      _id: staffId, 
+      role: 'staff',
+      $or: [
+        { dataScope: req.user.dataScope },
+        { createdBy: req.user._id }
+      ]
+    });
+
+    if (!staff) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Staff member not found' 
+      });
+    }
+
+    // Check if email already exists
+    const existingUser = await User.findOne({ email: newEmail });
+    if (existingUser) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Email already exists' 
+      });
+    }
+
+    const oldEmail = staff.email;
+    staff.email = newEmail;
+    await staff.save();
+
+    // Log activity
+    await ActivityLog.logActivity({
+      action: 'Staff Email Changed',
+      description: `Email changed for staff ${staff.fullName} from ${oldEmail} to ${newEmail}`,
+      entityType: 'user',
+      entityId: staff._id,
+      entityName: staff.fullName,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: {
+        before: { email: oldEmail },
+        after: { email: newEmail }
+      },
+      severity: 'medium',
+      userId: req.user._id,
+    });
+
+    res.json({ 
+      success: true, 
+      message: 'Staff email updated successfully',
+      data: { email: newEmail }
+    });
+
+  } catch (error) {
+    console.error('Error changing staff email:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to change staff email' 
+    });
+  }
+});
+
+// PUT /api/staff/:staffId/password - Change staff password (admin only)
+router.put('/:staffId/password', authorize('admin', 'manager'), async (req, res) => {
+  try {
+    const { staffId } = req.params;
+    const { newPassword } = req.body;
+
+    // Validate new password
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'New password must be at least 6 characters' 
+      });
+    }
+
+    // Verify staff member exists and belongs to same dataScope
+    const staff = await User.findOne({ 
+      _id: staffId, 
+      role: 'staff',
+      $or: [
+        { dataScope: req.user.dataScope },
+        { createdBy: req.user._id }
+      ]
+    });
+
+    if (!staff) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Staff member not found' 
+      });
+    }
+
+    // Update password - pre-save hook will hash it
+    staff.password = newPassword;
+    await staff.save();
+
+    // Log activity
+    await ActivityLog.logActivity({
+      action: 'Staff Password Changed',
+      description: `Password changed for staff ${staff.fullName}`,
+      entityType: 'user',
+      entityId: staff._id,
+      entityName: staff.fullName,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      severity: 'medium',
+      userId: req.user._id,
+    });
+
+    res.json({ 
+      success: true, 
+      message: 'Staff password updated successfully' 
+    });
+
+  } catch (error) {
+    console.error('Error changing staff password:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to change staff password' 
+    });
+  }
+});
+
+// GET /api/staff/list - Get all staff members for admin (admin/manager only)
+router.get('/list', authorize('admin', 'manager'), async (req, res) => {
+  try {
+    const { search, isActive } = req.query;
+
+    // Build query - filter by dataScope to ensure data isolation
+    const query = {
+      role: 'staff',
+      $or: [
+        { dataScope: req.user.dataScope },
+        { createdBy: req.user._id }
+      ]
+    };
+
+    if (isActive !== undefined) {
+      query.isActive = isActive === 'true';
+    }
+
+    if (search) {
+      query.$or = [
+        { fullName: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+        { phone: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    const staffMembers = await User.find(query)
+      .select('-password')
+      .sort({ createdAt: -1 });
+
+    res.json({ 
+      success: true, 
+      data: staffMembers 
+    });
+
+  } catch (error) {
+    console.error('Error fetching staff list:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch staff list' 
+    });
   }
 });
 

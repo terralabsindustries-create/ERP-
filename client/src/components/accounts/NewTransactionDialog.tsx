@@ -21,7 +21,6 @@ export function NewTransactionDialog({ open, onOpenChange, onTransactionCreated 
     amount: "",
     description: "",
     paymentMethod: "cash" as 'cash' | 'bank_transfer' | 'cheque' | 'card' | 'upi',
-    accountType: "cash" as 'cash' | 'bank' | 'credit_card',
     accountName: "",
     reference: "",
     notes: ""
@@ -49,7 +48,6 @@ export function NewTransactionDialog({ open, onOpenChange, onTransactionCreated 
         amount: parseFloat(formData.amount),
         description: formData.description,
         paymentMethod: formData.paymentMethod,
-        accountType: formData.accountType,
         accountName: formData.accountName,
         reference: formData.reference,
         notes: formData.notes,
@@ -71,7 +69,6 @@ export function NewTransactionDialog({ open, onOpenChange, onTransactionCreated 
         amount: "",
         description: "",
         paymentMethod: "cash",
-        accountType: "cash",
         accountName: "",
         reference: "",
         notes: ""
@@ -170,23 +167,7 @@ export function NewTransactionDialog({ open, onOpenChange, onTransactionCreated 
             </Select>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="accountType">Account Type *</Label>
-              <Select value={formData.accountType} onValueChange={(value: 'cash' | 'bank' | 'credit_card') =>
-                setFormData(prev => ({ ...prev, accountType: value }))
-              }>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="cash">Cash</SelectItem>
-                  <SelectItem value="bank">Bank</SelectItem>
-                  <SelectItem value="credit_card">Credit Card</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
+          <div className="grid grid-cols-1 gap-4">
             <div className="space-y-2">
               <Label htmlFor="paymentMethod">Payment Method *</Label>
               <Select value={formData.paymentMethod} onValueChange={(value: any) =>

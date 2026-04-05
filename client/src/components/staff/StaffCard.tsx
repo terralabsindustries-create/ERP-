@@ -2,9 +2,11 @@ import { useState, useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { User, Phone, Mail, CheckCircle, Clock, Edit, Calendar, CalendarDays, Loader2 } from "lucide-react";
+import { User, Phone, Mail, CheckCircle, Clock, Edit, Calendar, CalendarDays, Loader2, Key, Shield, Trash2, MailIcon } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { EditStaffDialog } from "./EditStaffDialog";
+import { StaffCredentialsDialog } from "./StaffCredentialsDialog";
+import { useToast } from "@/hooks/use-toast";
 
 interface Schedule {
   _id: string;
@@ -37,12 +39,15 @@ interface StaffCardProps {
   };
   onSchedule?: () => void;
   onStaffUpdated?: () => void;
+  onDelete?: () => void;
 }
 
-export function StaffCard({ staff, onSchedule, onStaffUpdated }: StaffCardProps) {
+export function StaffCard({ staff, onSchedule, onStaffUpdated, onDelete }: StaffCardProps) {
   const [nextShift, setNextShift] = useState<any>(null);
   const [isLoadingSchedule, setIsLoadingSchedule] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
+  const [showCredentialsDialog, setShowCredentialsDialog] = useState(false);
+  const { toast } = useToast();
 
   useEffect(() => {
     if (staff.id) {
@@ -181,19 +186,24 @@ export function StaffCard({ staff, onSchedule, onStaffUpdated }: StaffCardProps)
             )}
           </div>
 
-          <div className="flex items-center justify-between pt-2">
-            <div className="text-sm text-muted-foreground">
-              Performance: {staff.completedTasks > 20 ? "Excellent" : "Good"}
-            </div>
-            
-            <div className="flex items-center space-x-2">
-              <Button size="sm" variant="outline" className="gap-2" onClick={onSchedule}>
-                <Calendar className="h-4 w-4" />
+          <div className="flex items-center justify-end pt-2">
+            <div className="flex items-center space-x-1">
+              <Button size="sm" variant="outline" className="gap-1 text-xs px-2" onClick={onSchedule}>
+                <Calendar className="h-3 w-3" />
                 Schedule
               </Button>
-              <Button size="sm" variant="outline" onClick={() => setShowEditDialog(true)}>
-                <Edit className="h-4 w-4" />
+              <Button size="sm" variant="outline" className="gap-1 text-xs px-2 bg-blue-50 text-blue-700 hover:bg-blue-100" onClick={() => setShowCredentialsDialog(true)}>
+                <Key className="h-3 w-3" />
+                Password
               </Button>
+              <Button size="sm" variant="outline" className="gap-1 text-xs px-2" onClick={() => setShowEditDialog(true)}>
+                <Edit className="h-3 w-3" />
+              </Button>
+              {onDelete && (
+                <Button size="sm" variant="destructive" className="gap-1 text-xs px-2" onClick={onDelete}>
+                  <Trash2 className="h-3 w-3" />
+                </Button>
+              )}
             </div>
           </div>
         </CardContent>
@@ -207,6 +217,23 @@ export function StaffCard({ staff, onSchedule, onStaffUpdated }: StaffCardProps)
         onStaffUpdated={() => {
           onStaffUpdated?.();
           setShowEditDialog(false);
+        }}
+      />
+      
+      {/* Staff Credentials Dialog */}
+      <StaffCredentialsDialog
+        open={showCredentialsDialog}
+        onOpenChange={setShowCredentialsDialog}
+        staff={{
+          id: staff.id,
+          name: staff.name,
+          email: staff.email,
+          role: staff.role,
+          status: staff.status
+        }}
+        onStaffUpdated={() => {
+          onStaffUpdated?.();
+          setShowCredentialsDialog(false);
         }}
       />
     </>

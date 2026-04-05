@@ -1,4 +1,8 @@
-const BASE_URL = import.meta.env.VITE_API_URL || 'https://serpy.synxautomate.com/api';
+// Force local development URL
+const BASE_URL = 'http://localhost:4001/api'; // Updated to match backend port 4001
+
+
+console.log('🔗 API Client using BASE_URL:', BASE_URL);
 
 interface ApiResponse<T = any> {
   status: 'success' | 'error';
@@ -286,6 +290,28 @@ class ApiClient {
 
   async deleteStaff(id: string) {
     return this.delete(`/staff/${id}`);
+  }
+
+  // Staff Email and Password Management
+  async changeStaffEmail(staffId: string, newEmail: string) {
+    return this.put(`/staff/${staffId}/email`, { newEmail });
+  }
+
+  async changeStaffPassword(staffId: string, newPassword: string) {
+    return this.put(`/staff/${staffId}/password`, { newPassword });
+  }
+
+  async getStaffList(params?: { search?: string; isActive?: boolean }) {
+    const searchParams = params ? new URLSearchParams() : new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) {
+          searchParams.append(key, value.toString());
+        }
+      });
+    }
+    const queryString = searchParams ? '?' + searchParams.toString() : '';
+    return this.get(`/staff/list${queryString}`);
   }
 
   // Schedule Management
@@ -1354,6 +1380,20 @@ class ApiClient {
   async getFilesByEntity(entityType: string, entityId: string, params?: any) {
     const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
     return this.get(`/files/entity/${entityType}/${entityId}${queryString}`);
+  }
+
+  // Email Management
+  async sendEmail(emailData: {
+    to: string | string[];
+    subject: string;
+    template: string;
+    data: any;
+  }) {
+    return this.post('/email/send', emailData);
+  }
+
+  async testEmail(to: string) {
+    return this.post('/email/test', { to });
   }
 }
 

@@ -31,7 +31,6 @@ import Payments from "./pages/Payments";
 import Portal from "./pages/Portal";
 import Settings from "./pages/Settings";
 import ProfileSettings from "./pages/ProfileSettings";
-import UserManagement from "./pages/UserManagement";
 import ActivityLog from "./pages/ActivityLog";
 import Auth from "./pages/Auth";
 import Accounts from "./pages/Accounts";
@@ -88,7 +87,6 @@ const App = () => (
                       <Route path="/portal" element={<PermissionRoute permission="Customer Portal"><Portal /></PermissionRoute>} />
                       <Route path="/settings" element={<PermissionRoute permission="Settings"><Settings /></PermissionRoute>} />
                       <Route path="/profile-settings" element={<ProfileSettings />} />
-                      <Route path="/user-management" element={<PermissionRoute permission="User Management"><UserManagement /></PermissionRoute>} />
                       <Route path="/activity-log" element={<PermissionRoute permission="Activity Log"><ActivityLog /></PermissionRoute>} />
                       <Route path="/create-login" element={<PermissionRoute permission="User Management"><CreateLogin /></PermissionRoute>} />
                       <Route path="/hidden-create-login" element={<PermissionRoute permission="User Management"><HiddenCreateLogin /></PermissionRoute>} />

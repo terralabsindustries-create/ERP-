@@ -105,7 +105,6 @@ export function AppSidebar() {
     {
       label: "Staff Management",
       items: [
-        { title: "Staff List", href: "/user-management", icon: Users, permission: "User Management" },
         { title: "Create Login", href: "/create-login", icon: UserPlus, permission: "User Management" },
         // { title: "Activity Log", href: "/activity-log", icon: History, permission: "Activity Log" },
       ],
