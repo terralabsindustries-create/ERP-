@@ -17,17 +17,21 @@ app.use(helmet());
 app.use(compression());
 
 // CORS configuration
-app.use(cors({
-  origin: [
-    'https://serpy.synxautomate.com',
-    'https://serpy-silk.vercel.app',
-    'http://localhost:8081',
-    'http://localhost:8080'  // Added port 8080 for frontend
-  ],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+// app.use(cors({
+//   origin: [
+//     'https://serpy.synxautomate.com',
+//     'https://serpy-silk.vercel.app',
+//     'http://localhost:8081',
+//     'http://localhost:8080',
+//     'https://app.serpy.in' 
+//   ],
+//   credentials: true,
+//   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+//   allowedHeaders: ['Content-Type', 'Authorization']
+// }));
+
+app.use(cors());
+app.options('*', cors());
 
 
 app.use(express.json({ limit: '10mb' }));
