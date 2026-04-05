@@ -1,5 +1,5 @@
 // Force local development URL
-const BASE_URL = 'http://localhost:4001/api'; // Updated to match backend port 4001
+const BASE_URL = 'https://app.serpy.in/api'; // Updated to match backend port 4001
 
 
 console.log('🔗 API Client using BASE_URL:', BASE_URL);
