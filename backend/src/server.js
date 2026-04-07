@@ -92,6 +92,7 @@ app.use('/api/activity-log', require('./routes/activityLog'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/email', require('./routes/email'));
+app.use('/api/razorpay', require('./routes/razorpay'));
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

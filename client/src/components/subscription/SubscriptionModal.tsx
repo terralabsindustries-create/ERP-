@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
-import { Check, Shield, Headphones, Users } from 'lucide-react';
+import { Check, Shield, Headphones, Users, Loader2 } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog';
+import { useToast } from '@/hooks/use-toast';
+import { loadRazorpayScript, openRazorpayPayment, createRazorpayOrder, verifyPayment } from '@/lib/razorpay';
 
 const plans = [
   {
@@ -24,7 +26,7 @@ const plans = [
       'Standard reports',
     ],
     popular: false,
-    cta: 'Start Free Trial',
+    cta: 'Subscribe Now',
     ctaStyle: 'outline',
   },
   {
@@ -43,7 +45,7 @@ const plans = [
       'Performance analytics',
     ],
     popular: true,
-    cta: 'Start Free Trial',
+    cta: 'Subscribe Now',
     ctaStyle: 'solid',
   },
   {
@@ -68,9 +70,107 @@ const plans = [
 ];
 
 export function SubscriptionModal({ open, onClose, userPlan = 'free', canClose = true }) {
-  const handleSubscribe = (planName) => {
-    console.log('Subscribe to plan:', planName);
-    onClose();
+  const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
+  const { toast } = useToast();
+
+  const handleSubscribe = async (planName: string) => {
+    if (planName === 'ENTERPRISE') {
+      // For Enterprise plan, open contact form or show contact info
+      toast({
+        title: "Contact Sales",
+        description: "Please contact our sales team for Enterprise plan pricing",
+      });
+      return;
+    }
+
+    setLoadingPlan(planName);
+    
+    try {
+      // Get plan pricing
+      const planPrices: Record<string, number> = {
+        'STARTER': 2499,
+        'GROWTH': 4999,
+        'ENTERPRISE': 9999,
+      };
+
+      const amount = planPrices[planName];
+      
+      // Create Razorpay order
+      const order = await createRazorpayOrder({
+        planName,
+        amount,
+        currency: 'INR',
+        userId: 'current-user', // Replace with actual user ID
+      });
+
+      // Open Razorpay payment modal
+      await openRazorpayPayment({
+        key: 'rzp_test_SaUSwsnQWzJHbN', // Test key - replace with production key
+        amount: order.amount,
+        currency: 'INR',
+        name: 'ERP Subscription',
+        description: `${planName} Plan Subscription`,
+        order_id: order.orderId,
+        handler: async (response) => {
+          try {
+            // Verify payment
+            const verification = await verifyPayment({
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+            });
+
+            if (verification.success) {
+              toast({
+                title: "Payment Successful!",
+                description: `Your ${planName} subscription is now active.`,
+              });
+              
+              // Update user subscription status
+              // You can call an API to update the user's subscription here
+              
+              onClose();
+            } else {
+              toast({
+                title: "Payment Verification Failed",
+                description: "There was an issue verifying your payment. Please contact support.",
+                variant: "destructive",
+              });
+            }
+          } catch (error) {
+            console.error('Payment verification error:', error);
+            toast({
+              title: "Payment Error",
+              description: "There was an error processing your payment. Please try again.",
+              variant: "destructive",
+            });
+          } finally {
+            setLoadingPlan(null);
+          }
+        },
+        prefill: {
+          name: 'John Doe', // Replace with actual user name
+          email: 'john@example.com', // Replace with actual user email
+          contact: '9999999999', // Replace with actual user phone
+        },
+        notes: {
+          planName,
+          userId: 'current-user', // Replace with actual user ID
+        },
+        theme: {
+          color: '#e8735a',
+        },
+      });
+    } catch (error) {
+      console.error('Payment error:', error);
+      toast({
+        title: "Payment Failed",
+        description: "There was an error initiating the payment. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoadingPlan(null);
+    }
   };
 
   return (
@@ -356,9 +456,14 @@ export function SubscriptionModal({ open, onClose, userPlan = 'free', canClose =
                   <button
                     className={`cta-btn ${plan.ctaStyle}`}
                     onClick={() => handleSubscribe(plan.name)}
-                    disabled={isCurrentPlan}
+                    disabled={isCurrentPlan || loadingPlan === plan.name}
                   >
-                    {isCurrentPlan ? 'Current Plan' : plan.cta}
+                    {loadingPlan === plan.name ? (
+                      <>
+                        <Loader2 className="animate-spin" size={16} />
+                        Processing...
+                      </>
+                    ) : isCurrentPlan ? 'Current Plan' : plan.cta}
                   </button>
                 </div>
               );
