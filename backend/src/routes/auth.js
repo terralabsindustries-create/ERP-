@@ -1,8 +1,11 @@
 const express = require('express');
 const { body } = require('express-validator');
 const User = require('../models/User');
+const OTP = require('../models/OTP');
 const { protect, sendTokenResponse } = require('../middleware/auth');
 const crypto = require('crypto');
+const { generateOTP, hashOTP, verifyOTP, getOTPEmailTemplate } = require('../utils/otpUtils');
+const nodemailer = require('nodemailer');
 
 const router = express.Router();
 
@@ -13,13 +16,188 @@ const registerValidation = [
   body('fullName').notEmpty().withMessage('Full name is required').trim(),
 ];
 
+const sendOTPValidation = [
+  body('email').isEmail().normalizeEmail().withMessage('Please provide a valid email'),
+  body('fullName').notEmpty().withMessage('Full name is required').trim(),
+  body('phone').optional().isMobilePhone().withMessage('Please provide a valid phone number'),
+  body('companyName').optional().trim(),
+];
+
+const verifyOTPValidation = [
+  body('email').isEmail().normalizeEmail().withMessage('Please provide a valid email'),
+  body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits'),
+  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+  body('fullName').notEmpty().withMessage('Full name is required').trim(),
+];
+
 const loginValidation = [
   body('email').isEmail().normalizeEmail().withMessage('Please provide a valid email'),
   body('password').notEmpty().withMessage('Password is required'),
 ];
 
+// Email transporter utility
+const createTransporter = () => {
+  return nodemailer.createTransport({
+    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
+    port: process.env.EMAIL_PORT || 587,
+    secure: false,
+    tls: {
+      rejectUnauthorized: false
+    },
+    auth: {
+      user: process.env.EMAIL_USER || 'your-email@gmail.com',
+      pass: process.env.EMAIL_PASS ? process.env.EMAIL_PASS.replace(/\s+/g, '') : 'your-app-password'
+    }
+  });
+};
+
+// @route   POST /api/auth/send-otp
+// @desc    Send OTP for email verification
+// @access  Public
+router.post('/send-otp', sendOTPValidation, async (req, res) => {
+  try {
+    const { email, fullName, phone, companyName } = req.body;
+
+    // Delete any existing OTPs for this email
+    await OTP.deleteMany({ email, type: 'signup' });
+
+    // Generate new OTP
+    const otp = generateOTP();
+    const hashedOTP = hashOTP(otp);
+
+    // Store OTP in database
+    await OTP.create({
+      email,
+      otp: hashedOTP,
+      type: 'signup',
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
+    });
+
+    // Send OTP via email
+    const transporter = createTransporter();
+    const emailTemplate = getOTPEmailTemplate(otp, fullName);
+
+    const mailOptions = {
+      from: process.env.EMAIL_FROM || `"SerpY ERP" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: 'Verify Your Email - SerpY ERP',
+      html: emailTemplate.html,
+      text: emailTemplate.text
+    };
+
+    await transporter.sendMail(mailOptions);
+
+    console.log('✅ OTP sent successfully to:', email);
+
+    res.status(200).json({
+      status: 'success',
+      message: 'OTP sent successfully. Please check your email.',
+      data: {
+        email,
+        expiresIn: 10 // minutes
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Send OTP error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to send OTP',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'OTP service unavailable'
+    });
+  }
+});
+
+// @route   POST /api/auth/verify-otp
+// @desc    Verify OTP and create user account
+// @access  Public
+router.post('/verify-otp', verifyOTPValidation, async (req, res) => {
+  try {
+    const { email, otp, password, fullName, phone, companyName } = req.body;
+
+    // Find and validate OTP
+    const otpRecord = await OTP.findOne({
+      email,
+      type: 'signup',
+      isUsed: false
+    });
+
+    if (!otpRecord) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid or expired OTP. Please request a new OTP.'
+      });
+    }
+
+    // Check if OTP is expired
+    if (otpRecord.isExpired()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'OTP has expired. Please request a new OTP.'
+      });
+    }
+
+    // Check if attempts exceeded
+    if (otpRecord.isAttemptsExceeded()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Too many incorrect attempts. Please request a new OTP.'
+      });
+    }
+
+    // Verify OTP
+    const isOTPValid = verifyOTP(otp, otpRecord.otp);
+    if (!isOTPValid) {
+      await otpRecord.incrementAttempts();
+      const remainingAttempts = otpRecord.maxAttempts - otpRecord.attempts;
+      
+      return res.status(400).json({
+        status: 'error',
+        message: `Invalid OTP. ${remainingAttempts} attempts remaining.`
+      });
+    }
+
+    // Mark OTP as used
+    otpRecord.isUsed = true;
+    await otpRecord.save();
+
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      // User already exists, just log them in
+      sendTokenResponse(existingUser, 200, res, 'Login successful!');
+      return;
+    }
+
+    // Generate unique dataScope for new admin
+    const dataScope = `scope_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
+
+    // Create user
+    const user = await User.create({
+      email,
+      password,
+      fullName,
+      phone,
+      companyName,
+      role: 'admin', // First user is admin
+      dataScope // Each admin gets their own unique dataScope
+    });
+
+    // Generate token and send response
+    sendTokenResponse(user, 201, res, 'Account created successfully!');
+
+  } catch (error) {
+    console.error('❌ Verify OTP error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error during OTP verification',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Verification failed'
+    });
+  }
+});
+
 // @route   POST /api/auth/register
-// @desc    Register a new user
+// @desc    Register a new user (legacy - for backward compatibility)
 // @access  Public
 router.post('/register', registerValidation, async (req, res) => {
   try {

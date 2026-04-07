@@ -48,6 +48,25 @@ if (process.env.NODE_ENV === 'development') {
 // Serve static files from public/temp directory for temporary PDFs
 app.use('/temp', express.static(path.join(__dirname, '../public/temp')));
 
+// Serve static files from client build directory
+app.use('/assets', express.static(path.join(__dirname, '../../client/dist/assets')));
+
+// Serve the frontend app in production
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, '../../client/dist')));
+  
+  // Serve index.html for all non-API routes
+  app.get('*', (req, res) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/temp')) {
+      return res.status(404).json({
+        status: 'error',
+        message: `Route ${req.originalUrl} not found`
+      });
+    }
+    res.sendFile(path.join(__dirname, '../../client/dist/index.html'));
+  });
+}
+
 // Database connection
 let mongoUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/print_arts_flow';
 // Force IPv4 connection by replacing localhost with 127.0.0.1
@@ -147,11 +166,11 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404 handler
-app.use('*', (req, res) => {
+// 404 handler for API routes only
+app.use('/api/*', (req, res) => {
   res.status(404).json({
     status: 'error',
-    message: `Route ${req.originalUrl} not found`
+    message: `API Route ${req.originalUrl} not found`
   });
 });
 

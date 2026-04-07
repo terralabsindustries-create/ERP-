@@ -7,16 +7,20 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Building2, Eye, EyeOff, Shield, Users, BarChart3 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { OTPVerification } from "@/components/auth/OTPVerification";
 import logo from "../assets/logo.png";
 
 export default function Auth() {
   const { user, signIn, signUp, loading } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [showOTPVerification, setShowOTPVerification] = useState(false);
   const [formData, setFormData] = useState({
     email: "",
     password: "",
     fullName: "",
+    phone: "",
+    companyName: "",
   });
 
   // Redirect if already authenticated
@@ -34,8 +38,34 @@ export default function Auth() {
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    await signUp(formData.email, formData.password, formData.fullName);
-    setIsLoading(false);
+    
+    try {
+      const response = await fetch('http://localhost:4001/api/auth/send-otp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: formData.email,
+          fullName: formData.fullName,
+          phone: formData.phone,
+          companyName: formData.companyName
+        }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setShowOTPVerification(true);
+      } else {
+        // Show error message from server
+        alert(data.message || 'Failed to send OTP');
+      }
+    } catch (error) {
+      alert('An error occurred. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -44,6 +74,24 @@ export default function Auth() {
       [e.target.name]: e.target.value,
     }));
   };
+
+  const handleBackToSignup = () => {
+    setShowOTPVerification(false);
+  };
+
+  // Show OTP verification component if needed
+  if (showOTPVerification) {
+    return (
+      <OTPVerification
+        email={formData.email}
+        fullName={formData.fullName}
+        phone={formData.phone}
+        companyName={formData.companyName}
+        password={formData.password}
+        onBack={handleBackToSignup}
+      />
+    );
+  }
 
   if (loading) {
     return (
@@ -289,14 +337,48 @@ export default function Auth() {
                           </Button>
                         </div>
                       </div>
+                      <div className="space-y-4">
+                        <Label
+                          htmlFor="signup-phone"
+                          className="text-sm font-semibold text-gray-700 uppercase tracking-wide"
+                        >
+                          Phone Number (Optional)
+                        </Label>
+                        <Input
+                          id="signup-phone"
+                          name="phone"
+                          type="tel"
+                          placeholder="+1 234 567 8900"
+                          value={formData.phone}
+                          onChange={handleInputChange}
+                          className="h-14 bg-white/80 border-orange-200/50 text-gray-900 placeholder-gray-500/50 focus:border-orange-400 focus:ring-2 focus:ring-orange-400/20 backdrop-blur-xl rounded-2xl px-6 text-lg transition-all duration-300"
+                        />
+                      </div>
+                      <div className="space-y-4">
+                        <Label
+                          htmlFor="signup-company"
+                          className="text-sm font-semibold text-gray-700 uppercase tracking-wide"
+                        >
+                          Company Name (Optional)
+                        </Label>
+                        <Input
+                          id="signup-company"
+                          name="companyName"
+                          type="text"
+                          placeholder="Acme Corporation"
+                          value={formData.companyName}
+                          onChange={handleInputChange}
+                          className="h-14 bg-white/80 border-orange-200/50 text-gray-900 placeholder-gray-500/50 focus:border-orange-400 focus:ring-2 focus:ring-orange-400/20 backdrop-blur-xl rounded-2xl px-6 text-lg transition-all duration-300"
+                        />
+                      </div>
                       <Button
                         type="submit"
                         className="w-full h-14 bg-gradient-to-r from-orange-500 via-orange-600 to-orange-700 hover:from-orange-600 hover:via-orange-700 hover:to-orange-800 font-bold text-white text-lg rounded-2xl shadow-2xl hover:shadow-orange-500/25 transition-all duration-500 transform hover:scale-[1.02] tracking-wide"
                         disabled={isLoading}
                       >
                         {isLoading
-                          ? "Creating Account..."
-                          : "Create Enterprise Account"}
+                          ? "Sending OTP..."
+                          : "Send Verification Code"}
                       </Button>
                     </form>
                   </TabsContent>
