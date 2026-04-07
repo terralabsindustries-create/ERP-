@@ -83,16 +83,14 @@ const userSchema = new mongoose.Schema({
   subscription: {
     isActive: {
       type: Boolean,
-      default: true
+      default: false
     },
     plan: {
       type: String,
-      enum: ['free', 'basic', 'premium', 'enterprise'],
-      default: 'free'
+      enum: ['free', 'basic', 'premium', 'enterprise']
     },
     startDate: {
-      type: Date,
-      default: Date.now
+      type: Date
     },
     endDate: {
       type: Date
