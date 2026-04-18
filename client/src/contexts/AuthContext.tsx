@@ -46,14 +46,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Check subscription status and show modal if needed
   const checkSubscriptionStatus = (userData: User) => {
-    // Show modal if subscription is undefined, null, or inactive
-    if (!userData.subscription || userData.subscription.isActive === false) {
+    // Show modal only if subscription is undefined or null (not if explicitly set to false)
+    // If user set isActive to false, don't show the modal
+    if (!userData.subscription || userData.subscription.isActive === undefined) {
       setShowSubscriptionModal(true);
+    } else {
+      // Don't show modal if subscription exists and has an explicit isActive value (true or false)
+      setShowSubscriptionModal(false);
     }
   };
 
-  // Determine if modal can be closed (only if subscription is active)
-  const canCloseModal = user?.subscription?.isActive !== false;
+  // Determine if modal can be closed (only if subscription exists and is not undefined)
+  const canCloseModal = user?.subscription !== undefined;
 
   useEffect(() => {
     // Check for existing token and user

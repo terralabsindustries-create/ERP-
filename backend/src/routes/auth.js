@@ -56,6 +56,19 @@ const createTransporter = () => {
 // @access  Public
 router.post('/send-otp', sendOTPValidation, async (req, res) => {
   try {
+    // Check for validation errors
+    const { validationResult } = require('express-validator');
+    const errors = validationResult(req);
+
+    if (!errors.isEmpty()) {
+      console.log('Send OTP Validation errors:', errors.array());
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
     const { email, fullName, phone, companyName } = req.body;
 
     // Delete any existing OTPs for this email
@@ -113,6 +126,19 @@ router.post('/send-otp', sendOTPValidation, async (req, res) => {
 // @access  Public
 router.post('/verify-otp', verifyOTPValidation, async (req, res) => {
   try {
+    // Check for validation errors
+    const { validationResult } = require('express-validator');
+    const errors = validationResult(req);
+
+    if (!errors.isEmpty()) {
+      console.log('OTP Validation errors:', errors.array());
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
     const { email, otp, password, fullName, phone, companyName } = req.body;
 
     // Find and validate OTP
