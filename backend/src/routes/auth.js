@@ -198,7 +198,7 @@ router.post('/verify-otp', verifyOTPValidation, async (req, res) => {
     // Generate unique dataScope for new admin
     const dataScope = `scope_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
 
-    // Create user
+    // Create user without subscription (no free trial)
     const user = await User.create({
       email,
       password,
@@ -206,7 +206,8 @@ router.post('/verify-otp', verifyOTPValidation, async (req, res) => {
       phone,
       companyName,
       role: 'admin', // First user is admin
-      dataScope // Each admin gets their own unique dataScope
+      dataScope, // Each admin gets their own unique dataScope
+      subscription: null // Explicitly set to null to avoid any subscription
     });
 
     // Generate token and send response
@@ -242,7 +243,7 @@ router.post('/register', registerValidation, async (req, res) => {
     // Format: scope_<timestamp>_<random>
     const dataScope = `scope_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
 
-    // Create user
+    // Create user without subscription (no free trial)
     const user = await User.create({
       email,
       password,
@@ -250,7 +251,8 @@ router.post('/register', registerValidation, async (req, res) => {
       phone,
       companyName,
       role: 'admin', // First user is admin
-      dataScope // Each admin gets their own unique dataScope
+      dataScope, // Each admin gets their own unique dataScope
+      subscription: null // Explicitly set to null to avoid any subscription
     });
 
     // Generate token and send response
