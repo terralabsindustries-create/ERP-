@@ -76,7 +76,7 @@ export const createRazorpayOrder = async (planData: {
   userId?: string;
 }): Promise<{ orderId: string; amount: number }> => {
   try {
-    const response = await fetch('http://localhost:4001/api/razorpay/create-order', {
+    const response = await fetch('https://serpy.synxautomate.com/api/razorpay/create-order', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -113,7 +113,7 @@ export const verifyPayment = async (paymentData: {
   razorpay_signature: string;
 }): Promise<{ success: boolean; subscriptionId?: string }> => {
   try {
-    const response = await fetch('http://localhost:4001/api/razorpay/verify-payment', {
+    const response = await fetch('https://serpy.synxautomate.com/api/razorpay/verify-payment', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

@@ -17,7 +17,7 @@ if (token && user) {
   console.log('🆔 Staff ID:', staffId);
   
   // Test schedule API
-  fetch(`http://localhost:4001/api/staff/${staffId}/schedule`, {
+  fetch(`https://serpy.synxautomate.com/api/staff/${staffId}/schedule`, {
     headers: {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json'
@@ -32,7 +32,7 @@ if (token && user) {
   });
   
   // Test tasks API
-  fetch(`http://localhost:4001/api/tasks`, {
+  fetch(`https://serpy.synxautomate.com/api/tasks`, {
     headers: {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json'

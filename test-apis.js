@@ -10,7 +10,7 @@ async function testAPIs() {
   // Test 1: Get all tasks
   try {
     console.log('📋 Testing GET /api/tasks');
-    const tasksResponse = await fetch('http://localhost:4001/api/tasks', {
+    const tasksResponse = await fetch('https://serpy.synxautomate.com/api/tasks', {
       method: 'GET',
       headers: {
         'Accept': '*/*',
@@ -32,7 +32,7 @@ async function testAPIs() {
   // Test 2: Get staff schedule
   try {
     console.log('📅 Testing GET /api/staff/{staffId}/schedule');
-    const scheduleResponse = await fetch(`http://localhost:4001/api/staff/${staffId}/schedule`, {
+    const scheduleResponse = await fetch(`https://serpy.synxautomate.com/api/staff/${staffId}/schedule`, {
       method: 'GET',
       headers: {
         'Accept': '*/*',
@@ -54,7 +54,7 @@ async function testAPIs() {
   // Test 3: Get tasks with assignedTo filter (like the frontend is trying)
   try {
     console.log('📋 Testing GET /api/tasks with assignedTo filter');
-    const filteredTasksResponse = await fetch(`http://localhost:4001/api/tasks?assignedTo=${staffId}`, {
+    const filteredTasksResponse = await fetch(`https://serpy.synxautomate.com/api/tasks?assignedTo=${staffId}`, {
       method: 'GET',
       headers: {
         'Accept': '*/*',
