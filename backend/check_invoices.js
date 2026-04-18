@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const Invoice = require('./src/models/Invoice');
 require('dotenv').config();
 
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/print_arts_flow')
+mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://akbarhaleel508_db_user:REMOVED_PASSWORD@cluster0.6je5xm0.mongodb.net/?appName=Cluster0')
 .then(async () => {
   try {
     const invoices = await Invoice.find({
