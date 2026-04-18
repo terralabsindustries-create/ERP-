@@ -7,7 +7,6 @@ async function forceCreateSettings() {
         await mongoose.connect('mongodb://localhost:27017/erp_system');
         const userId = '6987b421f0b7e7a5f4f03d53';
 
-        // Delete existing settings if any (though we saw it's null)
         await Settings.deleteOne({ userId });
 
         const settings = new Settings({
