@@ -1,4 +1,3 @@
-// Force local development URL
 const BASE_URL = 'https://serpy.synxautomate.com/api';
 
 
