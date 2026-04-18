@@ -8,7 +8,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Building2, Eye, EyeOff, Shield, Users, BarChart3 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { OTPVerification } from "@/components/auth/OTPVerification";
-import logo from "../assets/logo.png";
 
 export default function Auth() {
   const { user, signIn, signUp, loading } = useAuth();
