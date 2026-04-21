@@ -183,7 +183,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         open={showSubscriptionModal} 
         onClose={() => setShowSubscriptionModal(false)}
         userPlan={user?.subscription?.plan}
-        canClose={canCloseModal}
       />
     </AuthContext.Provider>
   );

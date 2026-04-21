@@ -69,7 +69,7 @@ const plans = [
   },
 ];
 
-export function SubscriptionModal({ open, onClose, userPlan = 'free', canClose = true }) {
+export function SubscriptionModal({ open, onClose, userPlan = 'free' }) {
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
   const { toast } = useToast();
 
@@ -174,7 +174,7 @@ export function SubscriptionModal({ open, onClose, userPlan = 'free', canClose =
   };
 
   return (
-    <Dialog open={open} onOpenChange={canClose ? () => {} : undefined}>
+    <Dialog open={open} onOpenChange={onClose}>
       <DialogContent
         className="p-0 border-0 overflow-hidden"
         style={{
@@ -186,7 +186,6 @@ export function SubscriptionModal({ open, onClose, userPlan = 'free', canClose =
           boxShadow: '0 25px 80px rgba(0,0,0,0.7)',
           fontFamily: "'DM Sans', 'Helvetica Neue', sans-serif",
         }}
-        // Remove the default close button by hiding it via CSS
       >
         <style>{`
           @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800;900&display=swap');
