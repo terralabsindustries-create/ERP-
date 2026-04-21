@@ -198,7 +198,7 @@ router.post('/verify-otp', verifyOTPValidation, async (req, res) => {
     // Generate unique dataScope for new admin
     const dataScope = `scope_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
 
-    // Create user without subscription (no free trial)
+    // Create user with default subscription (30-day trial)
     const user = await User.create({
       email,
       password,
@@ -207,7 +207,13 @@ router.post('/verify-otp', verifyOTPValidation, async (req, res) => {
       companyName,
       role: 'admin', // First user is admin
       dataScope, // Each admin gets their own unique dataScope
-      subscription: null // Explicitly set to null to avoid any subscription
+      subscription: {
+        isActive: true,
+        plan: 'starter',
+        startDate: new Date(),
+        endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days from now
+        autoRenew: false
+      }
     });
 
     // Generate token and send response
@@ -243,7 +249,7 @@ router.post('/register', registerValidation, async (req, res) => {
     // Format: scope_<timestamp>_<random>
     const dataScope = `scope_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
 
-    // Create user without subscription (no free trial)
+    // Create user with default subscription (30-day trial)
     const user = await User.create({
       email,
       password,
@@ -252,7 +258,13 @@ router.post('/register', registerValidation, async (req, res) => {
       companyName,
       role: 'admin', // First user is admin
       dataScope, // Each admin gets their own unique dataScope
-      subscription: null // Explicitly set to null to avoid any subscription
+      subscription: {
+        isActive: true,
+        plan: 'starter',
+        startDate: new Date(),
+        endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days from now
+        autoRenew: false
+      }
     });
 
     // Generate token and send response
