@@ -196,6 +196,20 @@ export function SubscriptionModal({ open, onClose, userPlan = 'free', canClose =
             box-sizing: border-box;
           }
 
+          .pricing-modal {
+            pointer-events: auto !important;
+            position: relative;
+            z-index: 100;
+          }
+
+          [data-radix-dialog-content] {
+            pointer-events: auto !important;
+          }
+
+          [data-radix-dialog-overlay] {
+            pointer-events: none !important;
+          }
+
           /* Hide the shadcn close button */
           .pricing-modal ~ button[data-radix-dialog-close],
           .pricing-modal [data-radix-dialog-close] {
