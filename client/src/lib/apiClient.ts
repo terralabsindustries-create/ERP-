@@ -1,5 +1,5 @@
-// const BASE_URL = 'https://serpy.synxautomate.com/api';
-const BASE_URL = 'http://localhost:4001/api';
+const BASE_URL = 'https://serpy.synxautomate.com/api';
+// const BASE_URL = 'http://localhost:4001/api';
 
 
 console.log('🔗 API Client using BASE_URL:', BASE_URL);
