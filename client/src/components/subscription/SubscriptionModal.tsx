@@ -174,7 +174,7 @@ export function SubscriptionModal({ open, onClose, userPlan = 'free', canClose =
   };
 
   return (
-    <Dialog open={open} onOpenChange={canClose ? () => {} : (open) => {}}>
+    <Dialog open={open} onOpenChange={canClose ? () => {} : undefined}>
       <DialogContent
         className="p-0 border-0 overflow-hidden"
         style={{
