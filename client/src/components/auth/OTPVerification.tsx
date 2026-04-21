@@ -151,7 +151,7 @@ export function OTPVerification({
     setIsResending(true);
 
     try {
-      const response = await fetch('https://serpy.synxautomate.comapi/auth/send-otp', {
+      const response = await fetch('http://localhost:4001/api/auth/send-otp', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
