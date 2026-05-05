@@ -37,6 +37,20 @@ const loginValidation = [
 
 // Email transporter utility
 const createTransporter = () => {
+  const emailUser = process.env.EMAIL_USER;
+  const emailPass = process.env.EMAIL_PASS ? process.env.EMAIL_PASS.replace(/\s+/g, '') : '';
+
+  console.log('📧 Email Config:', {
+    hasUser: !!emailUser,
+    hasPass: !!emailPass,
+    user: emailUser ? emailUser.substring(0, 5) + '...' : 'not set',
+    passLength: emailPass.length
+  });
+
+  if (!emailUser || !emailPass) {
+    throw new Error('Email credentials not configured. Please set EMAIL_USER and EMAIL_PASS in .env');
+  }
+
   return nodemailer.createTransport({
     host: process.env.EMAIL_HOST || 'smtp.gmail.com',
     port: process.env.EMAIL_PORT || 587,
@@ -45,8 +59,8 @@ const createTransporter = () => {
       rejectUnauthorized: false
     },
     auth: {
-      user: process.env.EMAIL_USER || 'your-email@gmail.com',
-      pass: process.env.EMAIL_PASS ? process.env.EMAIL_PASS.replace(/\s+/g, '') : 'your-app-password'
+      user: emailUser,
+      pass: emailPass
     }
   });
 };
@@ -88,6 +102,7 @@ router.post('/send-otp', sendOTPValidation, async (req, res) => {
 
     // Send OTP via email
     const transporter = createTransporter();
+
     const emailTemplate = getOTPEmailTemplate(otp, fullName);
 
     const mailOptions = {
@@ -112,11 +127,14 @@ router.post('/send-otp', sendOTPValidation, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Send OTP error:', error);
+    console.error('❌ Send OTP error:', error.message);
+    console.error('Full error:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({
       status: 'error',
       message: 'Failed to send OTP',
-      error: process.env.NODE_ENV === 'development' ? error.message : 'OTP service unavailable'
+      error: error.message,
+      details: error.stack
     });
   }
 });
