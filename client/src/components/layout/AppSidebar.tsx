@@ -1,5 +1,4 @@
 import { Link, useLocation } from "react-router-dom";
-import logo from "../../assets/logo.png";
 import {
   LayoutDashboard,
   Users,
@@ -126,20 +125,11 @@ export function AppSidebar() {
   return (
     <Sidebar>
       <SidebarHeader className="border-b border-sidebar-border px-4 py-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg overflow-hidden">
-            <img 
-              src={logo} 
-              alt="SerpY Logo" 
-              className="h-10 w-10 object-contain"
-            />
-          </div>
-          <div className="flex flex-col">
-            <span className="text-lg font-bold">
-              <span className="text-orange-500">Serp</span>
-              <span className="text-black">Y</span>
-            </span>
-          </div>
+        <div className="flex items-center">
+          <span className="text-lg font-bold">
+            <span className="text-orange-500">Serp</span>
+            <span className="text-black">Y</span>
+          </span>
         </div>
       </SidebarHeader>
 
