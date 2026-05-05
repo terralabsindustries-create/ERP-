@@ -227,7 +227,7 @@ router.post('/verify-otp', verifyOTPValidation, async (req, res) => {
       dataScope, // Each admin gets their own unique dataScope
       subscription: {
         isActive: true,
-        plan: 'starter',
+        plan: 'free',
         startDate: new Date(),
         endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days from now
         autoRenew: false
@@ -278,7 +278,7 @@ router.post('/register', registerValidation, async (req, res) => {
       dataScope, // Each admin gets their own unique dataScope
       subscription: {
         isActive: true,
-        plan: 'starter',
+        plan: 'free',
         startDate: new Date(),
         endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days from now
         autoRenew: false
