@@ -253,13 +253,24 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
           onInvoiceGenerated?.();
         }
       }, 500);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error generating invoice:', error);
-      toast({
-        title: "Error",
-        description: "Failed to generate invoice",
-        variant: "destructive",
-      });
+      if (error.stockCheck?.length > 0) {
+        const lines = (error.details as string[]) || error.stockCheck.map((s: any) =>
+          `"${s.itemName}": Available ${s.availableQuantity}, Required ${s.requiredQuantity} (${s.unit})`
+        );
+        toast({
+          title: "Insufficient Stock",
+          description: lines.join('\n'),
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Error",
+          description: error.message || "Failed to generate invoice",
+          variant: "destructive",
+        });
+      }
     } finally {
       setLoading(false);
     }

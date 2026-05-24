@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plus, Search, FileText, Download, Eye, Trash2, DollarSign, Calendar, User, Building, Filter, MoreHorizontal, Send, Copy, Archive, CheckCircle, Clock, AlertCircle, AlertTriangle } from "lucide-react";
+import { Plus, Search, FileText, Download, Eye, Trash2, DollarSign, Calendar, User, Building, Filter, MoreHorizontal, Send, Copy, Archive, CheckCircle, Clock, AlertCircle, AlertTriangle, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,6 +31,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AdvancedCreateInvoiceDialog } from "@/components/invoices/AdvancedCreateInvoiceDialog";
 import { ViewInvoiceDialog } from "@/components/invoices/ViewInvoiceDialog";
+import { EditInvoiceDialog } from "@/components/invoices/EditInvoiceDialog";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -111,6 +112,8 @@ export default function Invoices() {
   });
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [invoiceToDelete, setInvoiceToDelete] = useState<string | null>(null);
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [invoiceToEdit, setInvoiceToEdit] = useState<Invoice | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -256,6 +259,11 @@ export default function Invoices() {
     } finally {
       setPaymentStatusLoading(false);
     }
+  };
+
+  const handleEditClick = (invoice: Invoice) => {
+    setInvoiceToEdit(invoice);
+    setShowEditDialog(true);
   };
 
   const handleDeleteClick = (id: string) => {
@@ -532,6 +540,18 @@ export default function Invoices() {
                           size="sm"
                           onClick={(e) => {
                             e.stopPropagation();
+                            handleEditClick(invoice);
+                          }}
+                          className="gap-2"
+                        >
+                          <Pencil className="h-3 w-3" />
+                          Edit
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
                             handleDeleteClick(invoice._id || invoice.id);
                           }}
                           className="gap-2 text-destructive hover:text-destructive"
@@ -595,6 +615,16 @@ export default function Invoices() {
         onOpenChange={setShowViewDialog}
         invoice={selectedInvoice}
         onInvoiceUpdated={handleInvoiceUpdated}
+      />
+
+      <EditInvoiceDialog
+        open={showEditDialog}
+        onOpenChange={setShowEditDialog}
+        invoice={invoiceToEdit as any}
+        onInvoiceUpdated={() => {
+          fetchInvoices();
+          fetchStats();
+        }}
       />
 
       {/* Payment Status Update Dialog */}

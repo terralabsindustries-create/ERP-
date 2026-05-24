@@ -56,7 +56,10 @@ class ApiClient {
       const data: ApiResponse<T> = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.message || 'API request failed');
+        const err = new Error(data.message || 'API request failed') as any;
+        err.details = (data as any).details;
+        err.stockCheck = (data as any).stockCheck;
+        throw err;
       }
 
       // If the API returns data directly, return it

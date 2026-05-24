@@ -93,21 +93,29 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
   });
   const { toast } = useToast();
 
+  const toDateInput = (val: any) => {
+    if (!val) return "";
+    const d = new Date(val);
+    if (isNaN(d.getTime())) return "";
+    return d.toISOString().split('T')[0];
+  };
+
   useEffect(() => {
     if (invoice && open) {
       setFormData({
-        customerId: invoice.customerId._id,
+        customerId: invoice.customerId?._id || (invoice.customerId as any) || "",
         jobId: invoice.jobId?._id || "",
-        invoiceDate: invoice.invoiceDate.split('T')[0],
-        dueDate: invoice.dueDate.split('T')[0],
-        items: invoice.items.map(item => ({
-          ...item,
-          totalAmount: item.quantity * item.unitPrice,
-          gstAmount: (item.quantity * item.unitPrice) * (item.gstRate / 100),
-          itemTotal: (item.quantity * item.unitPrice) + ((item.quantity * item.unitPrice) * (item.gstRate / 100))
-        })),
-        discountAmount: invoice.discountAmount,
-        isInterState: invoice.isInterState,
+        invoiceDate: toDateInput(invoice.invoiceDate),
+        dueDate: toDateInput(invoice.dueDate),
+        items: invoice.items.map(item => {
+          const base = (item as any).itemType === 'Square Feet'
+            ? ((item as any).totalSquareFeet || 0) * item.unitPrice
+            : item.quantity * item.unitPrice;
+          const gstAmount = base * (item.gstRate / 100);
+          return { ...item, totalAmount: base, gstAmount, itemTotal: base + gstAmount };
+        }),
+        discountAmount: invoice.discountAmount || 0,
+        isInterState: invoice.isInterState || false,
         notes: invoice.notes || "",
         termsAndConditions: invoice.termsAndConditions || ""
       });
@@ -124,8 +132,9 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
 
   const fetchCustomers = async () => {
     try {
-      const response = await apiClient.getCustomers();
-      setCustomers(response.data?.customers || []);
+      const response = await apiClient.getCustomer();
+      const data = Array.isArray(response) ? response : (response?.customers || []);
+      setCustomers(data);
     } catch (error) {
       console.error('Error fetching customers:', error);
     }
@@ -134,7 +143,8 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
   const fetchJobs = async () => {
     try {
       const response = await apiClient.getJobs();
-      setJobs(response.data?.jobs || []);
+      const data = Array.isArray(response) ? response : (response?.jobs || []);
+      setJobs(data);
     } catch (error) {
       console.error('Error fetching jobs:', error);
     }
@@ -143,7 +153,8 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
   const fetchHsnCodes = async () => {
     try {
       const response = await apiClient.getHsnCodes();
-      setHsnCodes(response.data?.hsnCodes || []);
+      const data = Array.isArray(response) ? response : (response?.hsnCodes || []);
+      setHsnCodes(data);
     } catch (error) {
       console.error('Error fetching HSN codes:', error);
     }

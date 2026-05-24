@@ -51,6 +51,7 @@ interface PaymentDuesWidgetProps {
 export function PaymentDuesWidget({ onRefresh }: PaymentDuesWidgetProps) {
   const [dues, setDues] = useState<PaymentDue[]>([]);
   const [loading, setLoading] = useState(true);
+  const [markingPaid, setMarkingPaid] = useState<string | null>(null);
   const [totalDue, setTotalDue] = useState(0);
   const { toast } = useToast();
 
@@ -111,18 +112,26 @@ export function PaymentDuesWidget({ onRefresh }: PaymentDuesWidgetProps) {
   };
 
   const markAsPaid = async (invoiceId: string) => {
+    const due = dues.find(d => d._id === invoiceId);
+    setMarkingPaid(invoiceId);
     try {
-      await apiClient.updateInvoice(invoiceId, { 
-        status: 'paid',
-        paid_date: new Date().toISOString()
+      await apiClient.updateInvoicePaymentStatus(invoiceId, {
+        paymentStatus: 'paid',
+        amountPaid: due?.totalAmount || 0
       });
-      
+
+      // Optimistically remove from list immediately
+      setDues(prev => {
+        const updated = prev.filter(d => d._id !== invoiceId);
+        setTotalDue(updated.reduce((sum, d) => sum + (d.totalAmount || 0), 0));
+        return updated;
+      });
+
       toast({
         title: "Success",
         description: "Invoice marked as paid",
       });
-      
-      await fetchPaymentDues();
+
       onRefresh?.();
     } catch (error) {
       console.error('Error updating invoice:', error);
@@ -131,6 +140,10 @@ export function PaymentDuesWidget({ onRefresh }: PaymentDuesWidgetProps) {
         description: "Failed to update invoice",
         variant: "destructive",
       });
+      // Re-fetch to restore correct state on failure
+      await fetchPaymentDues();
+    } finally {
+      setMarkingPaid(null);
     }
   };
 
@@ -244,9 +257,10 @@ export function PaymentDuesWidget({ onRefresh }: PaymentDuesWidgetProps) {
                       size="sm"
                       variant="ghost"
                       onClick={() => markAsPaid(due._id)}
+                      disabled={markingPaid === due._id}
                       className="h-7 text-xs"
                     >
-                      Mark Paid
+                      {markingPaid === due._id ? "Saving..." : "Mark Paid"}
                     </Button>
                   </div>
                 </div>

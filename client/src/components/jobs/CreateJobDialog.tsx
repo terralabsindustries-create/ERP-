@@ -28,10 +28,11 @@ interface InvoiceItem {
   hsnCode?: string;
   gstRate: number;
   itemTotal: number;
-  itemType?: 'Numbers' | 'Square Feet'; // To track if item is square feet or regular
-  length?: number; // Length for square feet calculation
-  width?: number; // Width for square feet calculation
-  totalSquareFeet?: number; // Total square feet calculated
+  itemType?: 'Numbers' | 'Square Feet';
+  unit?: string; // unit from inventory (pieces, boxes, sqft, sqm, etc.)
+  length?: number;
+  width?: number;
+  totalSquareFeet?: number;
 }
 
 interface DesignCharge {
@@ -199,6 +200,7 @@ export function CreateJobDialog({
           gstRate: 18,
           itemTotal: 0,
           itemType: 'Numbers',
+          unit: 'pieces',
           length: undefined,
           width: undefined,
           totalSquareFeet: 0
@@ -446,13 +448,24 @@ export function CreateJobDialog({
         }
       }, 500);
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error generating invoice:', error);
-      toast({
-        title: "Error",
-        description: "Failed to generate invoice",
-        variant: "destructive",
-      });
+      if (error.stockCheck?.length > 0) {
+        const lines = (error.details as string[]) || error.stockCheck.map((s: any) =>
+          `"${s.itemName}": Available ${s.availableQuantity}, Required ${s.requiredQuantity} (${s.unit})`
+        );
+        toast({
+          title: "Insufficient Stock",
+          description: lines.join('\n'),
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Error",
+          description: error.message || "Failed to generate invoice",
+          variant: "destructive",
+        });
+      }
     } finally {
       setIsGeneratingInvoice(false);
     }
@@ -1048,24 +1061,40 @@ export function CreateJobDialog({
                                   className="p-3 hover:bg-gray-50 cursor-pointer border-b last:border-b-0"
                                   onMouseDown={(e) => {
                                     e.preventDefault();
-                                    // Auto-fill item details from inventory
-                                    console.log('Selected item category:', invItem.category, 'Full item:', invItem);
                                     setFormData(prev => {
                                       const newItems = [...prev.items];
+                                      const invUnit = invItem.unit || 'pieces';
+                                      const isAreaUnit = ['sqft', 'sqm'].includes(invUnit);
 
                                       newItems[index] = {
                                         ...newItems[index],
-                                        // Don't set itemType from category - it should remain 'Numbers' or 'Square Feet'
                                         itemName: invItem.name,
                                         unitPrice: invItem.unitCost || 0,
                                         hsnCode: invItem.hsnCode || undefined,
-                                        gstRate: invItem.gstRate || 18
+                                        gstRate: invItem.gstRate || 18,
+                                        unit: invUnit,
+                                        itemType: isAreaUnit ? 'Square Feet' : 'Numbers',
+                                        length: isAreaUnit ? newItems[index].length : undefined,
+                                        width: isAreaUnit ? newItems[index].width : undefined,
+                                        totalSquareFeet: isAreaUnit ? (newItems[index].totalSquareFeet || 0) : 0,
                                       };
 
-                                      // Calculate total for Numbers type (default)
-                                      const subtotal = (newItems[index].quantity || 1) * newItems[index].unitPrice;
-                                      const gstAmount = (subtotal * newItems[index].gstRate) / 100;
-                                      newItems[index].itemTotal = subtotal + gstAmount;
+                                      if (isAreaUnit) {
+                                        const l = newItems[index].length || 0;
+                                        const w = newItems[index].width || 0;
+                                        if (l && w) {
+                                          newItems[index].totalSquareFeet = l * w;
+                                          const subtotal = newItems[index].totalSquareFeet! * newItems[index].unitPrice;
+                                          const gstAmount = (subtotal * newItems[index].gstRate) / 100;
+                                          newItems[index].itemTotal = subtotal + gstAmount;
+                                        } else {
+                                          newItems[index].itemTotal = 0;
+                                        }
+                                      } else {
+                                        const subtotal = (newItems[index].quantity || 1) * newItems[index].unitPrice;
+                                        const gstAmount = (subtotal * newItems[index].gstRate) / 100;
+                                        newItems[index].itemTotal = subtotal + gstAmount;
+                                      }
 
                                       return { ...prev, items: newItems };
                                     });
@@ -1112,7 +1141,7 @@ export function CreateJobDialog({
                       </div>
                     </div>
 
-                    {/* Conditional fields based on item type */}
+                    {/* Conditional fields based on item unit */}
                     {item.itemType === 'Square Feet' ? (
                       <>
                         <div className="space-y-1">
@@ -1140,21 +1169,33 @@ export function CreateJobDialog({
                         </div>
 
                         <div className="space-y-1">
-                          <Label className="text-xs">Price per Sq Ft</Label>
+                          <Label className="text-xs">
+                            {item.unit === 'sqm' ? 'Price per Sq M' : 'Price per Sq Ft'}
+                          </Label>
                           <Input
                             type="number"
                             step="0.01"
                             value={item.unitPrice}
                             onChange={(e) => updateItem(index, 'unitPrice', parseFloat(e.target.value) || 0)}
                             min="0"
-                            placeholder="Price per sq ft"
+                            placeholder={item.unit === 'sqm' ? 'Price per sq m' : 'Price per sq ft'}
                           />
                         </div>
                       </>
                     ) : (
                       <>
                         <div className="space-y-1">
-                          <Label className="text-xs">Qty</Label>
+                          <Label className="text-xs">
+                            {item.unit === 'boxes' ? 'Qty (Boxes)'
+                              : item.unit === 'reams' ? 'Qty (Reams)'
+                              : item.unit === 'kg' ? 'Qty (kg)'
+                              : item.unit === 'grams' ? 'Qty (g)'
+                              : item.unit === 'liters' ? 'Qty (L)'
+                              : item.unit === 'meters' ? 'Qty (m)'
+                              : item.unit === 'rolls' ? 'Qty (Rolls)'
+                              : item.unit === 'sheets' ? 'Qty (Sheets)'
+                              : 'Qty (Pcs)'}
+                          </Label>
                           <Input
                             type="number"
                             value={item.quantity}
@@ -1210,13 +1251,15 @@ export function CreateJobDialog({
 
                     <div className="space-y-1">
                       <Label className="text-xs">
-                        {item.itemType === 'Square Feet' ? 'Calc Sq Ft / Amount' : 'Total'}
+                        {item.itemType === 'Square Feet'
+                          ? (item.unit === 'sqm' ? 'Area / Amount' : 'Sq Ft / Amount')
+                          : 'Total'}
                       </Label>
                       <div className="flex flex-col items-start space-y-1">
                         {item.itemType === 'Square Feet' && (
                           <span className="text-xs text-muted-foreground">
                             {item.length && item.width
-                              ? `${item.totalSquareFeet?.toFixed(2)} sq ft (${item.length} × ${item.width})`
+                              ? `${item.totalSquareFeet?.toFixed(2)} ${item.unit === 'sqm' ? 'sq m' : 'sq ft'} (${item.length} × ${item.width})`
                               : 'Set L & W'}
                           </span>
                         )}

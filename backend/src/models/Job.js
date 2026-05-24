@@ -16,9 +16,10 @@ const invoiceItemSchema = new mongoose.Schema({
   gstRate: { type: Number, min: 0, max: 100, default: 18 },
   itemTotal: { type: Number, default: 0 },
   itemType: { type: String, enum: ['Numbers', 'Square Feet'], default: 'Numbers' },
+  unit: { type: String, default: 'pieces' },
   totalSquareFeet: { type: Number, default: 0 },
-  length: { type: Number, default: 0 },  // Length for square feet items
-  width: { type: Number, default: 0 }    // Width for square feet items
+  length: { type: Number, default: 0 },
+  width: { type: Number, default: 0 }
 });
 
 // Design charge schema

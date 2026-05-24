@@ -24,6 +24,7 @@ interface InvoiceItem {
   gstAmount: number;
   itemTotal: number;
   itemType?: 'Numbers' | 'Square Feet';
+  unit?: string;
   length?: number;
   width?: number;
   totalSquareFeet?: number;
@@ -205,6 +206,7 @@ export function AdvancedCreateInvoiceDialog({
         gstAmount: 0,
         itemTotal: 0,
         itemType: 'Numbers',
+        unit: 'pieces',
         length: undefined,
         width: undefined,
         totalSquareFeet: 0
@@ -293,12 +295,18 @@ export function AdvancedCreateInvoiceDialog({
     try {
       const invoiceData = {
         ...formData,
-        items: formData.items.map(item => ({
-          ...item,
-          totalAmount: item.quantity * item.unitPrice,
-          gstAmount: (item.quantity * item.unitPrice) * (item.gstRate / 100),
-          itemTotal: (item.quantity * item.unitPrice) + ((item.quantity * item.unitPrice) * (item.gstRate / 100))
-        }))
+        items: formData.items.map(item => {
+          const base = item.itemType === 'Square Feet'
+            ? (item.totalSquareFeet || 0) * item.unitPrice
+            : item.quantity * item.unitPrice;
+          const gstAmount = base * (item.gstRate / 100);
+          return {
+            ...item,
+            totalAmount: base,
+            gstAmount,
+            itemTotal: base + gstAmount
+          };
+        })
       };
 
       const response = await apiClient.createInvoice(invoiceData);
@@ -327,31 +335,16 @@ export function AdvancedCreateInvoiceDialog({
       });
     } catch (error: any) {
       console.error('Error creating advanced invoice:', error);
-
-      // Check if it's a stock validation error
-      const errorResponse = error?.response?.data;
-
-      if (errorResponse?.stockCheck && Array.isArray(errorResponse.stockCheck)) {
-        // Stock validation error with detailed information
+      if (error.stockCheck?.length > 0) {
+        const lines = (error.details as string[]) || error.stockCheck.map((s: any) =>
+          `"${s.itemName}": Available ${s.availableQuantity}, Required ${s.requiredQuantity} (${s.unit})`
+        );
         toast({
-          title: errorResponse.message || "Insufficient stock for invoice items",
-          description: JSON.stringify({
-            message: errorResponse.message || "Insufficient stock for invoice items",
-            stockCheck: errorResponse.stockCheck
-          }),
-          variant: "destructive",
-        });
-      } else if (errorResponse?.message) {
-        // Other API error - use the actual message as title
-        toast({
-          title: errorResponse.message,
-          description: errorResponse.details ?
-            (Array.isArray(errorResponse.details) ? errorResponse.details.join(', ') : errorResponse.details)
-            : "Please check your input and try again",
+          title: "Insufficient Stock",
+          description: lines.join('\n'),
           variant: "destructive",
         });
       } else {
-        // Generic error
         toast({
           title: "Failed to create invoice",
           description: error?.message || "An unexpected error occurred",
@@ -495,16 +488,49 @@ export function AdvancedCreateInvoiceDialog({
                       <Select
                         value={item.itemName}
                         onValueChange={(value) => {
-                          // Find the selected inventory item
                           const selectedItem = inventoryItems.find(inv => inv.name === value);
                           if (selectedItem) {
-                            updateItem(index, 'itemName', selectedItem.name);
-                            updateItem(index, 'unitPrice', selectedItem.unitCost || 0);
-                            updateItem(index, 'hsnCode', selectedItem.hsnCode || '');
-                            updateItem(index, 'gstRate', selectedItem.gstRate || 18);
-                            updateItem(index, 'description', selectedItem.description || '');
-                            // Don't set itemType from category - it should remain 'Numbers' or 'Square Feet'
-                            // itemType is already defaulted to 'Numbers' and can be manually changed if needed
+                            const invUnit = selectedItem.unit || 'pieces';
+                            const isAreaUnit = ['sqft', 'sqm'].includes(invUnit);
+                            setFormData(prev => {
+                              const newItems = [...prev.items];
+                              newItems[index] = {
+                                ...newItems[index],
+                                itemName: selectedItem.name,
+                                unitPrice: selectedItem.unitCost || 0,
+                                hsnCode: selectedItem.hsnCode || '',
+                                gstRate: selectedItem.gstRate || 18,
+                                description: selectedItem.description || '',
+                                unit: invUnit,
+                                itemType: isAreaUnit ? 'Square Feet' : 'Numbers',
+                                length: isAreaUnit ? newItems[index].length : undefined,
+                                width: isAreaUnit ? newItems[index].width : undefined,
+                                totalSquareFeet: isAreaUnit ? (newItems[index].totalSquareFeet || 0) : 0,
+                              };
+                              if (isAreaUnit) {
+                                const l = newItems[index].length || 0;
+                                const w = newItems[index].width || 0;
+                                if (l && w) {
+                                  newItems[index].totalSquareFeet = l * w;
+                                  const subtotal = newItems[index].totalSquareFeet! * (selectedItem.unitCost || 0);
+                                  const gstAmount = subtotal * ((selectedItem.gstRate || 18) / 100);
+                                  newItems[index].totalAmount = subtotal;
+                                  newItems[index].gstAmount = gstAmount;
+                                  newItems[index].itemTotal = subtotal + gstAmount;
+                                } else {
+                                  newItems[index].totalAmount = 0;
+                                  newItems[index].gstAmount = 0;
+                                  newItems[index].itemTotal = 0;
+                                }
+                              } else {
+                                const subtotal = (newItems[index].quantity || 1) * (selectedItem.unitCost || 0);
+                                const gstAmount = subtotal * ((selectedItem.gstRate || 18) / 100);
+                                newItems[index].totalAmount = subtotal;
+                                newItems[index].gstAmount = gstAmount;
+                                newItems[index].itemTotal = subtotal + gstAmount;
+                              }
+                              return { ...prev, items: newItems };
+                            });
                           }
                         }}
                       >
@@ -559,7 +585,17 @@ export function AdvancedCreateInvoiceDialog({
                       </>
                     ) : (
                       <div className="space-y-1">
-                        <Label className="text-xs">Qty</Label>
+                        <Label className="text-xs">
+                          {item.unit === 'boxes' ? 'Qty (Boxes)'
+                            : item.unit === 'reams' ? 'Qty (Reams)'
+                            : item.unit === 'kg' ? 'Qty (kg)'
+                            : item.unit === 'grams' ? 'Qty (g)'
+                            : item.unit === 'liters' ? 'Qty (L)'
+                            : item.unit === 'meters' ? 'Qty (m)'
+                            : item.unit === 'rolls' ? 'Qty (Rolls)'
+                            : item.unit === 'sheets' ? 'Qty (Sheets)'
+                            : 'Qty (Pcs)'}
+                        </Label>
                         <Input
                           type="number"
                           value={item.quantity}
@@ -572,7 +608,11 @@ export function AdvancedCreateInvoiceDialog({
 
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
                     <div className="space-y-1">
-                      <Label className="text-xs">{item.itemType === 'Square Feet' ? 'Price/Sq Ft' : 'Unit Price'}</Label>
+                      <Label className="text-xs">
+                        {item.itemType === 'Square Feet'
+                          ? (item.unit === 'sqm' ? 'Price/Sq M' : 'Price/Sq Ft')
+                          : 'Unit Price'}
+                      </Label>
                       <Input
                         type="number"
                         step="0.01"
@@ -632,7 +672,7 @@ export function AdvancedCreateInvoiceDialog({
 
                   {item.itemType === 'Square Feet' && item.length && item.width && (
                     <div className="text-xs text-muted-foreground bg-blue-50 p-2 rounded">
-                      Total: {item.totalSquareFeet?.toFixed(2)} sq ft ({item.length} × {item.width})
+                      Area: {item.totalSquareFeet?.toFixed(2)} {item.unit === 'sqm' ? 'sq m' : 'sq ft'} ({item.length} × {item.width})
                     </div>
                   )}
                 </div>
