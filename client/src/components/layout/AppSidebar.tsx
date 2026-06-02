@@ -20,6 +20,7 @@ import {
   Settings,
   Banknote,
   BookOpen,
+  ClipboardList,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -62,6 +63,7 @@ export function AppSidebar() {
     {
       label: "Invoicing",
       items: [
+        { title: "Quotations", href: "/quotations", icon: ClipboardList, permission: "Quotations" },
         { title: "Invoice Management", href: "/invoices", icon: FileText, permission: "Invoicing" },
         // { title: "Invoice Management (View No GST)", href: "/invoices-no-gst", icon: FileText, permission: "Invoicing (View No GST)" },
       ],

@@ -582,6 +582,28 @@ class ApiClient {
     return this.get('/deliveries/stats/summary');
   }
 
+  // Quotation Management
+  async getQuotations(params?: any) {
+    const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
+    return this.get(`/quotations${queryString}`);
+  }
+
+  async getQuotation(id: string) {
+    return this.get(`/quotations/${id}`);
+  }
+
+  async createQuotation(data: any) {
+    return this.post('/quotations', data);
+  }
+
+  async updateQuotationStatus(id: string, status: string) {
+    return this.patch(`/quotations/${id}/status`, { status });
+  }
+
+  async deleteQuotation(id: string) {
+    return this.delete(`/quotations/${id}`);
+  }
+
   // Invoice Management
   async getInvoices(params?: any) {
     const queryString = params ? '?' + new URLSearchParams(params).toString() : '';

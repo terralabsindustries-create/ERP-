@@ -90,9 +90,11 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
     setLoading(true);
 
     try {
-      // TODO: Implement API call to create quotation
-      console.log('📋 API not yet implemented');
-      
+      await apiClient.createQuotation({
+        ...formData,
+        items,
+      });
+
       toast({
         title: "Success",
         description: "Quotation created successfully",

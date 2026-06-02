@@ -35,6 +35,7 @@ import ActivityLog from "./pages/ActivityLog";
 import Auth from "./pages/Auth";
 import Accounts from "./pages/Accounts";
 import GeneralLedger from "./pages/GeneralLedger";
+import Quotations from "./pages/Quotations";
 import NotFound from "./pages/NotFound";
 import CreateLogin from "./pages/CreateLogin";
 import HiddenCreateLogin from "./pages/HiddenCreateLogin";
@@ -65,6 +66,7 @@ const App = () => (
                       <Route path="/" element={<PermissionRoute permission="Dashboard"><Index /></PermissionRoute>} />
                       <Route path="/customers" element={<PermissionRoute permission="Customers"><Customers /></PermissionRoute>} />
                       <Route path="/jobs" element={<PermissionRoute permission="Jobs"><Jobs /></PermissionRoute>} />
+                      <Route path="/quotations" element={<PermissionRoute permission="Quotations"><Quotations /></PermissionRoute>} />
                       <Route path="/invoices" element={<PermissionRoute permission="Invoicing"><Invoices /></PermissionRoute>} />
                       <Route path="/invoices-no-gst" element={<PermissionRoute permission="Invoicing (View No GST)"><InvoicesNoGst /></PermissionRoute>} />
                       <Route path="/inventory" element={<PermissionRoute permission="Inventory"><Inventory /></PermissionRoute>} />
