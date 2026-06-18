@@ -1,5 +1,6 @@
 // Test script to verify the exact API endpoints from curl commands
 const fetch = require('node-fetch');
+const BASE_URL = process.env.BASE_URL || 'https://serpy.synxautomate.com/api';
 
 const testToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTkxNDYyZDQ0NDUxZmE1NDExYmVlNDYiLCJpYXQiOjE3NzI3MTQ0NjEsImV4cCI6MTc3MjgwMDg2MX0.PangnkKxFPrEKsmSseKLlcXOO83MzUsDn5Q_aEtfsng';
 const staffId = '69a8302c0bd2b8608e6a191b';
@@ -10,7 +11,7 @@ async function testAPIs() {
   // Test 1: Get all tasks
   try {
     console.log('📋 Testing GET /api/tasks');
-    const tasksResponse = await fetch('https://serpy.synxautomate.com/api/tasks', {
+    const tasksResponse = await fetch('${BASE_URL}/tasks', {
       method: 'GET',
       headers: {
         'Accept': '*/*',
@@ -32,7 +33,7 @@ async function testAPIs() {
   // Test 2: Get staff schedule
   try {
     console.log('📅 Testing GET /api/staff/{staffId}/schedule');
-    const scheduleResponse = await fetch(`https://serpy.synxautomate.com/api/staff/${staffId}/schedule`, {
+    const scheduleResponse = await fetch(`${BASE_URL}/staff/${staffId}/schedule`, {
       method: 'GET',
       headers: {
         'Accept': '*/*',
@@ -54,7 +55,7 @@ async function testAPIs() {
   // Test 3: Get tasks with assignedTo filter (like the frontend is trying)
   try {
     console.log('📋 Testing GET /api/tasks with assignedTo filter');
-    const filteredTasksResponse = await fetch(`https://serpy.synxautomate.com/api/tasks?assignedTo=${staffId}`, {
+    const filteredTasksResponse = await fetch(`${BASE_URL}/tasks?assignedTo=${staffId}`, {
       method: 'GET',
       headers: {
         'Accept': '*/*',

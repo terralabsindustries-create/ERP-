@@ -19,11 +19,11 @@ app.use(compression());
 // CORS configuration
 app.use(cors({
   origin: [
-    'https://serpy.synxautomate.com',
+    process.env.FRONTEND_URL || 'https://serpy.synxautomate.com',
     'https://serpy-silk.vercel.app',
     'http://localhost:8081',
     'http://localhost:8080',
-    'https://app.serpy.in' 
+    'https://app.serpy.in'
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -113,6 +113,11 @@ app.use('/api/users', require('./routes/users'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/email', require('./routes/email'));
 app.use('/api/razorpay', require('./routes/razorpay'));
+// HR & Payroll
+app.use('/api/hr/employees', require('./routes/employees'));
+app.use('/api/hr/attendance', require('./routes/attendance'));
+app.use('/api/hr/leaves', require('./routes/leaves'));
+app.use('/api/hr/payroll', require('./routes/payroll'));
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

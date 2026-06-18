@@ -31,6 +31,7 @@ interface AuthContextType {
   signUp: (email: string, password: string, fullName?: string) => Promise<{ error: any }>;
   signOut: () => Promise<void>;
   hasPermission: (permission: string) => boolean; // Check if user has a specific permission
+  refreshUser: () => Promise<User | undefined>;
   showSubscriptionModal: boolean;
   setShowSubscriptionModal: (show: boolean) => void;
 }
@@ -164,6 +165,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return user?.permissions?.includes(permission) || false;
   };
 
+  // Re-fetch the current user (e.g. after a successful subscription payment)
+  // so the subscription gate updates immediately and stays correct on refresh.
+  const refreshUser = async () => {
+    try {
+      const userData = await apiClient.getCurrentUser();
+      setUser(userData);
+      setSession({ user: userData });
+      checkSubscriptionStatus(userData);
+      return userData;
+    } catch (error) {
+      console.error('Failed to refresh user:', error);
+    }
+  };
+
   const value = {
     user,
     session,
@@ -172,6 +187,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     signUp,
     signOut,
     hasPermission,
+    refreshUser,
     showSubscriptionModal,
     setShowSubscriptionModal,
   };
@@ -179,10 +195,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return (
     <AuthContext.Provider value={value}>
       {children}
-      <SubscriptionModal 
-        open={showSubscriptionModal} 
+      <SubscriptionModal
+        open={showSubscriptionModal}
         onClose={() => setShowSubscriptionModal(false)}
         userPlan={user?.subscription?.plan}
+        onPaymentSuccess={refreshUser}
       />
     </AuthContext.Provider>
   );

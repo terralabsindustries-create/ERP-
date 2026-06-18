@@ -33,16 +33,29 @@ async function getCompanyInfo(userId) {
   }
   
   const formattedAddress = addressParts.length > 0 ? addressParts.join(', ') : '';
-  
+
+  // Multi-line address block for invoice/quotation header (SynX style)
+  const addr = settings.companyAddress || {};
+  const addressLines = [];
+  if (addr.street) addressLines.push(addr.street);
+  if (addr.city) addressLines.push(addr.city + (addr.zipCode ? ' - ' + addr.zipCode : ''));
+  else if (addr.zipCode) addressLines.push(addr.zipCode);
+  const stateCountry = [addr.state, addr.country].filter(Boolean).join(', ').toUpperCase();
+  if (stateCountry) addressLines.push(stateCountry);
+
   return {
     isConfigured: true,
     name: settings.companyName,
     address: formattedAddress,
+    addressLines,
+    logo: settings.companyLogo || '',
+    currency: settings.currency || 'INR',
     phone: settings.companyPhone || '',
     email: settings.companyEmail || '',
     gstNumber: settings.gstNumber || '',
     panNumber: settings.panNumber || '',
     stateName: settings.companyAddress?.state || '',
+    country: settings.companyAddress?.country || '',
     paymentQRCode: settings.paymentQRCode || '',
     // Bank details
     bankName: settings.bankName || '',
@@ -457,9 +470,28 @@ router.put('/:id', protect, async (req, res) => {
       balanceDue: req.body.balanceDue
     };
 
+    // Strip fields that must not be overwritten / are virtuals
+    delete updateData._id;
+    delete updateData.userId;
+    delete updateData.dataScope;
+    delete updateData.invoiceNumber;
+    delete updateData.createdAt;
+    delete updateData.updatedAt;
+    delete updateData.balanceDue; // virtual alias of balanceAmount, not a real path
+
+    // ObjectId fields cannot be cast from empty strings — drop/normalize them
+    if (!updateData.customerId) {
+      // keep the existing customer rather than clearing a required reference
+      delete updateData.customerId;
+    }
+    if (!updateData.jobId) {
+      // empty string -> unset the optional job reference
+      updateData.jobId = null;
+    }
+
     // Update invoice with the data from frontend (which has already calculated everything)
-    const invoice = await Invoice.findByIdAndUpdate(
-      req.params.id,
+    const invoice = await Invoice.findOneAndUpdate(
+      findQuery,
       updateData,
       { new: true, runValidators: false } // Disable validators to allow direct updates
     ).populate('customerId', 'name email phone gstNumber')
@@ -477,7 +509,8 @@ router.put('/:id', protect, async (req, res) => {
     console.error('Update invoice error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Server error while updating invoice'
+      message: 'Server error while updating invoice',
+      error: error.message
     });
   }
 });

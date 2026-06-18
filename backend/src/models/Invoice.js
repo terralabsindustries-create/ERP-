@@ -17,8 +17,7 @@ const invoiceItemSchema = new mongoose.Schema({
   },
   unit: {
     type: String,
-    required: [true, 'Unit is required'],
-    enum: ['pieces', 'kg', 'meters', 'liters', 'hours', 'days', 'sets', 'reams'],
+    enum: ['pieces', 'nos', 'kg', 'grams', 'meters', 'rft', 'sqft', 'sqm', 'liters', 'hours', 'days', 'sets', 'reams', 'rolls', 'sheets', 'boxes'],
     default: 'pieces'
   },
   unitPrice: {

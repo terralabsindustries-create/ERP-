@@ -1,9 +1,12 @@
 import { useState, useEffect } from "react";
-import { Plus, Search, FileText, Eye, Trash2, Clock, CheckCircle, XCircle, Send } from "lucide-react";
+import { Plus, Search, FileText, Trash2, Clock, CheckCircle, XCircle, Send, Mail, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { CreateQuotationDialog } from "@/components/quotations/CreateQuotationDialog";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
@@ -17,6 +20,7 @@ interface Quotation {
   valid_until: string;
   status: "draft" | "sent" | "approved" | "rejected";
   total_amount: number;
+  payment_link?: string;
   createdAt: string;
   notes?: string;
 }
@@ -32,6 +36,10 @@ export default function Quotations() {
   const [quotations, setQuotations] = useState<Quotation[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [emailDialog, setEmailDialog] = useState<{ open: boolean; quotation: Quotation | null }>({ open: false, quotation: null });
+  const [emailRecipient, setEmailRecipient] = useState("");
+  const [emailMessage, setEmailMessage] = useState("");
+  const [sendingEmail, setSendingEmail] = useState(false);
   const { toast } = useToast();
 
   const fetchQuotations = async () => {
@@ -63,6 +71,57 @@ export default function Quotations() {
       q.customer_id?.name?.toLowerCase().includes(query)
     );
   });
+
+  const openEmailDialog = (q: Quotation) => {
+    setEmailRecipient(q.customer_id?.email || "");
+    setEmailMessage("");
+    setEmailDialog({ open: true, quotation: q });
+  };
+
+  const handleSendEmail = async () => {
+    if (!emailDialog.quotation) return;
+    setSendingEmail(true);
+    try {
+      await apiClient.sendQuotationEmail(emailDialog.quotation._id, emailRecipient, emailMessage || undefined);
+      toast({ title: "Email Sent", description: `Quotation sent to ${emailRecipient}` });
+      setEmailDialog({ open: false, quotation: null });
+      fetchQuotations();
+    } catch {
+      toast({ title: "Error", description: "Failed to send email", variant: "destructive" });
+    } finally {
+      setSendingEmail(false);
+    }
+  };
+
+  const handleDownloadPDF = async (q: Quotation) => {
+    try {
+      const blob = await apiClient.downloadQuotationPDF(q._id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Quotation_${q.quotationNumber}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error: any) {
+      toast({
+        title: "PDF Error",
+        description: error.message || "Failed to download PDF. Ensure company settings are configured.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await apiClient.deleteQuotation(id);
+      toast({ title: "Deleted", description: "Quotation deleted" });
+      fetchQuotations();
+    } catch {
+      toast({ title: "Error", description: "Failed to delete quotation", variant: "destructive" });
+    }
+  };
 
   const formatDate = (dateStr: string) =>
     dateStr ? new Date(dateStr).toLocaleDateString("en-IN") : "-";
@@ -153,6 +212,7 @@ export default function Quotations() {
                     <th className="text-left px-4 py-3 font-medium">Amount</th>
                     <th className="text-left px-4 py-3 font-medium">Status</th>
                     <th className="text-left px-4 py-3 font-medium">Created</th>
+                    <th className="px-4 py-3 font-medium">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -179,6 +239,39 @@ export default function Quotations() {
                           </Badge>
                         </td>
                         <td className="px-4 py-3 text-muted-foreground">{formatDate(q.createdAt)}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="gap-1 h-7 px-2 text-xs"
+                              onClick={() => handleDownloadPDF(q)}
+                              title="Download PDF"
+                            >
+                              <Download className="w-3 h-3" />
+                              PDF
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="gap-1 h-7 px-2 text-xs"
+                              onClick={() => openEmailDialog(q)}
+                              title="Send via email"
+                            >
+                              <Mail className="w-3 h-3" />
+                              Send
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-destructive hover:text-destructive"
+                              onClick={() => handleDelete(q._id)}
+                              title="Delete quotation"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </Button>
+                          </div>
+                        </td>
                       </tr>
                     );
                   })}
@@ -188,6 +281,64 @@ export default function Quotations() {
           )}
         </CardContent>
       </Card>
+      {/* Send Email Dialog */}
+      <Dialog open={emailDialog.open} onOpenChange={(open) => !open && setEmailDialog({ open: false, quotation: null })}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Mail className="w-5 h-5" />
+              Send Quotation via Email
+            </DialogTitle>
+          </DialogHeader>
+
+          {emailDialog.quotation && (
+            <div className="space-y-4 py-2">
+              <div className="rounded-md bg-muted px-3 py-2 text-sm">
+                <span className="text-muted-foreground">Quotation: </span>
+                <span className="font-mono font-medium">{emailDialog.quotation.quotationNumber}</span>
+                <span className="text-muted-foreground ml-3">Customer: </span>
+                <span className="font-medium">{emailDialog.quotation.customer_id?.name}</span>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="email-recipient">Recipient Email</Label>
+                <Input
+                  id="email-recipient"
+                  type="email"
+                  value={emailRecipient}
+                  onChange={(e) => setEmailRecipient(e.target.value)}
+                  placeholder="customer@example.com"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="email-message">Message (optional)</Label>
+                <Textarea
+                  id="email-message"
+                  value={emailMessage}
+                  onChange={(e) => setEmailMessage(e.target.value)}
+                  placeholder="Add a personal note to the email..."
+                  rows={3}
+                />
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEmailDialog({ open: false, quotation: null })}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSendEmail}
+              disabled={sendingEmail || !emailRecipient}
+              className="gap-2"
+            >
+              <Send className="w-4 h-4" />
+              {sendingEmail ? "Sending..." : "Send Email"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

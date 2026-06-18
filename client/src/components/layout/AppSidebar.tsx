@@ -21,6 +21,10 @@ import {
   Banknote,
   BookOpen,
   ClipboardList,
+  BadgeIndianRupee,
+  CalendarCheck,
+  CalendarOff,
+  Contact,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -35,6 +39,7 @@ import {
   SidebarMenuItem,
   SidebarMenuButton,
 } from "@/components/ui/sidebar";
+import logo from "@/assets/logo.png";
 interface NavItem {
   title: string;
   href: string;
@@ -91,6 +96,15 @@ export function AppSidebar() {
       ],
     },
     {
+      label: "Human Resources",
+      items: [
+        { title: "Employees", href: "/employees", icon: Contact, permission: "Human Resources" },
+        { title: "Attendance", href: "/attendance", icon: CalendarCheck, permission: "Human Resources" },
+        { title: "Leave Requests", href: "/leaves", icon: CalendarOff, permission: "Human Resources" },
+        { title: "Payroll", href: "/payroll", icon: BadgeIndianRupee, permission: "Payroll" },
+      ],
+    },
+    {
       label: "Configuration",
       items: [
         { title: "HSN Codes", href: "/hsn-codes", icon: Hash, permission: "HSN Codes" },
@@ -127,7 +141,8 @@ export function AppSidebar() {
   return (
     <Sidebar>
       <SidebarHeader className="border-b border-sidebar-border px-4 py-4">
-        <div className="flex items-center">
+        <div className="flex items-center gap-2">
+          <img src={logo} alt="SerpY logo" className="h-8 w-auto object-contain" />
           <span className="text-lg font-bold">
             <span className="text-orange-500">Serp</span>
             <span className="text-black">Y</span>

@@ -1,4 +1,5 @@
 // Console test script - paste this in browser console when logged in as staff
+const BASE_URL = window.__BASE_URL__ || 'https://serpy.synxautomate.com/api';
 
 // Test the APIs directly from browser console
 console.log('🧪 Testing APIs from browser console...');
@@ -17,7 +18,7 @@ if (token && user) {
   console.log('🆔 Staff ID:', staffId);
   
   // Test schedule API
-  fetch(`https://serpy.synxautomate.com/api/staff/${staffId}/schedule`, {
+  fetch(`${BASE_URL}/staff/${staffId}/schedule`, {
     headers: {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json'
@@ -32,7 +33,7 @@ if (token && user) {
   });
   
   // Test tasks API
-  fetch(`https://serpy.synxautomate.com/api/tasks`, {
+  fetch(`${BASE_URL}/tasks`, {
     headers: {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json'

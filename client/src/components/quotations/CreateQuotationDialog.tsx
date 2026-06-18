@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Trash2, FileText, Send } from "lucide-react";
+import { Plus, Trash2, FileText, Send, Link } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -35,6 +35,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
     valid_until: "",
     gst_type: "non_gst" as "gst" | "non_gst",
     is_interstate: false,
+    payment_link: "",
     terms_conditions: "",
     notes: "",
   });
@@ -106,6 +107,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
         valid_until: "",
         gst_type: "non_gst",
         is_interstate: false,
+        payment_link: "",
         terms_conditions: "",
         notes: "",
       });
@@ -201,6 +203,21 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
               type="date"
               value={formData.valid_until}
               onChange={(e) => setFormData(prev => ({ ...prev, valid_until: e.target.value }))}
+            />
+          </div>
+
+          {/* Payment Link */}
+          <div className="space-y-2">
+            <Label htmlFor="payment_link" className="flex items-center gap-2">
+              <Link className="w-4 h-4" />
+              Payment Link
+            </Label>
+            <Input
+              id="payment_link"
+              type="url"
+              value={formData.payment_link}
+              onChange={(e) => setFormData(prev => ({ ...prev, payment_link: e.target.value }))}
+              placeholder="https://razorpay.com/... (optional)"
             />
           </div>
 

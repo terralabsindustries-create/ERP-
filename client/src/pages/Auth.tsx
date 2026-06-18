@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Building2, Eye, EyeOff, Shield, Users, BarChart3 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { OTPVerification } from "@/components/auth/OTPVerification";
+import { BASE_URL } from "@/lib/apiClient";
 
 export default function Auth() {
   const { user, signIn, signUp, loading } = useAuth();
@@ -39,7 +40,7 @@ export default function Auth() {
     setIsLoading(true);
     
     try {
-      const response = await fetch('https://serpy.synxautomate.com/api/auth/send-otp', {
+      const response = await fetch(`${BASE_URL}/auth/send-otp`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

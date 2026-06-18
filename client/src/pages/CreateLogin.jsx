@@ -20,6 +20,8 @@ const permissionsList = [
   "HSN Codes",
   "Vendors",
   "Staff & Tasks",
+  "Human Resources",
+  "Payroll",
   "Delivery",
   "Emergency Orders",
   "Cost & Profit",

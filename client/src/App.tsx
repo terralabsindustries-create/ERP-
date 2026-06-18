@@ -36,6 +36,10 @@ import Auth from "./pages/Auth";
 import Accounts from "./pages/Accounts";
 import GeneralLedger from "./pages/GeneralLedger";
 import Quotations from "./pages/Quotations";
+import Employees from "./pages/Employees";
+import Attendance from "./pages/Attendance";
+import Leaves from "./pages/Leaves";
+import Payroll from "./pages/Payroll";
 import NotFound from "./pages/NotFound";
 import CreateLogin from "./pages/CreateLogin";
 import HiddenCreateLogin from "./pages/HiddenCreateLogin";
@@ -87,6 +91,10 @@ const App = () => (
                       <Route path="/general-ledger" element={<PermissionRoute permission="General Ledger"><GeneralLedger /></PermissionRoute>} />
                       <Route path="/accounts" element={<PermissionRoute permission="Accounts"><Accounts /></PermissionRoute>} />
                       <Route path="/portal" element={<PermissionRoute permission="Customer Portal"><Portal /></PermissionRoute>} />
+                      <Route path="/employees" element={<PermissionRoute permission="Human Resources"><Employees /></PermissionRoute>} />
+                      <Route path="/attendance" element={<PermissionRoute permission="Human Resources"><Attendance /></PermissionRoute>} />
+                      <Route path="/leaves" element={<PermissionRoute permission="Human Resources"><Leaves /></PermissionRoute>} />
+                      <Route path="/payroll" element={<PermissionRoute permission="Payroll"><Payroll /></PermissionRoute>} />
                       <Route path="/settings" element={<PermissionRoute permission="Settings"><Settings /></PermissionRoute>} />
                       <Route path="/profile-settings" element={<ProfileSettings />} />
                       <Route path="/activity-log" element={<PermissionRoute permission="Activity Log"><ActivityLog /></PermissionRoute>} />

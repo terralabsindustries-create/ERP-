@@ -62,6 +62,8 @@ const userSchema = new mongoose.Schema({
         'HSN Codes',
         'Vendors',
         'Staff & Tasks',
+        'Human Resources',
+        'Payroll',
         'Delivery',
         'Emergency Orders',
         'Cost & Profit',
@@ -98,6 +100,14 @@ const userSchema = new mongoose.Schema({
     autoRenew: {
       type: Boolean,
       default: false
+    },
+    lastOrderId: {
+      type: String,
+      trim: true
+    },
+    lastPaymentId: {
+      type: String,
+      trim: true
     }
   },
   preferences: {

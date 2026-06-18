@@ -25,6 +25,8 @@ const Settings = () => {
   const [companySettings, setCompanySettings] = useState<any>({});
   const [qrCodeFile, setQrCodeFile] = useState<File | null>(null);
   const [qrCodePreview, setQrCodePreview] = useState<string>("");
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoPreview, setLogoPreview] = useState<string>("");
   const { toast } = useToast();
 
   useEffect(() => {
@@ -49,7 +51,14 @@ const Settings = () => {
         companyName: fetchedSettings.companyName || '',
         companyPhone: fetchedSettings.companyPhone || '',
         companyEmail: fetchedSettings.companyEmail || '',
-        companyAddress: fetchedSettings.companyAddress || {},
+        companyLogo: fetchedSettings.companyLogo || '',
+        companyAddress: {
+          street: fetchedSettings.companyAddress?.street || '',
+          city: fetchedSettings.companyAddress?.city || '',
+          state: fetchedSettings.companyAddress?.state || '',
+          zipCode: fetchedSettings.companyAddress?.zipCode || '',
+          country: fetchedSettings.companyAddress?.country || '',
+        },
         gstNumber: fetchedSettings.gstNumber || '',
         panNumber: fetchedSettings.panNumber || '',
         paymentQRCode: fetchedSettings.paymentQRCode || '',
@@ -64,6 +73,7 @@ const Settings = () => {
       console.log('💾 Setting company settings:', JSON.stringify(newCompanySettings, null, 2));
       setCompanySettings(newCompanySettings);
       setQrCodePreview(fetchedSettings.paymentQRCode || '');
+      setLogoPreview(fetchedSettings.companyLogo || '');
     } catch (error) {
       console.error('❌ Error fetching settings:', error);
       toast({
@@ -103,6 +113,38 @@ const Settings = () => {
     setCompanySettings({ ...companySettings, paymentQRCode: '' });
   };
 
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 2 * 1024 * 1024) { // 2MB limit
+        toast({
+          title: "Error",
+          description: "Logo size should be less than 2MB",
+          variant: "destructive",
+        });
+        return;
+      }
+      if (!/\.(png|jpe?g)$/i.test(file.name)) {
+        toast({
+          title: "Error",
+          description: "Logo must be a PNG or JPG image",
+          variant: "destructive",
+        });
+        return;
+      }
+      setLogoFile(file);
+      const reader = new FileReader();
+      reader.onloadend = () => setLogoPreview(reader.result as string);
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const removeLogo = () => {
+    setLogoFile(null);
+    setLogoPreview('');
+    setCompanySettings({ ...companySettings, companyLogo: '' });
+  };
+
   const saveCompanySettings = async () => {
     try {
       setSaving(true);
@@ -115,9 +157,18 @@ const Settings = () => {
         paymentQRCode = qrCodePreview;
       }
 
+      let companyLogo = companySettings.companyLogo;
+      // If a new logo file was selected, use the base64 data
+      if (logoFile && logoPreview) {
+        companyLogo = logoPreview;
+      } else if (logoPreview) {
+        companyLogo = logoPreview;
+      }
+
       const dataToSave = {
         ...companySettings,
-        paymentQRCode
+        paymentQRCode,
+        companyLogo
       };
 
       console.log('📤 Data to save:', { ...dataToSave, paymentQRCode: paymentQRCode ? 'base64...' : 'none' });
@@ -127,6 +178,7 @@ const Settings = () => {
 
       // Reset the file input state after successful save
       setQrCodeFile(null);
+      setLogoFile(null);
 
       toast({
         title: "Success",
@@ -232,6 +284,143 @@ const Settings = () => {
                   placeholder="AAAAA0000A"
                   className="max-w-xs"
                 />
+              </div>
+
+              <Separator />
+
+              {/* Company Address Section */}
+              <div className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <Building className="h-5 w-5 text-primary" />
+                  <div>
+                    <Label className="text-base font-semibold">Company Address</Label>
+                    <p className="text-sm text-muted-foreground">
+                      This address appears on your invoices and quotations
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="addrStreet">Street / Building</Label>
+                  <Input
+                    id="addrStreet"
+                    value={companySettings.companyAddress?.street || ''}
+                    onChange={(e) => setCompanySettings({ ...companySettings, companyAddress: { ...companySettings.companyAddress, street: e.target.value } })}
+                    placeholder="e.g., 77 Spaces, Lotus Tower"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="addrCity">City</Label>
+                    <Input
+                      id="addrCity"
+                      value={companySettings.companyAddress?.city || ''}
+                      onChange={(e) => setCompanySettings({ ...companySettings, companyAddress: { ...companySettings.companyAddress, city: e.target.value } })}
+                      placeholder="e.g., Thiruvananthapuram"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="addrZip">PIN / ZIP Code</Label>
+                    <Input
+                      id="addrZip"
+                      value={companySettings.companyAddress?.zipCode || ''}
+                      onChange={(e) => setCompanySettings({ ...companySettings, companyAddress: { ...companySettings.companyAddress, zipCode: e.target.value } })}
+                      placeholder="e.g., 695011"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="addrState">State</Label>
+                    <Input
+                      id="addrState"
+                      value={companySettings.companyAddress?.state || ''}
+                      onChange={(e) => setCompanySettings({ ...companySettings, companyAddress: { ...companySettings.companyAddress, state: e.target.value } })}
+                      placeholder="e.g., Kerala"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="addrCountry">Country</Label>
+                    <Input
+                      id="addrCountry"
+                      value={companySettings.companyAddress?.country || ''}
+                      onChange={(e) => setCompanySettings({ ...companySettings, companyAddress: { ...companySettings.companyAddress, country: e.target.value } })}
+                      placeholder="e.g., India"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* Company Logo Section */}
+              <div className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <Upload className="h-5 w-5 text-primary" />
+                  <div>
+                    <Label className="text-base font-semibold">Company Logo</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Appears at the top of your invoices and quotations (PNG or JPG)
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-6">
+                  {logoPreview && (
+                    <div className="relative">
+                      <div className="border-2 border-dashed rounded-lg p-4 bg-muted/50">
+                        <img
+                          src={logoPreview}
+                          alt="Company Logo"
+                          className="h-24 w-auto max-w-[200px] object-contain"
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="icon"
+                        className="absolute -top-2 -right-2 h-6 w-6 rounded-full"
+                        onClick={removeLogo}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  )}
+
+                  <div className="flex-1 space-y-2">
+                    <div className="border-2 border-dashed rounded-lg p-6 hover:border-primary/50 transition-colors">
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <Upload className="h-8 w-8 text-muted-foreground" />
+                        <div className="text-center">
+                          <p className="text-sm font-medium">
+                            {logoPreview ? 'Change Logo' : 'Upload Logo'}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            PNG, JPG up to 2MB
+                          </p>
+                        </div>
+                        <Input
+                          type="file"
+                          accept="image/png,image/jpeg"
+                          onChange={handleLogoUpload}
+                          className="hidden"
+                          id="logo-upload"
+                        />
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => document.getElementById('logo-upload')?.click()}
+                        >
+                          <Upload className="h-4 w-4 mr-2" />
+                          Browse Files
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <Separator />

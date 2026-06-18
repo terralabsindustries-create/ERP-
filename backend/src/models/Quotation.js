@@ -43,6 +43,7 @@ const quotationSchema = new mongoose.Schema({
     enum: ['draft', 'sent', 'approved', 'rejected'],
     default: 'draft'
   },
+  payment_link: { type: String, trim: true },
   terms_conditions: { type: String, trim: true },
   notes: { type: String, trim: true },
   userId: {

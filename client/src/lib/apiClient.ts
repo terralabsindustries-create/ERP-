@@ -1,5 +1,4 @@
-const BASE_URL = 'https://serpy.synxautomate.com/api';
-// const BASE_URL = 'http://localhost:4001/api';
+export const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4001/api';
 
 
 console.log('🔗 API Client using BASE_URL:', BASE_URL);
@@ -185,8 +184,8 @@ class ApiClient {
 
    
 
-  async getCustomer() {
-    return this.get(`/customers`);
+  async getCustomer(params?: { status?: string; search?: string; page?: number; limit?: number }) {
+    return this.get(`/customers`, params);
   }
 
   async createCustomer(data: any) {
@@ -583,6 +582,18 @@ class ApiClient {
   }
 
   // Quotation Management
+  async downloadQuotationPDF(id: string): Promise<Blob> {
+    const token = localStorage.getItem('token');
+    const response = await fetch(`${this.baseURL}/quotations/${id}/pdf`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ message: 'Failed to download PDF' }));
+      throw new Error(err.message || 'Failed to download PDF');
+    }
+    return response.blob();
+  }
+
   async getQuotations(params?: any) {
     const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
     return this.get(`/quotations${queryString}`);
@@ -602,6 +613,10 @@ class ApiClient {
 
   async deleteQuotation(id: string) {
     return this.delete(`/quotations/${id}`);
+  }
+
+  async sendQuotationEmail(id: string, recipientEmail: string, message?: string) {
+    return this.post(`/quotations/${id}/send-email`, { recipientEmail, message });
   }
 
   // Invoice Management
@@ -1419,6 +1434,94 @@ class ApiClient {
 
   async testEmail(to: string) {
     return this.post('/email/test', { to });
+  }
+
+  // ==================== HR & PAYROLL ====================
+
+  // --- Employees ---
+  async getEmployees(params?: any) {
+    const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+    return this.get(`/hr/employees${qs}`);
+  }
+  async getEmployee(id: string) {
+    return this.get(`/hr/employees/${id}`);
+  }
+  async getEmployeeStats() {
+    return this.get('/hr/employees/stats/summary');
+  }
+  async createEmployee(data: any) {
+    return this.post('/hr/employees', data);
+  }
+  async updateEmployee(id: string, data: any) {
+    return this.put(`/hr/employees/${id}`, data);
+  }
+  async deleteEmployee(id: string) {
+    return this.delete(`/hr/employees/${id}`);
+  }
+
+  // --- Attendance ---
+  async getAttendance(params?: any) {
+    const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+    return this.get(`/hr/attendance${qs}`);
+  }
+  async getAttendanceSummary(month: number, year: number) {
+    return this.get(`/hr/attendance/summary?month=${month}&year=${year}`);
+  }
+  async markAttendance(data: any) {
+    return this.post('/hr/attendance', data);
+  }
+  async markAttendanceBulk(date: string, records: any[]) {
+    return this.post('/hr/attendance/bulk', { date, records });
+  }
+  async deleteAttendance(id: string) {
+    return this.delete(`/hr/attendance/${id}`);
+  }
+
+  // --- Leaves ---
+  async getLeaves(params?: any) {
+    const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+    return this.get(`/hr/leaves${qs}`);
+  }
+  async createLeave(data: any) {
+    return this.post('/hr/leaves', data);
+  }
+  async updateLeaveStatus(id: string, status: string, rejectionReason?: string) {
+    return this.patch(`/hr/leaves/${id}/status`, { status, rejectionReason });
+  }
+  async deleteLeave(id: string) {
+    return this.delete(`/hr/leaves/${id}`);
+  }
+
+  // --- Payroll ---
+  async getPayroll(params?: any) {
+    const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+    return this.get(`/hr/payroll${qs}`);
+  }
+  async getPayrollSummary(month: number, year: number) {
+    return this.get(`/hr/payroll/stats/summary?month=${month}&year=${year}`);
+  }
+  async generatePayroll(month: number, year: number, employeeId?: string) {
+    return this.post('/hr/payroll/generate', { month, year, employeeId });
+  }
+  async updatePayslip(id: string, data: any) {
+    return this.put(`/hr/payroll/${id}`, data);
+  }
+  async markPayslipPaid(id: string, data?: any) {
+    return this.patch(`/hr/payroll/${id}/pay`, data || {});
+  }
+  async deletePayslip(id: string) {
+    return this.delete(`/hr/payroll/${id}`);
+  }
+  async downloadPayslipPDF(id: string): Promise<Blob> {
+    const token = localStorage.getItem('token');
+    const response = await fetch(`${this.baseURL}/hr/payroll/${id}/payslip`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ message: 'Failed to download payslip' }));
+      throw new Error(err.message || 'Failed to download payslip');
+    }
+    return response.blob();
   }
 }
 

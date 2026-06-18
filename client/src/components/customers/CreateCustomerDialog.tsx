@@ -19,6 +19,7 @@ export function CreateCustomerDialog({ open, onOpenChange, onCustomerCreated }: 
     name: "",
     email: "",
     phone: "",
+    company: "",
     address: "",
     customerType: "Individual" as 'Individual' | 'Business' | 'Corporate' | 'Walk-in',
     gstNumber: "",
@@ -30,10 +31,10 @@ export function CreateCustomerDialog({ open, onOpenChange, onCustomerCreated }: 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!formData.name || !formData.email) {
+    if (!formData.name) {
       toast({
         title: "Invalid Input",
-        description: "Please fill in all required fields",
+        description: "Customer name is required",
         variant: "destructive",
       });
       return;
@@ -59,6 +60,7 @@ export function CreateCustomerDialog({ open, onOpenChange, onCustomerCreated }: 
         name: "",
         email: "",
         phone: "",
+        company: "",
         address: "",
         customerType: "Individual",
         gstNumber: "",
@@ -104,13 +106,13 @@ export function CreateCustomerDialog({ open, onOpenChange, onCustomerCreated }: 
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="email">Email Address *</Label>
+            <Label htmlFor="email">Email Address</Label>
             <Input
               id="email"
               type="email"
               value={formData.email}
               onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-              placeholder="Enter email address"
+              placeholder="Enter email address (optional)"
             />
           </div>
 
@@ -121,6 +123,16 @@ export function CreateCustomerDialog({ open, onOpenChange, onCustomerCreated }: 
               value={formData.phone}
               onChange={(e) => setFormData(prev => ({ ...prev, phone: e.target.value }))}
               placeholder="Enter phone number"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="company">Company / Business Name</Label>
+            <Input
+              id="company"
+              value={formData.company}
+              onChange={(e) => setFormData(prev => ({ ...prev, company: e.target.value }))}
+              placeholder="Enter company name (optional)"
             />
           </div>
 

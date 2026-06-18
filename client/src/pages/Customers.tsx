@@ -68,7 +68,7 @@ export default function Customers() {
     if (!user) return;
 
     try {
-      const response = await apiClient.getCustomer();
+      const response = await apiClient.getCustomer({ status: 'all', limit: 100 });
       console.log('👥 Customers response:', response);
       const customersData = (response as any)?.data?.customers || (response as any)?.customers || [];
       console.log('👥 Processed customers:', customersData);
@@ -156,9 +156,8 @@ export default function Customers() {
   const getTypeConfig = (type: string) => {
     const configs = {
       "Individual": { variant: "secondary" as const, icon: User },
-      "Retailer": { variant: "default" as const, icon: Building2 },
       "Business": { variant: "default" as const, icon: Building2 },
-      "Government": { variant: "outline" as const, icon: Building2 },
+      "Corporate": { variant: "default" as const, icon: Building2 },
       "Walk-in": { variant: "secondary" as const, icon: User },
     };
     return configs[type as keyof typeof configs] || configs["Individual"];
@@ -176,8 +175,8 @@ export default function Customers() {
 
   const stats = {
     total: customers.length,
-    business: customers.filter(c => c.customerType === "Business").length,
-    individual: customers.filter(c => c.customerType === "Individual").length,
+    business: customers.filter(c => c.customerType === "Business" || c.customerType === "Corporate").length,
+    individual: customers.filter(c => c.customerType === "Individual" || c.customerType === "Walk-in").length,
     active: customers.filter(c => c.status === "active").length,
     withGST: customers.filter(c => c.gstNumber).length,
     blacklisted: customers.filter(c => c.isBlacklisted).length,
@@ -375,9 +374,8 @@ export default function Customers() {
           <SelectContent>
             <SelectItem value="all">All Types</SelectItem>
             <SelectItem value="Individual">Individual</SelectItem>
-            <SelectItem value="Retailer">Retailer</SelectItem>
             <SelectItem value="Business">Business</SelectItem>
-            <SelectItem value="Government">Government</SelectItem>
+            <SelectItem value="Corporate">Corporate</SelectItem>
             <SelectItem value="Walk-in">Walk-in</SelectItem>
           </SelectContent>
         </Select>

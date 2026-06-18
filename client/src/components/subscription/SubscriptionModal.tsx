@@ -69,7 +69,7 @@ const plans = [
   },
 ];
 
-export function SubscriptionModal({ open, onClose, userPlan = 'free' }) {
+export function SubscriptionModal({ open, onClose, userPlan = 'free', onPaymentSuccess }) {
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
   const { toast } = useToast();
 
@@ -103,9 +103,15 @@ export function SubscriptionModal({ open, onClose, userPlan = 'free' }) {
         userId: 'current-user', // Replace with actual user ID
       });
 
-      // Open Razorpay payment modal
+      // Close this Radix dialog before opening Razorpay. While a modal Radix Dialog
+      // is open it traps focus and sets `pointer-events: none` on the page body, which
+      // blocks typing/clicking inside Razorpay's checkout iframe (appended to <body>).
+      setLoadingPlan(null);
+      onClose();
+
+      // Open Razorpay payment modal — use the SAME key the backend created the order with
       await openRazorpayPayment({
-        key: 'rzp_test_SaUSwsnQWzJHbN', // Test key - replace with production key
+        key: order.keyId || '',
         amount: order.amount,
         currency: 'INR',
         name: 'ERP Subscription',
@@ -113,11 +119,12 @@ export function SubscriptionModal({ open, onClose, userPlan = 'free' }) {
         order_id: order.orderId,
         handler: async (response) => {
           try {
-            // Verify payment
+            // Verify payment — this also activates the subscription on the backend
             const verification = await verifyPayment({
               razorpay_order_id: response.razorpay_order_id,
               razorpay_payment_id: response.razorpay_payment_id,
               razorpay_signature: response.razorpay_signature,
+              planName,
             });
 
             if (verification.success) {
@@ -125,10 +132,13 @@ export function SubscriptionModal({ open, onClose, userPlan = 'free' }) {
                 title: "Payment Successful!",
                 description: `Your ${planName} subscription is now active.`,
               });
-              
-              // Update user subscription status
-              // You can call an API to update the user's subscription here
-              
+
+              // Refresh the user so the subscription gate updates and the
+              // modal does not reappear (now or after a page refresh).
+              if (onPaymentSuccess) {
+                await onPaymentSuccess();
+              }
+
               onClose();
             } else {
               toast({
