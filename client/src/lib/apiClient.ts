@@ -992,6 +992,10 @@ class ApiClient {
     return this.get('/accounts/stats/summary');
   }
 
+  async getAccountReportSummary(period: string = 'month') {
+    return this.get(`/accounts/reports/summary?period=${period}`);
+  }
+
   async getAccountLedger(params?: any) {
     const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
     return this.get(`/accounts/ledger${queryString}`);

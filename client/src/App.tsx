@@ -2,7 +2,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Layout } from "@/components/layout/Layout";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
@@ -34,7 +34,6 @@ import ProfileSettings from "./pages/ProfileSettings";
 import ActivityLog from "./pages/ActivityLog";
 import Auth from "./pages/Auth";
 import Accounts from "./pages/Accounts";
-import GeneralLedger from "./pages/GeneralLedger";
 import Quotations from "./pages/Quotations";
 import Employees from "./pages/Employees";
 import Attendance from "./pages/Attendance";
@@ -88,7 +87,8 @@ const App = () => (
                       <Route path="/sac-codes" element={<PermissionRoute permission="SAC Codes"><SacCodes /></PermissionRoute>} />
                       {/* <Route path="/costs" element={<PermissionRoute permission="Cost & Profit"><Costs /></PermissionRoute>} /> */}
                       <Route path="/payments" element={<PermissionRoute permission="Payments"><Payments /></PermissionRoute>} />
-                      <Route path="/general-ledger" element={<PermissionRoute permission="General Ledger"><GeneralLedger /></PermissionRoute>} />
+                      {/* General Ledger merged into Accounts — redirect old links */}
+                      <Route path="/general-ledger" element={<Navigate to="/accounts" replace />} />
                       <Route path="/accounts" element={<PermissionRoute permission="Accounts"><Accounts /></PermissionRoute>} />
                       <Route path="/portal" element={<PermissionRoute permission="Customer Portal"><Portal /></PermissionRoute>} />
                       <Route path="/employees" element={<PermissionRoute permission="Human Resources"><Employees /></PermissionRoute>} />

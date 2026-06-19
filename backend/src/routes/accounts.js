@@ -409,6 +409,80 @@ router.get('/stats/summary', protect, async (req, res) => {
   }
 });
 
+// @route   GET /api/accounts/reports/summary
+// @desc    Period-aware financial summary (income/expense/net) + current balances
+// @access  Private
+router.get('/reports/summary', protect, async (req, res) => {
+  try {
+    const period = req.query.period || 'month';
+    const now = new Date();
+    let start;
+    switch (period) {
+      case 'week': {
+        start = new Date(now);
+        const day = start.getDay();          // 0 = Sunday
+        const diff = day === 0 ? 6 : day - 1; // back to Monday
+        start.setDate(start.getDate() - diff);
+        start.setHours(0, 0, 0, 0);
+        break;
+      }
+      case 'quarter': {
+        const q = Math.floor(now.getMonth() / 3);
+        start = new Date(now.getFullYear(), q * 3, 1);
+        break;
+      }
+      case 'year':
+        start = new Date(now.getFullYear(), 0, 1);
+        break;
+      case 'month':
+      default:
+        start = new Date(now.getFullYear(), now.getMonth(), 1);
+        break;
+    }
+
+    // Sum income/expense for the period (completed transactions only)
+    const agg = await AccountTransaction.aggregate([
+      { $match: { userId: req.user._id, status: 'completed', createdAt: { $gte: start } } },
+      { $group: { _id: '$transactionType', total: { $sum: '$amount' } } }
+    ]);
+
+    let totalIncome = 0;
+    let totalExpenses = 0;
+    agg.forEach(g => {
+      if (g._id === 'income') totalIncome += g.total;
+      else if (g._id === 'expense') totalExpenses += g.total;
+    });
+    const netProfit = totalIncome - totalExpenses;
+
+    // Current balances (point-in-time, not period-bound)
+    const currentBalances = await AccountBalance.findOne({ userId: req.user._id });
+    const cashBalance = currentBalances?.cashBalance || 0;
+    const bankBalance = currentBalances?.bankBalance || 0;
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        report: {
+          period,
+          startDate: start,
+          totalIncome,
+          totalExpenses,
+          netProfit,
+          cashFlow: netProfit, // operating cash flow ≈ net for this model
+          cashBalance,
+          bankBalance
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get account report summary error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error while generating report summary'
+    });
+  }
+});
+
 // @route   GET /api/accounts/ledger
 // @desc    Get account ledger entries
 // @access  Private

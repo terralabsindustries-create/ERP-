@@ -90,7 +90,6 @@ export function AppSidebar() {
       label: "Finance",
       items: [
         // { title: "Payments", href: "/payments", icon: DollarSign, permission: "Payments" },
-        { title: "General Ledger", href: "/general-ledger", icon: BookOpen, permission: "General Ledger" },
         { title: "Accounts", href: "/accounts", icon: Banknote, permission: "Accounts" },
       ],
     },

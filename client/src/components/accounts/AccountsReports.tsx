@@ -85,21 +85,26 @@ export function AccountsReports() {
         params.userId = selectedUserId;
       }
 
-      const transactionsResponse = await apiClient.getAccountTransactions(params);
+      // Fetch recent transactions + the period-aware financial summary in parallel
+      const [transactionsResponse, reportResponse]: any = await Promise.all([
+        apiClient.getAccountTransactions(params),
+        apiClient.getAccountReportSummary(selectedPeriod),
+      ]);
       console.log('📋 Transactions response:', transactionsResponse);
+      console.log('📊 Report summary:', reportResponse);
 
       const transactions = transactionsResponse?.transactions || [];
       setRecentTransactions(transactions);
 
-      // Placeholder data for now - will be replaced with actual API data later
+      const report = reportResponse?.report || reportResponse || {};
       setReportData({
         period: selectedPeriod,
-        totalIncome: 150000,
-        totalExpenses: 95000,
-        netProfit: 55000,
-        cashFlow: 45000,
-        bankBalance: 125000,
-        cashBalance: 25000
+        totalIncome: report.totalIncome || 0,
+        totalExpenses: report.totalExpenses || 0,
+        netProfit: report.netProfit || 0,
+        cashFlow: report.cashFlow || 0,
+        bankBalance: report.bankBalance || 0,
+        cashBalance: report.cashBalance || 0,
       });
     } catch (error) {
       console.error('Error generating report:', error);
