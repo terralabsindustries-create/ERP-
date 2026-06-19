@@ -1,8 +1,5 @@
 export const BASE_URL = import.meta.env.VITE_API_URL || 'https://serpy.synxautomate.com/api';
 
-
-console.log('🔗 API Client using BASE_URL:', BASE_URL);
-
 interface ApiResponse<T = any> {
   status: 'success' | 'error';
   message?: string;
