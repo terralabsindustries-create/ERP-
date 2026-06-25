@@ -266,20 +266,10 @@ export function AccountsReports() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium">Cash Balance</span>
-              <span className="text-lg font-bold">₹{reportData?.cashBalance.toLocaleString() || 0}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium">Bank Balance</span>
-              <span className="text-lg font-bold">₹{reportData?.bankBalance.toLocaleString() || 0}</span>
-            </div>
-            <div className="border-t pt-4">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">Total Balance</span>
-                <span className="text-xl font-bold">
-                  ₹{((reportData?.cashBalance || 0) + (reportData?.bankBalance || 0)).toLocaleString()}
-                </span>
-              </div>
+              <span className="text-sm font-medium">Total Balance</span>
+              <span className="text-xl font-bold">
+                ₹{((reportData?.cashBalance || 0) + (reportData?.bankBalance || 0)).toLocaleString()}
+              </span>
             </div>
           </CardContent>
             </Card>

@@ -4,6 +4,8 @@ const Payroll = require('../models/Payroll');
 const Employee = require('../models/Employee');
 const Attendance = require('../models/Attendance');
 const Settings = require('../models/Settings');
+const AccountTransaction = require('../models/AccountTransaction');
+const AccountBalance = require('../models/AccountBalance');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -209,19 +211,53 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// PATCH /api/hr/payroll/:id/pay - mark as paid
+// PATCH /api/hr/payroll/:id/pay - mark as paid (also records an account expense)
 router.patch('/:id/pay', async (req, res) => {
   try {
-    const payslip = await Payroll.findOneAndUpdate(
-      scopeFilter(req, { _id: req.params.id }),
-      {
-        status: 'paid',
-        paidDate: req.body.paidDate ? new Date(req.body.paidDate) : new Date(),
-        paymentMethod: req.body.paymentMethod || 'bank-transfer'
-      },
-      { new: true }
-    );
+    const payslip = await Payroll.findOne(scopeFilter(req, { _id: req.params.id }));
     if (!payslip) return res.status(404).json({ status: 'error', message: 'Payslip not found' });
+
+    const wasAlreadyPaid = payslip.status === 'paid';
+
+    payslip.status = 'paid';
+    payslip.paidDate = req.body.paidDate ? new Date(req.body.paidDate) : new Date();
+    payslip.paymentMethod = req.body.paymentMethod || payslip.paymentMethod || 'bank-transfer';
+    await payslip.save();
+
+    // Record the salary payout as an expense in Accounts (only once, on first pay)
+    if (!wasAlreadyPaid && payslip.netPay > 0) {
+      try {
+        const pmMap = { 'bank-transfer': 'bank_transfer', cash: 'cash', cheque: 'cheque', upi: 'upi' };
+        const paymentMethod = pmMap[payslip.paymentMethod] || 'bank_transfer';
+        const accountType = paymentMethod === 'cash' ? 'cash' : 'bank';
+
+        await AccountTransaction.create({
+          transactionType: 'expense',
+          category: 'Salaries',
+          amount: payslip.netPay,
+          description: `Salary - ${payslip.employeeName || 'Employee'} (${payslip.periodLabel || ''})`.trim(),
+          paymentMethod,
+          accountType,
+          accountName: 'Payroll',
+          reference: payslip.employeeCode || '',
+          status: 'completed',
+          userId: req.user._id
+        });
+
+        // Reduce the corresponding balance (money left the account)
+        let balance = await AccountBalance.findOne({ userId: req.user._id });
+        if (!balance) {
+          balance = new AccountBalance({ userId: req.user._id, cashBalance: 0, bankBalance: 0 });
+        }
+        if (accountType === 'cash') balance.cashBalance -= payslip.netPay;
+        else balance.bankBalance -= payslip.netPay;
+        await balance.save();
+      } catch (txErr) {
+        // Don't fail the payment if the bookkeeping entry has an issue — just log it
+        console.warn('⚠️ Payroll expense transaction failed:', txErr.message);
+      }
+    }
+
     res.json({ status: 'success', message: 'Payslip marked as paid', data: { payslip } });
   } catch (error) {
     console.error('Mark paid error:', error);

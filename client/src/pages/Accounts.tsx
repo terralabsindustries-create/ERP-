@@ -87,53 +87,21 @@ export default function Accounts() {
         </div>
       </div>
 
-      {/* Balance Cards */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Wallet className="h-4 w-4" />
-              Cash Balance
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">
-              {formatCurrency(balances?.cashBalance || 0)}
-            </div>
-            <p className="text-xs text-muted-foreground">Available cash on hand</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <CreditCard className="h-4 w-4" />
-              Bank Balance
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-blue-600">
-              {formatCurrency(balances?.bankBalance || 0)}
-            </div>
-            <p className="text-xs text-muted-foreground">Current bank balance</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <TrendingUp className="h-4 w-4" />
-              Total Balance
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-purple-600">
-              {formatCurrency((balances?.cashBalance || 0) + (balances?.bankBalance || 0))}
-            </div>
-            <p className="text-xs text-muted-foreground">Combined cash & bank</p>
-          </CardContent>
-        </Card>
-      </div>
+      {/* Balance Card */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <Wallet className="h-4 w-4" />
+            Total Balance
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-3xl font-bold text-primary">
+            {formatCurrency((balances?.cashBalance || 0) + (balances?.bankBalance || 0))}
+          </div>
+          <p className="text-xs text-muted-foreground">Available balance across all accounts</p>
+        </CardContent>
+      </Card>
 
       {/* Main Content */}
       <Tabs defaultValue="ledger" className="space-y-6">

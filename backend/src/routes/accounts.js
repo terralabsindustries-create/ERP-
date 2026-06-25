@@ -9,12 +9,15 @@ const router = express.Router();
 
 // Validation rules
 const transactionValidation = [
-  body('transactionType').isIn(['income', 'expense', 'transfer', 'opening_balance', 'adjustment']),
+  body('transactionType').isIn(['income', 'expense', 'transfer', 'opening_balance', 'adjustment'])
+    .withMessage('Invalid transaction type'),
   body('category').notEmpty().withMessage('Category is required').trim(),
   body('amount').isFloat({ min: 0 }).withMessage('Amount must be a positive number'),
   body('description').notEmpty().withMessage('Description is required').trim(),
-  body('paymentMethod').isIn(['cash', 'bank_transfer', 'cheque', 'card', 'upi', 'wallet', 'other']),
-  body('accountType').isIn(['cash', 'bank', 'credit_card', 'loan', 'investment']),
+  body('paymentMethod').isIn(['cash', 'bank_transfer', 'cheque', 'card', 'upi', 'wallet', 'other'])
+    .withMessage('Invalid payment method'),
+  body('accountType').isIn(['cash', 'bank', 'credit_card', 'loan', 'investment'])
+    .withMessage('Account type is required (cash, bank, credit_card, loan or investment)'),
   body('accountName').notEmpty().withMessage('Account name is required').trim()
 ];
 
@@ -236,7 +239,7 @@ router.post('/transactions', protect, transactionValidation, async (req, res) =>
         status: 'error',
         message: 'Validation failed',
         errors: errors.array().map(err => ({
-          field: err.param,
+          field: err.path || err.param,
           message: err.msg
         }))
       });

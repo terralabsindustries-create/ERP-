@@ -25,6 +25,7 @@ import {
   CalendarCheck,
   CalendarOff,
   Contact,
+  ReceiptText,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -77,6 +78,7 @@ export function AppSidebar() {
       items: [
         { title: "Inventory", href: "/inventory", icon: Package, permission: "Inventory" },
         { title: "Vendors", href: "/vendors", icon: Building2, permission: "Vendors" },
+        { title: "Purchase Bills", href: "/purchase-bills", icon: ReceiptText, permission: "Purchase Bills" },
       ],
     },
     {

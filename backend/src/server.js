@@ -90,6 +90,7 @@ app.use('/api/inventory', require('./routes/inventory'));
 app.use('/api/categories', require('./routes/categories'));
 app.use('/api/units', require('./routes/units'));
 app.use('/api/purchase-orders', require('./routes/purchaseOrders'));
+app.use('/api/purchase-bills', require('./routes/purchaseBills'));
 app.use('/api/vendors', require('./routes/vendors'));
 app.use('/api/staff', require('./routes/staff'));
 app.use('/api/tasks', require('./routes/tasks'));

@@ -415,7 +415,7 @@ function CreateTimerForm({ onSubmit }: CreateTimerFormProps) {
         <Input
           id="notes"
           value={formData.notes}
-          onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
+            onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
           placeholder="Additional notes..."
         />
       </div>

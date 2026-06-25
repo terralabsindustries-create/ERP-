@@ -19,6 +19,7 @@ const permissionsList = [
   "Inventory",
   "HSN Codes",
   "Vendors",
+  "Purchase Bills",
   "Staff & Tasks",
   "Human Resources",
   "Payroll",

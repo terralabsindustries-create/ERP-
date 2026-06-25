@@ -496,6 +496,75 @@ class ApiClient {
     return this.get('/vendors/stats/summary');
   }
 
+  // Purchase Bills
+  async getPurchaseBills(params?: any) {
+    const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
+    return this.get(`/purchase-bills${queryString}`);
+  }
+
+  async getPurchaseBill(id: string) {
+    return this.get(`/purchase-bills/${id}`);
+  }
+
+  async createPurchaseBill(data: any) {
+    return this.post('/purchase-bills', data);
+  }
+
+  async updatePurchaseBill(id: string, data: any) {
+    return this.put(`/purchase-bills/${id}`, data);
+  }
+
+  async deletePurchaseBill(id: string) {
+    return this.delete(`/purchase-bills/${id}`);
+  }
+
+  async getPurchaseBillStats() {
+    return this.get('/purchase-bills/stats/summary');
+  }
+
+  async downloadPurchaseBillPDF(billId: string) {
+    const token = localStorage.getItem('token');
+    const response = await fetch(`${this.baseURL}/purchase-bills/${billId}/pdf`, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+
+    if (!response.ok) {
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `Failed to download PDF: ${response.status}`);
+      }
+      throw new Error(`Failed to download PDF: ${response.status} ${response.statusText}`);
+    }
+
+    const blob = await response.blob();
+    if (blob.size === 0) {
+      throw new Error('PDF is empty - generation may have failed');
+    }
+
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+
+    const contentDisposition = response.headers.get('content-disposition');
+    let filename = `PurchaseBill_${billId}.pdf`;
+    if (contentDisposition) {
+      const filenameMatch = contentDisposition.match(/filename="(.+)"/);
+      if (filenameMatch && filenameMatch[1]) {
+        filename = filenameMatch[1];
+      }
+    }
+
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    setTimeout(() => {
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    }, 100);
+  }
+
   // Payment Management
   async getPayments(params?: any) {
     const queryString = params ? '?' + new URLSearchParams(params).toString() : '';

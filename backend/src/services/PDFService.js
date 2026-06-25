@@ -56,6 +56,210 @@ class PDFService {
     }
   }
 
+  static async generatePurchaseBillPDFFromHTML(bill, companyInfo) {
+    try {
+      console.log('🔄 Starting HTML to PDF conversion for purchase bill:', bill.billNumber);
+
+      const htmlContent = this.generatePurchaseBillHTML(bill, companyInfo);
+
+      let browser;
+      try {
+        browser = await puppeteer.launch({
+          headless: 'new',
+          args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+
+        const page = await browser.newPage();
+        await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+
+        const pdfBuffer = await page.pdf({
+          format: 'A4',
+          margin: { top: '20mm', right: '20mm', bottom: '20mm', left: '20mm' },
+          printBackground: true
+        });
+
+        await browser.close();
+        console.log('✅ Purchase bill PDF generated, size:', pdfBuffer.length, 'bytes');
+        return pdfBuffer;
+      } catch (puppeteerError) {
+        console.warn('⚠️ Puppeteer error for purchase bill:', puppeteerError.message);
+        if (browser) {
+          try { await browser.close(); } catch (e) { console.warn('Error closing browser:', e.message); }
+        }
+        throw puppeteerError;
+      }
+    } catch (error) {
+      console.error('❌ Purchase bill PDF generation error:', error.message);
+      throw new Error('Failed to generate PDF: ' + error.message);
+    }
+  }
+
+  static generatePurchaseBillHTML(bill, companyInfo) {
+    const fmt = (d) => d
+      ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' })
+      : 'N/A';
+    const billDate = fmt(bill.billDate);
+    const dueDate = fmt(bill.dueDate);
+
+    const companyPhone = this.formatPhone(companyInfo.phone);
+    const isInterState = bill.isInterState;
+    const amountInWords = this.numberToWords(Math.floor(bill.totalAmount || 0));
+    const isFullyPaid = (bill.paidAmount || 0) >= (bill.totalAmount || 0) && (bill.totalAmount || 0) > 0;
+    const balanceDue = Math.max(0, (bill.totalAmount || 0) - (bill.paidAmount || 0));
+    const num = (n) => (Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    // GST column header(s)
+    const gstHead = isInterState
+      ? `<th style="padding:9px 6px;text-align:right;font-size:9pt;width:13%;font-weight:700;">IGST</th>`
+      : `<th style="padding:9px 6px;text-align:right;font-size:9pt;width:12%;font-weight:700;">SGST</th>
+         <th style="padding:9px 6px;text-align:right;font-size:9pt;width:12%;font-weight:700;">CGST</th>`;
+
+    const itemsRows = (bill.items || []).map((item, index) => {
+      const ratePct = item.gstRate || 0;
+      const gstCells = isInterState
+        ? `<td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${num(item.igstAmount)} <span style="color:#888;font-size:8pt;">(${ratePct}%)</span></td>`
+        : `<td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${num(item.sgstAmount)} <span style="color:#888;font-size:8pt;">(${(ratePct / 2)}%)</span></td>
+           <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${num(item.cgstAmount)} <span style="color:#888;font-size:8pt;">(${(ratePct / 2)}%)</span></td>`;
+      return `
+      <tr>
+        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:center;color:#666;font-size:9pt;">${index + 1}</td>
+        <td style="padding:8px 6px;border-bottom:1px solid #eee;font-size:9.5pt;">
+          <div style="font-weight:600;">${item.description || ''}</div>
+          ${item.hsnCode ? `<div style="color:#888;font-size:8pt;margin-top:1px;">HSN/SAC: ${item.hsnCode}</div>` : ''}
+        </td>
+        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${num(item.rate)}</td>
+        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${item.quantity || 0}</td>
+        ${gstCells}
+        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${num(item.total)}</td>
+      </tr>`;
+    }).join('');
+
+    const gstTotals = isInterState
+      ? `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>IGST Amount</span><span>INR ${num(bill.totalIgstAmount)}</span></div>`
+      : `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>SGST Amount</span><span>INR ${num(bill.totalSgstAmount)}</span></div>
+         <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>CGST Amount</span><span>INR ${num(bill.totalCgstAmount)}</span></div>`;
+
+    const paidRows = (bill.paidAmount || 0) > 0 ? `
+      <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#16a34a;">
+        <span>Amount Paid</span><span>INR ${num(bill.paidAmount)}</span>
+      </div>
+      ${balanceDue > 0 ? `<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:10.5pt;font-weight:700;border-top:1px solid #ccc;margin-top:4px;color:#dc2626;">
+        <span>Balance Due</span><span>INR ${num(balanceDue)}</span>
+      </div>` : ''}` : '';
+
+    const addressLines = (companyInfo.address || '').split(',').map(s => s.trim()).filter(Boolean).join('<br>');
+    const vendorAddressLines = (bill.vendorAddress || '').split(',').map(s => s.trim()).filter(Boolean).join('<br>');
+
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Purchase Bill ${bill.billNumber}</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family: Arial, Helvetica, sans-serif; color:#333; background:white; font-size:10pt; line-height:1.5; }
+    .page { max-width:210mm; margin:0 auto; padding:14mm 18mm; }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- HEADER -->
+  <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:10px;">
+    <tr>
+      <td style="vertical-align:top;">
+        <div style="font-size:26pt;font-weight:900;color:#8b2fc9;letter-spacing:-1px;line-height:1;">${companyInfo.name || 'Company'}</div>
+        <div style="margin-top:8px;">
+          <div style="font-weight:700;font-size:10.5pt;">${(companyInfo.name || '').toUpperCase()}</div>
+          ${companyInfo.address ? `<div style="font-size:9pt;color:#555;margin-top:3px;">${addressLines}</div>` : ''}
+          ${companyInfo.email ? `<div style="font-size:9pt;color:#555;margin-top:2px;">Email: ${companyInfo.email}</div>` : ''}
+          ${companyInfo.phone ? `<div style="font-size:9pt;color:#555;margin-top:2px;">Mobile: ${companyPhone}</div>` : ''}
+          ${companyInfo.gstNumber ? `<div style="font-size:9pt;color:#555;margin-top:2px;">GSTIN: ${companyInfo.gstNumber}</div>` : ''}
+        </div>
+      </td>
+      <td style="vertical-align:top;text-align:right;">
+        <div style="font-size:24pt;font-weight:900;color:#222;letter-spacing:1px;line-height:1;">PURCHASE BILL</div>
+        <div style="font-size:9.5pt;color:#555;margin-top:8px;line-height:2.2;">
+          <div>Bill Number: <strong style="color:#222;">${bill.billNumber}</strong></div>
+          ${bill.vendorInvoiceNumber ? `<div>Invoice Number: <strong style="color:#222;">${bill.vendorInvoiceNumber}</strong></div>` : ''}
+          <div>Date: <strong style="color:#222;">${billDate}</strong></div>
+          <div>Due Date: <strong style="color:#222;">${dueDate}</strong></div>
+        </div>
+        ${isFullyPaid ? `<div style="display:inline-block;border:2px solid #16a34a;color:#16a34a;font-weight:700;padding:3px 12px;font-size:9pt;margin-top:8px;letter-spacing:0.5px;">FULLY PAID</div>` : ''}
+      </td>
+    </tr>
+  </table>
+
+  <hr style="border:none;border-top:1px solid #ccc;margin:10px 0 14px 0;">
+
+  <!-- VENDOR -->
+  <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;">
+    <tr>
+      <td style="vertical-align:top;">
+        <div style="font-weight:700;font-size:10pt;margin-bottom:5px;">Vendor</div>
+        <div style="font-weight:600;font-size:10pt;">${bill.vendorName || 'N/A'}</div>
+        ${bill.vendorGstNumber ? `<div style="font-size:9pt;color:#555;margin-top:2px;">${bill.vendorGstNumber}</div>` : ''}
+        ${vendorAddressLines ? `<div style="font-size:9pt;color:#555;margin-top:2px;">${vendorAddressLines}</div>` : ''}
+        ${bill.vendorState ? `<div style="font-size:9pt;color:#555;margin-top:2px;">${bill.vendorState}</div>` : ''}
+      </td>
+    </tr>
+  </table>
+
+  <!-- ITEMS TABLE -->
+  <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:6px;">
+    <thead>
+      <tr style="background:#f5f5f5;border-top:1px solid #ddd;border-bottom:1px solid #ddd;">
+        <th style="padding:9px 6px;text-align:center;font-size:9pt;width:6%;font-weight:700;">Sno.</th>
+        <th style="padding:9px 6px;text-align:left;font-size:9pt;font-weight:700;">Description</th>
+        <th style="padding:9px 6px;text-align:right;font-size:9pt;width:13%;font-weight:700;">Rate</th>
+        <th style="padding:9px 6px;text-align:right;font-size:9pt;width:7%;font-weight:700;">Qty</th>
+        ${gstHead}
+        <th style="padding:9px 6px;text-align:right;font-size:9pt;width:14%;font-weight:700;">Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${itemsRows}
+    </tbody>
+  </table>
+
+  <!-- TOTALS -->
+  <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">
+    <tr>
+      <td style="vertical-align:top;"></td>
+      <td style="vertical-align:top;text-align:right;white-space:nowrap;min-width:240px;">
+        <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>Taxable</span><span>INR ${num(bill.taxableAmount)}</span></div>
+        ${gstTotals}
+        <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:11pt;font-weight:700;border-top:1px solid #ccc;margin-top:4px;"><span>Total Amount</span><span>INR ${num(bill.totalAmount)}</span></div>
+        ${paidRows}
+      </td>
+    </tr>
+  </table>
+
+  <!-- AMOUNT IN WORDS -->
+  <div style="border-top:1px solid #ddd;border-bottom:1px solid #ddd;padding:8px 0;font-size:9.5pt;margin:12px 0;">
+    <strong>Total in Words:</strong> Indian Rupees ${amountInWords} Only
+  </div>
+
+  <!-- FOOTER -->
+  <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:18px;padding-top:14px;border-top:1px solid #ccc;">
+    <tr>
+      <td style="vertical-align:top;padding-right:30px;">
+        ${bill.notes ? `<div style="font-weight:700;font-size:10pt;margin-bottom:6px;">Notes</div>
+          <div style="font-size:9pt;color:#555;line-height:1.8;">${bill.notes}</div>` : ''}
+      </td>
+      <td style="vertical-align:top;text-align:right;min-width:210px;">
+        <div style="font-weight:700;font-size:10pt;">For ${companyInfo.name || 'Company'}</div>
+        <div style="height:55px;"></div>
+        <div style="font-size:9.5pt;color:#555;">Authorised Signatory</div>
+      </td>
+    </tr>
+  </table>
+
+</div>
+</body>
+</html>`;
+  }
+
   static formatPhone(phone) {
     if (!phone) return '';
     

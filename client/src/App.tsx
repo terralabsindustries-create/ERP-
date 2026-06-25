@@ -14,6 +14,7 @@ import Invoices from "./pages/Invoices";
 import InvoicesNoGst from "./pages/InvoicesNoGst";
 import Inventory from "./pages/Inventory";
 import Vendors from "./pages/Vendors";
+import PurchaseBills from "./pages/PurchaseBills";
 import Staff from "./pages/Staff";
 import CalendarPage from "./pages/CalendarPage";
 import Proofing from "./pages/Proofing";
@@ -74,6 +75,7 @@ const App = () => (
                       <Route path="/invoices-no-gst" element={<PermissionRoute permission="Invoicing (View No GST)"><InvoicesNoGst /></PermissionRoute>} />
                       <Route path="/inventory" element={<PermissionRoute permission="Inventory"><Inventory /></PermissionRoute>} />
                       <Route path="/vendors" element={<PermissionRoute permission="Vendors"><Vendors /></PermissionRoute>} />
+                      <Route path="/purchase-bills" element={<PermissionRoute permission="Purchase Bills"><PurchaseBills /></PermissionRoute>} />
                       <Route path="/staff" element={<PermissionRoute permission="Staff & Tasks"><Staff /></PermissionRoute>} />
                       <Route path="/calendar" element={<PermissionRoute permission="Calendar"><CalendarPage /></PermissionRoute>} />
                       <Route path="/proofing" element={<PermissionRoute permission="Job Proofing"><Proofing /></PermissionRoute>} />

@@ -21,6 +21,7 @@ export function NewTransactionDialog({ open, onOpenChange, onTransactionCreated 
     amount: "",
     description: "",
     paymentMethod: "cash" as 'cash' | 'bank_transfer' | 'cheque' | 'card' | 'upi',
+    accountType: "cash" as 'cash' | 'bank' | 'credit_card' | 'loan' | 'investment',
     accountName: "",
     reference: "",
     notes: ""
@@ -48,6 +49,7 @@ export function NewTransactionDialog({ open, onOpenChange, onTransactionCreated 
         amount: parseFloat(formData.amount),
         description: formData.description,
         paymentMethod: formData.paymentMethod,
+        accountType: formData.accountType,
         accountName: formData.accountName,
         reference: formData.reference,
         notes: formData.notes,
@@ -69,6 +71,7 @@ export function NewTransactionDialog({ open, onOpenChange, onTransactionCreated 
         amount: "",
         description: "",
         paymentMethod: "cash",
+        accountType: "cash",
         accountName: "",
         reference: "",
         notes: ""
