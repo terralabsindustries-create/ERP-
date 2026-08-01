@@ -168,8 +168,8 @@ router.post('/', protect, authorize('admin', 'manager'), userValidation, async (
     if (role === 'admin') {
       // Admin has full access to everything
       finalPermissions = [
-        'Dashboard', 'Customers', 'Jobs', 'Invoicing', 'Invoicing (View No GST)', 'Calendar', 'Inventory',
-        'HSN Codes', 'Vendors', 'Staff & Tasks', 'Human Resources', 'Payroll', 'Delivery', 'Emergency Orders',
+        'Dashboard', 'Customers', 'Jobs', 'Quotations', 'Invoicing', 'Invoicing (View No GST)', 'Calendar', 'Inventory',
+        'HSN Codes', 'SAC Codes', 'Vendors', 'Purchase Bills', 'Staff & Tasks', 'Human Resources', 'Payroll', 'Delivery', 'Emergency Orders',
         'Cost & Profit', 'Payments', 'Accounts', 'Reports', 'Designer Timer',
         'Discounts', 'Job Proofing', 'WhatsApp', 'Walk-In Jobs', 'Customer Portal',
         'Activity Log', 'User Management', 'Settings'
@@ -293,8 +293,8 @@ router.put('/:id', protect, updateUserValidation, async (req, res) => {
         // Staff and Manager roles use selected permissions
         if (role === 'admin') {
           updateData.permissions = [
-            'Dashboard', 'Customers', 'Jobs', 'Invoicing', 'Calendar', 'Inventory',
-            'HSN Codes', 'Vendors', 'Staff & Tasks', 'Delivery', 'Emergency Orders',
+            'Dashboard', 'Customers', 'Jobs', 'Quotations', 'Invoicing', 'Invoicing (View No GST)', 'Calendar', 'Inventory',
+            'HSN Codes', 'SAC Codes', 'Vendors', 'Purchase Bills', 'Staff & Tasks', 'Human Resources', 'Payroll', 'Delivery', 'Emergency Orders',
             'Cost & Profit', 'Payments', 'Accounts', 'Reports', 'Designer Timer',
             'Discounts', 'Job Proofing', 'WhatsApp', 'Walk-In Jobs', 'Customer Portal',
             'Activity Log', 'User Management', 'Settings'

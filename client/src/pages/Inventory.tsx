@@ -38,6 +38,26 @@ export default function Inventory() {
       });
     }
   };
+
+  const handleDeleteItem = async (id: string, name: string) => {
+    if (window.confirm(`Are you sure you want to delete "${name}" from inventory?`)) {
+      try {
+        await apiClient.deleteInventoryItem(id);
+        toast({
+          title: "Item Deleted",
+          description: `"${name}" has been removed from inventory`,
+        });
+        fetchInventory();
+      } catch (error) {
+        console.error("Error deleting item:", error);
+        toast({
+          title: "Error",
+          description: "Failed to delete inventory item",
+          variant: "destructive",
+        });
+      }
+    }
+  };
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -225,7 +245,12 @@ export default function Inventory() {
           {/* Inventory List */}
           <div className="grid gap-4">
             {filteredInventory.map((item) => (
-              <InventoryCard key={item._id || item.id} item={item} onUpdate={fetchInventory} />
+              <InventoryCard 
+                key={item._id || item.id} 
+                item={item} 
+                onUpdate={fetchInventory} 
+                onDelete={() => handleDeleteItem(item._id || item.id, item.name)}
+              />
             ))}
           </div>
 

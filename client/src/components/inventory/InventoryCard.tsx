@@ -191,27 +191,25 @@ export function InventoryCard({ item, onUpdate, onEdit, onDelete }: InventoryCar
         )}
 
         {/* Quick Restock */}
-        {stockStatus === "low" || stockStatus === "critical" ? (
-          <div className="border-t pt-4">
-            <Label className="text-sm font-medium">Quick Restock</Label>
-            <div className="flex items-center gap-2 mt-2">
-              <Input
-                type="number"
-                min="1"
-                value={quickRestockQty}
-                onChange={(e) => setQuickRestockQty(parseInt(e.target.value) || 1)}
-                className="w-20"
-              />
-              <Button 
-                size="sm" 
-                onClick={() => quickRestock(quickRestockQty)}
-                className="flex-1"
-              >
-                Add Stock
-              </Button>
-            </div>
+        <div className="border-t pt-4">
+          <Label className="text-sm font-medium">Quick Restock</Label>
+          <div className="flex items-center gap-2 mt-2">
+            <Input
+              type="number"
+              min="1"
+              value={quickRestockQty}
+              onChange={(e) => setQuickRestockQty(parseInt(e.target.value) || 1)}
+              className="w-20"
+            />
+            <Button 
+              size="sm" 
+              onClick={() => quickRestock(quickRestockQty)}
+              className="flex-1"
+            >
+              Add Stock
+            </Button>
           </div>
-        ) : null}
+        </div>
       </CardContent>
     </Card>
   );

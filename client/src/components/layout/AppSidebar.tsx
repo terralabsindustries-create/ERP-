@@ -26,6 +26,7 @@ import {
   CalendarOff,
   Contact,
   ReceiptText,
+  Bell,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -111,13 +112,14 @@ export function AppSidebar() {
         { title: "SAC Codes", href: "/sac-codes", icon: Percent, permission: "SAC Codes" },
       ],
     },
-    // {
-    //   label: "Communication",
-    //   items: [
-    //     { title: "WhatsApp", href: "/whatsapp", icon: MessageSquare, permission: "WhatsApp" },
-    //     { title: "Customer Portal", href: "/portal", icon: Globe, permission: "Customer Portal" },
-    //   ],
-    // },
+    {
+      label: "Communication",
+      items: [
+        { title: "Payment Reminders", href: "/payment-reminders", icon: Bell, permission: "Payment Reminders" },
+        { title: "WhatsApp", href: "/whatsapp", icon: MessageSquare, permission: "WhatsApp" },
+        // { title: "Customer Portal", href: "/portal", icon: Globe, permission: "Customer Portal" },
+      ],
+    },
     {
       label: "Staff Management",
       items: [

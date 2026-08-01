@@ -46,6 +46,7 @@ import HiddenCreateLogin from "./pages/HiddenCreateLogin";
 import TermsAndConditions from "./pages/TermsAndConditions";
 import PrivacyPolicy from "./pages/PrivacyPolicy";
 import DataPolicy from "./pages/DataPolicy";
+import PaymentReminders from "./pages/PaymentReminders";
 
 const queryClient = new QueryClient();
 
@@ -81,6 +82,7 @@ const App = () => (
                       <Route path="/proofing" element={<PermissionRoute permission="Job Proofing"><Proofing /></PermissionRoute>} />
                       <Route path="/reports" element={<PermissionRoute permission="Reports"><Reports /></PermissionRoute>} />
                       <Route path="/whatsapp" element={<PermissionRoute permission="WhatsApp"><WhatsApp /></PermissionRoute>} />
+                      <Route path="/payment-reminders" element={<PermissionRoute permission="Payment Reminders"><PaymentReminders /></PermissionRoute>} />
                       <Route path="/walk-in-jobs" element={<PermissionRoute permission="Walk-In Jobs"><WalkInJobs /></PermissionRoute>} />
                       <Route path="/delivery" element={<PermissionRoute permission="Delivery"><Delivery /></PermissionRoute>} />
                       <Route path="/emergency-orders" element={<PermissionRoute permission="Emergency Orders"><EmergencyOrders /></PermissionRoute>} />

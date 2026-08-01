@@ -37,8 +37,10 @@ router.get('/', protect, [
       sortOrder = 'desc'
     } = req.query;
     
-    // Build query - show only jobs for the authenticated user
-    const query = { userId: req.user._id };
+    // Build query - use dataScope if available, fallback to userId
+    const query = req.user.dataScope
+      ? { dataScope: req.user.dataScope }
+      : { userId: req.user._id };
 
     if (status && status !== 'all') {
       query.status = status;
@@ -178,10 +180,10 @@ router.get('/staff/stats', protect, async (req, res) => {
 // @access  Private
 router.get('/:id', protect, async (req, res) => {
   try {
-    const job = await Job.findOne({
-      _id: req.params.id,
-      userId: req.user._id
-    })
+    const findQuery = req.user.dataScope
+      ? { _id: req.params.id, dataScope: req.user.dataScope }
+      : { _id: req.params.id, userId: req.user._id };
+    const job = await Job.findOne(findQuery)
       .populate('customerId', 'name email phone address company')
       .populate('assignedTo.handlerId', 'fullName')
       .populate('assignedOperator', 'name')
@@ -219,12 +221,11 @@ router.get('/:id', protect, async (req, res) => {
 // @access  Private
 router.post('/', protect, jobValidation, async (req, res) => {
   try {
-    // Verify customer exists and belongs to the authenticated user
-    const customer = await Customer.findOne({
-      _id: req.body.customerId,
-      userId: req.user._id,
-      status: 'active'
-    });
+    // Verify customer exists and belongs to the authenticated user's dataScope or userId
+    const customerQuery = req.user.dataScope
+      ? { _id: req.body.customerId, dataScope: req.user.dataScope, status: 'active' }
+      : { _id: req.body.customerId, userId: req.user._id, status: 'active' };
+    const customer = await Customer.findOne(customerQuery);
 
     if (!customer) {
       return res.status(400).json({
@@ -237,6 +238,7 @@ router.post('/', protect, jobValidation, async (req, res) => {
       ...req.body,
       createdBy: req.user._id,
       userId: req.user._id,
+      ...(req.user.dataScope && { dataScope: req.user.dataScope }),
       // Explicitly handle items array
       items: req.body.items || [],
       // Explicitly handle design charge
@@ -283,10 +285,10 @@ router.post('/', protect, jobValidation, async (req, res) => {
 // @access  Private
 router.put('/:id', protect, jobValidation, async (req, res) => {
   try {
-    const job = await Job.findOne({
-      _id: req.params.id,
-      userId: req.user._id
-    });
+    const findQuery = req.user.dataScope
+      ? { _id: req.params.id, dataScope: req.user.dataScope }
+      : { _id: req.params.id, userId: req.user._id };
+    const job = await Job.findOne(findQuery);
 
     if (!job) {
       return res.status(404).json({
@@ -297,11 +299,10 @@ router.put('/:id', protect, jobValidation, async (req, res) => {
 
     // Check customer if customerId is being updated
     if (req.body.customerId && req.body.customerId !== job._id.toString()) {
-      const customer = await Customer.findOne({
-        _id: req.body.customerId,
-        userId: req.user._id,
-        status: 'active'
-      });
+      const customerQuery = req.user.dataScope
+        ? { _id: req.body.customerId, dataScope: req.user.dataScope, status: 'active' }
+        : { _id: req.body.customerId, userId: req.user._id, status: 'active' };
+      const customer = await Customer.findOne(customerQuery);
       
       if (!customer) {
         return res.status(400).json({
@@ -322,7 +323,7 @@ router.put('/:id', protect, jobValidation, async (req, res) => {
 
     // Update job
     const updatedJob = await Job.findOneAndUpdate(
-      { _id: req.params.id, userId: req.user._id },
+      findQuery,
       updateData,
       { new: true, runValidators: true }
     )
@@ -362,10 +363,10 @@ router.put('/:id', protect, jobValidation, async (req, res) => {
 // @access  Private
 router.delete('/:id', protect, async (req, res) => {
   try {
-    const job = await Job.findOne({
-      _id: req.params.id,
-      userId: req.user._id
-    });
+    const findQuery = req.user.dataScope
+      ? { _id: req.params.id, dataScope: req.user.dataScope }
+      : { _id: req.params.id, userId: req.user._id };
+    const job = await Job.findOne(findQuery);
     
     if (!job) {
       return res.status(404).json({
@@ -375,7 +376,7 @@ router.delete('/:id', protect, async (req, res) => {
     }
 
     // Hard delete - actually remove from database
-    await Job.deleteOne({ _id: req.params.id, userId: req.user._id });
+    await Job.deleteOne(findQuery);
     
     res.status(200).json({
       status: 'success',
@@ -405,10 +406,10 @@ router.post('/:id/update-status', protect, [
   try {
     const { status, remarks } = req.body;
 
-    const job = await Job.findOne({
-      _id: req.params.id,
-      userId: req.user._id
-    });
+    const findQuery = req.user.dataScope
+      ? { _id: req.params.id, dataScope: req.user.dataScope }
+      : { _id: req.params.id, userId: req.user._id };
+    const job = await Job.findOne(findQuery);
 
     if (!job) {
       return res.status(404).json({
@@ -480,10 +481,10 @@ router.post('/:id/assign', protect, [
   try {
     const { operatorId, operatorName } = req.body;
 
-    const job = await Job.findOne({
-      _id: req.params.id,
-      userId: req.user._id
-    });
+    const findQuery = req.user.dataScope
+      ? { _id: req.params.id, dataScope: req.user.dataScope }
+      : { _id: req.params.id, userId: req.user._id };
+    const job = await Job.findOne(findQuery);
 
     if (!job) {
       return res.status(404).json({
@@ -542,10 +543,10 @@ router.post('/:id/update-flow-stage', protect, [
   try {
     const { stage, remarks } = req.body;
 
-    const job = await Job.findOne({
-      _id: req.params.id,
-      userId: req.user._id
-    });
+    const findQuery = req.user.dataScope
+      ? { _id: req.params.id, dataScope: req.user.dataScope }
+      : { _id: req.params.id, userId: req.user._id };
+    const job = await Job.findOne(findQuery);
 
     if (!job) {
       return res.status(404).json({
@@ -599,11 +600,11 @@ router.get('/stats/dashboard', protect, async (req, res) => {
 
     const mongoose = require('mongoose');
     const stats = await Job.aggregate([
-      // FIXED: Filter by userId at the start
+      // FIXED: Filter by dataScope if available, fallback to userId
       {
-        $match: {
-          userId: new mongoose.Types.ObjectId(req.user._id)
-        }
+        $match: req.user.dataScope
+          ? { dataScope: req.user.dataScope }
+          : { userId: new mongoose.Types.ObjectId(req.user._id) }
       },
       {
         $facet: {
@@ -694,10 +695,9 @@ router.get('/calendar-status', protect, async (req, res) => {
     // Get all jobs created in the specified month, grouped by creation date
     const jobsByDate = await Job.aggregate([
       {
-        $match: {
-          userId: new mongoose.Types.ObjectId(req.user._id),
-          createdAt: { $gte: startDate, $lte: endDate }
-        }
+        $match: req.user.dataScope
+          ? { dataScope: req.user.dataScope, createdAt: { $gte: startDate, $lte: endDate } }
+          : { userId: new mongoose.Types.ObjectId(req.user._id), createdAt: { $gte: startDate, $lte: endDate } }
       },
       {
         $group: {

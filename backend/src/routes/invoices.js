@@ -82,7 +82,11 @@ const invoiceValidation = [
 // @access  Private
 router.get('/', protect, [
   query('status').optional().isIn(['draft', 'sent', 'paid', 'overdue', 'cancelled', 'refunded']),
-  query('paymentStatus').optional().isIn(['pending', 'partial', 'paid', 'overdue']),
+  query('paymentStatus').optional().custom(value => {
+    const statuses = value.split(',');
+    const valid = ['pending', 'partial', 'paid', 'overdue'];
+    return statuses.every(s => valid.includes(s));
+  }),
   query('search').optional().trim(),
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
@@ -130,7 +134,12 @@ router.get('/', protect, [
     }
 
     if (paymentStatus && paymentStatus !== 'all') {
-      queryConditions.push({ paymentStatus: paymentStatus });
+      const statuses = paymentStatus.split(',');
+      if (statuses.length > 1) {
+        queryConditions.push({ paymentStatus: { $in: statuses } });
+      } else {
+        queryConditions.push({ paymentStatus: paymentStatus });
+      }
     }
 
     // Build final query

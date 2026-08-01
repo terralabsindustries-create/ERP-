@@ -399,7 +399,12 @@ export default function Jobs() {
                     <TableCell>
                       <div className="space-y-1">
                         <div className="font-medium text-slate-900">{job.title}</div>
-                        <div className="text-sm text-slate-500">ID: {job.id}</div>
+                        <div className="text-xs text-slate-500">ID: {job.id}</div>
+                        {job.createdBy?.fullName && (
+                          <div className="text-xs text-slate-400 mt-0.5">
+                            Created by: <span className="font-medium text-slate-600">{job.createdBy.fullName}</span>
+                          </div>
+                        )}
                       </div>
                     </TableCell>
                     <TableCell>

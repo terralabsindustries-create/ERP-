@@ -191,6 +191,11 @@ const jobSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
+  },
+  dataScope: {
+    type: String,
+    index: true,
+    description: 'Data scope for multi-tenant isolation. All users with same dataScope share this data.'
   }
 }, {
   timestamps: true,
@@ -203,6 +208,8 @@ jobSchema.index({ title: 'text', description: 'text' });
 jobSchema.index({ status: 1, priority: 1 });
 jobSchema.index({ customerId: 1 });
 jobSchema.index({ userId: 1 });
+jobSchema.index({ dataScope: 1 });
+jobSchema.index({ dataScope: 1, status: 1 });
 jobSchema.index({ dueDate: 1 });
 jobSchema.index({ createdAt: -1 });
 

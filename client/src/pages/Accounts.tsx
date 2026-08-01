@@ -10,7 +10,6 @@ import { QuickReceivePaymentDialog } from "@/components/accounts/QuickReceivePay
 import { NewTransactionDialog } from "@/components/accounts/NewTransactionDialog";
 import { AccountsLedger } from "@/components/accounts/AccountsLedger";
 import { AccountsReports } from "@/components/accounts/AccountsReports";
-import { GeneralLedgerView } from "@/components/accounts/GeneralLedgerView";
 import { formatCurrency } from "@/lib/utils";
 
 export default function Accounts() {
@@ -105,18 +104,13 @@ export default function Accounts() {
 
       {/* Main Content */}
       <Tabs defaultValue="ledger" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-3">
-          <TabsTrigger value="ledger">Ledger</TabsTrigger>
-          <TabsTrigger value="general-ledger">General Ledger</TabsTrigger>
+        <TabsList className="grid w-full grid-cols-2">
+          <TabsTrigger value="ledger">Accounts Ledger</TabsTrigger>
           <TabsTrigger value="reports">Reports</TabsTrigger>
         </TabsList>
 
         <TabsContent value="ledger">
           <AccountsLedger onTransactionUpdate={fetchAccountsData} />
-        </TabsContent>
-
-        <TabsContent value="general-ledger">
-          <GeneralLedgerView />
         </TabsContent>
 
         <TabsContent value="reports">

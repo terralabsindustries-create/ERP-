@@ -171,8 +171,43 @@ const settingsSchema = new mongoose.Schema({
   // Integration Settings
   whatsappIntegration: {
     enabled: { type: Boolean, default: false },
-    apiKey: { type: String, trim: true },
-    phoneNumberId: { type: String, trim: true }
+    wabaId: { type: String, trim: true },
+    phoneNumberId: { type: String, trim: true },
+    accessToken: { type: String, trim: true },
+    setupMethod: {
+      type: String,
+      enum: ['manual', 'embedded_signup'],
+      default: 'manual'
+    },
+    connectionStatus: {
+      type: String,
+      enum: ['connected', 'disconnected', 'error', 'pending_verification'],
+      default: 'disconnected'
+    },
+    embeddedSignupData: {
+      tokenExchangedAt: Date,
+      phoneRegisteredAt: Date,
+      webhookSubscribedAt: Date
+    },
+    webhookConfig: {
+      subscribedFields: [{ type: String }],
+      callbackUrl: String,
+      verifyToken: String
+    }
+  },
+  paymentReminders: {
+    enabled: { type: Boolean, default: false },
+    daysAfterDue: { type: Number, default: 1, min: 0 },
+    reminderInterval: { type: Number, default: 3, min: 1 },
+    maxReminders: { type: Number, default: 5, min: 1, max: 20 },
+    messageTemplate: {
+      type: String,
+      default: 'Hi {{customerName}}, this is a friendly reminder that your invoice {{invoiceNumber}} of ₹{{totalAmount}} has a pending balance of ₹{{balanceAmount}}. The payment was due on {{dueDate}}. Please make the payment at your earliest convenience. - {{businessName}}',
+      trim: true
+    },
+    metaTemplateName: { type: String, trim: true },
+    templateVariableMapping: { type: Map, of: String },
+    autoSend: { type: Boolean, default: false }
   },
   emailIntegration: {
     enabled: { type: Boolean, default: false },

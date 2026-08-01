@@ -954,12 +954,71 @@ class ApiClient {
     return this.post('/whatsapp/send-bulk', { recipients });
   }
 
-  async getWhatsAppContacts() {
-    return this.get('/whatsapp/contacts');
+  // Meta WhatsApp API Integration
+  async getWhatsAppSettings() {
+    return this.get('/whatsapp/settings');
   }
 
-  async setupWhatsApp(phoneNumberId: string, accessToken: string, webhookUrl?: string) {
-    return this.post('/whatsapp/setup', { phoneNumberId, accessToken, webhookUrl });
+  async setupWhatsApp(data: { enabled: boolean; wabaId: string; phoneNumberId: string; accessToken: string }) {
+    return this.post('/whatsapp/settings', data);
+  }
+
+  async getMetaTemplates() {
+    return this.get('/whatsapp/meta-templates');
+  }
+
+  async createMetaTemplate(data: { name: string; language: string; category: string; components: any[] }) {
+    return this.post('/whatsapp/meta-templates', data);
+  }
+
+  async deleteMetaTemplate(name: string) {
+    return this.delete(`/whatsapp/meta-templates/${name}`);
+  }
+
+  // WhatsApp Embedded Signup
+  async exchangeWhatsAppToken(code: string, wabaId: string, phoneNumberId: string) {
+    return this.post<any>('/embedded-signup/exchange-token', {
+      code,
+      waba_id: wabaId,
+      phone_number_id: phoneNumberId
+    });
+  }
+
+  async getEmbeddedSignupStatus() {
+    return this.get<any>('/embedded-signup/status');
+  }
+
+  async resetEmbeddedSignupConfiguration() {
+    return this.delete<any>('/embedded-signup/reset');
+  }
+
+  // Payment Reminders
+  async getPaymentReminderStats() {
+    return this.get('/payment-reminders/stats');
+  }
+
+  async getOverdueInvoices() {
+    return this.get('/payment-reminders/overdue-invoices');
+  }
+
+  async getPaymentReminders(params?: { status?: string; customerId?: string; startDate?: string; endDate?: string; page?: number; limit?: number }) {
+    return this.get('/payment-reminders', params);
+  }
+
+  async sendPaymentReminder(invoiceId: string) {
+    return this.post(`/payment-reminders/send/${invoiceId}`);
+  }
+
+  async sendBulkPaymentReminders() {
+    return this.post('/payment-reminders/send-bulk');
+  }
+
+  async getPaymentReminderSettings() {
+    return this.get('/payment-reminders/settings');
+  }
+
+  async updatePaymentReminderSettings(data: any) {
+    return this.put('/payment-reminders/settings', data);
   }
 
   // Proofing System

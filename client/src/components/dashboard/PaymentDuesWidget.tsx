@@ -64,7 +64,7 @@ export function PaymentDuesWidget({ onRefresh }: PaymentDuesWidgetProps) {
 
   const fetchPaymentDues = async () => {
     try {
-      const response: GetInvoicesResponse = await apiClient.getInvoices({ paymentStatus: 'pending' });
+      const response: GetInvoicesResponse = await apiClient.getInvoices({ paymentStatus: 'pending,partial,overdue' });
       console.log('💰 Payment dues response:', response);
       
       // Handle different response formats
@@ -81,7 +81,7 @@ export function PaymentDuesWidget({ onRefresh }: PaymentDuesWidgetProps) {
       
       setDues(duesData);
       
-      const total = duesData.reduce((sum: number, due: PaymentDue) => sum + (due.totalAmount || 0), 0);
+      const total = duesData.reduce((sum: number, due: PaymentDue) => sum + (due.balanceAmount ?? due.totalAmount ?? 0), 0);
       setTotalDue(total);
     } catch (error) {
       console.error('Error fetching payment dues:', error);

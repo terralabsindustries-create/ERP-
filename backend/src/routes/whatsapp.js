@@ -102,41 +102,54 @@ router.post('/send', protect, [
   try {
     const { phoneNumber, templateId, variables, customerId } = req.body;
     
-    // Find the template
-    const template = messageTemplates.find(t => t.id === templateId);
-    if (!template) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Template not found'
+    const settings = await Settings.findOne({ userId: req.user._id });
+    const { wabaId, phoneNumberId, accessToken } = settings?.whatsappIntegration || {};
+    
+    if (!phoneNumberId || !accessToken) {
+      return res.status(400).json({ status: 'error', message: 'WhatsApp API credentials are not configured.' });
+    }
+
+    // Prepare components if variables exist
+    const components = [];
+    if (variables && Object.keys(variables).length > 0) {
+      // Create an array of parameters from the variables object values
+      const parameters = Object.values(variables).map(val => ({ type: "text", text: String(val) }));
+      components.push({
+        type: "body",
+        parameters
       });
     }
-    
-    // Replace variables in template
-    let message = template.template;
-    Object.keys(variables).forEach(key => {
-      const placeholder = `{{${key}}}`;
-      message = message.replace(new RegExp(placeholder, 'g'), variables[key]);
+
+    // Call Meta API
+    const response = await fetch(`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to: phoneNumber.replace(/[^0-9]/g, ''), // Strip non-numeric chars
+        type: "template",
+        template: {
+          name: templateId,
+          language: { code: "en_US" },
+          ...(components.length > 0 && { components })
+        }
+      })
     });
+
+    const data = await response.json();
     
-    // TODO: Implement actual WhatsApp API call
-    // For now, simulate sending
-    const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-    
-    // Simulate API response
-    const response = {
-      messageId,
-      status: 'sent',
-      phoneNumber,
-      message,
-      templateId,
-      sentAt: new Date().toISOString(),
-      deliveryStatus: 'pending'
-    };
+    if (!response.ok) {
+      console.error('Meta API Send Error:', data);
+      return res.status(400).json({ status: 'error', message: data.error?.message || 'Failed to send message via Meta' });
+    }
     
     res.status(200).json({
       status: 'success',
       message: 'WhatsApp message sent successfully',
-      data: { message: response }
+      data: { messageId: data.messages?.[0]?.id }
     });
     
   } catch (error) {
@@ -232,8 +245,9 @@ router.get('/webhook', (req, res) => {
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
   
-  // TODO: Implement proper webhook verification
-  if (mode === 'subscribe' && token === 'your_verify_token') {
+  const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || '14551411';
+  
+  if (mode === 'subscribe' && token === verifyToken) {
     res.status(200).send(challenge);
   } else {
     res.status(403).json({ error: 'Forbidden' });
@@ -290,37 +304,173 @@ router.get('/contacts', protect, async (req, res) => {
   }
 });
 
-// @route   POST /api/whatsapp/setup
-// @desc    Setup WhatsApp Business API
+const Settings = require('../models/Settings');
+
+// @route   GET /api/whatsapp/settings
+// @desc    Get WhatsApp Business API settings
 // @access  Private
-router.post('/setup', protect, [
-  body('phoneNumberId').notEmpty().withMessage('Phone number ID is required'),
-  body('accessToken').notEmpty().withMessage('Access token is required'),
-  body('webhookUrl').optional().isURL().withMessage('Valid webhook URL required')
+router.get('/settings', protect, async (req, res) => {
+  try {
+    const settings = await Settings.getOrCreateSettings(req.user._id);
+    res.status(200).json({
+      status: 'success',
+      data: { settings: settings.whatsappIntegration || {} }
+    });
+  } catch (error) {
+    console.error('Get WhatsApp settings error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+// @route   POST /api/whatsapp/settings
+// @desc    Setup WhatsApp Business API settings
+// @access  Private
+router.post('/settings', protect, [
+  body('enabled').optional().isBoolean(),
+  body('wabaId').optional().isString(),
+  body('phoneNumberId').optional().isString(),
+  body('accessToken').optional().isString()
 ], async (req, res) => {
   try {
-    const { phoneNumberId, accessToken, webhookUrl } = req.body;
+    const { enabled, wabaId, phoneNumberId, accessToken } = req.body;
     
-    // TODO: Implement WhatsApp Business API setup
-    // Store credentials securely
-    // Verify connection
-    // Setup webhook
+    const updateData = {};
+    if (enabled !== undefined) updateData['whatsappIntegration.enabled'] = enabled;
+    if (wabaId !== undefined) updateData['whatsappIntegration.wabaId'] = wabaId;
+    if (phoneNumberId !== undefined) updateData['whatsappIntegration.phoneNumberId'] = phoneNumberId;
+    if (accessToken !== undefined) updateData['whatsappIntegration.accessToken'] = accessToken;
+    
+    const settings = await Settings.findOneAndUpdate(
+      { userId: req.user._id },
+      { $set: updateData },
+      { new: true, upsert: true }
+    );
     
     res.status(200).json({
       status: 'success',
-      message: 'WhatsApp Business API setup completed',
-      data: {
-        phoneNumberId,
-        webhookUrl: webhookUrl || `${req.protocol}://${req.get('host')}/api/whatsapp/webhook`,
-        setupAt: new Date().toISOString()
-      }
+      message: 'WhatsApp Business API settings updated',
+      data: { settings: settings.whatsappIntegration }
     });
   } catch (error) {
     console.error('WhatsApp setup error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while setting up WhatsApp'
+    res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+// @route   GET /api/whatsapp/meta-templates
+// @desc    Fetch templates from Meta Graph API
+// @access  Private
+router.get('/meta-templates', protect, async (req, res) => {
+  try {
+    const settings = await Settings.findOne({ userId: req.user._id });
+    const { wabaId, accessToken } = settings?.whatsappIntegration || {};
+    
+    if (!wabaId || !accessToken) {
+      return res.status(400).json({ status: 'error', message: 'WhatsApp Business API credentials not configured.' });
+    }
+
+    // Meta Graph API Bug: If you don't explicitly request fields, it sometimes throws an "Object does not exist" error for System Users
+    const fields = 'name,status,category,language,components,id';
+    const response = await fetch(`https://graph.facebook.com/v19.0/${wabaId}/message_templates?fields=${fields}`, {
+      headers: { 'Authorization': `Bearer ${accessToken}` }
     });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      console.error('Meta API Error (Fetch Templates):', data);
+      return res.status(400).json({ status: 'error', message: data.error?.message || 'Failed to fetch templates from Meta' });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: { templates: data.data || [] }
+    });
+  } catch (error) {
+    console.error('Fetch Meta templates error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+// @route   POST /api/whatsapp/meta-templates
+// @desc    Create a new template via Meta Graph API
+// @access  Private
+router.post('/meta-templates', protect, [
+  body('name').notEmpty().withMessage('Template name is required'),
+  body('language').notEmpty().withMessage('Language is required'),
+  body('category').notEmpty().withMessage('Category is required'),
+  body('components').isArray().withMessage('Components must be an array')
+], async (req, res) => {
+  try {
+    const settings = await Settings.findOne({ userId: req.user._id });
+    const { wabaId, accessToken } = settings?.whatsappIntegration || {};
+    
+    if (!wabaId || !accessToken) {
+      return res.status(400).json({ status: 'error', message: 'WhatsApp credentials not configured.' });
+    }
+
+    const { name, language, category, components } = req.body;
+
+    const response = await fetch(`https://graph.facebook.com/v19.0/${wabaId}/message_templates`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name, language, category, components })
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      console.error('Meta API Error (Create Template):', data);
+      return res.status(400).json({ status: 'error', message: data.error?.error_user_msg || data.error?.message || 'Failed to create template' });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Template created successfully',
+      data: { templateId: data.id }
+    });
+  } catch (error) {
+    console.error('Create Meta template error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+// @route   DELETE /api/whatsapp/meta-templates/:name
+// @desc    Delete a template via Meta Graph API
+// @access  Private
+router.delete('/meta-templates/:name', protect, async (req, res) => {
+  try {
+    const settings = await Settings.findOne({ userId: req.user._id });
+    const { wabaId, accessToken } = settings?.whatsappIntegration || {};
+    
+    if (!wabaId || !accessToken) {
+      return res.status(400).json({ status: 'error', message: 'WhatsApp credentials not configured.' });
+    }
+
+    const templateName = req.params.name;
+
+    const response = await fetch(`https://graph.facebook.com/v19.0/${wabaId}/message_templates?name=${templateName}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${accessToken}` }
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      console.error('Meta API Error (Delete Template):', data);
+      return res.status(400).json({ status: 'error', message: data.error?.message || 'Failed to delete template' });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Template deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete Meta template error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error' });
   }
 });
 
