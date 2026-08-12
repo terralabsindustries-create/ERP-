@@ -8,6 +8,9 @@ import { ArrowLeft, Mail, Shield, Timer } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { BASE_URL } from "@/lib/apiClient";
 
+const OTP_LIFETIME_SECONDS = 600; // matches the 10-minute OTP expiry on the server
+const RESEND_COOLDOWN_SECONDS = 60;
+
 interface OTPVerificationProps {
   email: string;
   fullName: string;
@@ -28,22 +31,20 @@ export function OTPVerification({
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [isLoading, setIsLoading] = useState(false);
   const [isResending, setIsResending] = useState(false);
-  const [timeLeft, setTimeLeft] = useState(600); // 10 minutes in seconds
-  const [canResend, setCanResend] = useState(false);
+  const [timeLeft, setTimeLeft] = useState(OTP_LIFETIME_SECONDS);
+  // Resend is locked for the first minute; the backend enforces the same window.
+  const [resendIn, setResendIn] = useState(RESEND_COOLDOWN_SECONDS);
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  // Countdown timer
+  const canResend = resendIn === 0;
+
+  // One ticker drives both countdowns: how long the code stays valid, and how
+  // long until another one can be requested.
   React.useEffect(() => {
     const timer = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          setCanResend(true);
-          clearInterval(timer);
-          return 0;
-        }
-        return prev - 1;
-      });
+      setTimeLeft((prev) => (prev > 0 ? prev - 1 : 0));
+      setResendIn((prev) => (prev > 0 ? prev - 1 : 0));
     }, 1000);
 
     return () => clearInterval(timer);
@@ -172,12 +173,18 @@ export function OTPVerification({
           title: "OTP Resent",
           description: "A new OTP has been sent to your email.",
         });
-        
-        // Reset timer and OTP
-        setTimeLeft(600);
-        setCanResend(false);
+
+        // Restart both countdowns for the code we just sent
+        setTimeLeft(OTP_LIFETIME_SECONDS);
+        setResendIn(RESEND_COOLDOWN_SECONDS);
         setOtp(["", "", "", "", "", ""]);
       } else {
+        // 429 carries the seconds still left on the server's cooldown — trust
+        // it over our own clock, which may have drifted or been reloaded.
+        if (response.status === 429 && data.retryAfter) {
+          setResendIn(data.retryAfter);
+        }
+
         toast({
           title: "Resend Failed",
           description: data.message || "Failed to resend OTP.",
@@ -247,7 +254,7 @@ export function OTPVerification({
                 <span>Code expires in {formatTime(timeLeft)}</span>
               </div>
               
-              {canResend && (
+              {canResend ? (
                 <Button
                   type="button"
                   variant="link"
@@ -257,6 +264,11 @@ export function OTPVerification({
                 >
                   {isResending ? "Resending..." : "Resend OTP"}
                 </Button>
+              ) : (
+                <p className="text-sm text-gray-500">
+                  Didn't get the code? Resend in{" "}
+                  <span className="font-semibold text-gray-700">{formatTime(resendIn)}</span>
+                </p>
               )}
             </div>
 

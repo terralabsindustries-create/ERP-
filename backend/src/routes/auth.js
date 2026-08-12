@@ -10,6 +10,9 @@ const { hashInvitationToken } = require('../utils/invitationUtils');
 
 const router = express.Router();
 
+// How long a signup OTP must sit before another can be requested.
+const OTP_RESEND_COOLDOWN_SECONDS = 60;
+
 // Validation rules
 const registerValidation = [
   body('email').isEmail().normalizeEmail().withMessage('Please provide a valid email'),
@@ -64,6 +67,21 @@ router.post('/send-otp', sendOTPValidation, async (req, res) => {
         status: 'error',
         message: 'An account already exists with this email. Please sign in instead.'
       });
+    }
+
+    // One code per minute per address. The UI counts the same 60 seconds down,
+    // but the limit lives here so it can't be skipped by reloading the page.
+    const lastOTP = await OTP.findOne({ email, type: 'signup' }).sort({ createdAt: -1 });
+    if (lastOTP) {
+      const elapsed = Math.floor((Date.now() - lastOTP.createdAt.getTime()) / 1000);
+      if (elapsed < OTP_RESEND_COOLDOWN_SECONDS) {
+        const retryAfter = OTP_RESEND_COOLDOWN_SECONDS - elapsed;
+        return res.status(429).json({
+          status: 'error',
+          message: `Please wait ${retryAfter} second${retryAfter === 1 ? '' : 's'} before requesting another code.`,
+          retryAfter
+        });
+      }
     }
 
     // Fail before touching the DB if email can't be delivered anyway.

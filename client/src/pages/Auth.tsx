@@ -18,6 +18,15 @@ import { useAuth } from "@/contexts/AuthContext";
 import { OTPVerification } from "@/components/auth/OTPVerification";
 import { BASE_URL } from "@/lib/apiClient";
 
+// Form field name -> the suffix of its input id on the sign-up tab.
+const FIELD_INPUT_IDS: Record<string, string> = {
+  fullName: "name",
+  email: "email",
+  password: "password",
+  phone: "phone",
+  companyName: "company",
+};
+
 export default function Auth() {
   const { user, signIn, signUp, loading } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
@@ -29,6 +38,9 @@ export default function Auth() {
   const [signUpError, setSignUpError] = useState<
     { kind: "existingAccount" | "generic"; message: string } | null
   >(null);
+  // Per-field messages shown under the input they belong to. A dialog is the
+  // wrong place for "that email looks wrong" — the user needs to see which box.
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formData, setFormData] = useState({
     email: "",
     password: "",
@@ -51,8 +63,18 @@ export default function Auth() {
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFieldErrors({});
+
+    // The server only checks the password at the verify-OTP step, which would
+    // mean failing after the code has already been typed in. Catch it here.
+    if (formData.password.length < 6) {
+      setFieldErrors({ password: "Password must be at least 6 characters." });
+      document.getElementById("signup-password")?.focus();
+      return;
+    }
+
     setIsLoading(true);
-    
+
     try {
       const response = await fetch(`${BASE_URL}/auth/send-otp`, {
         method: 'POST',
@@ -71,6 +93,16 @@ export default function Auth() {
 
       if (response.ok) {
         setShowOTPVerification(true);
+      } else if (data.errors?.length) {
+        // express-validator reports which field failed — put the message there
+        // rather than raising a dialog that says only "Validation failed".
+        const errors: Record<string, string> = {};
+        for (const err of data.errors) {
+          const field = err.path || err.param;
+          if (field && !errors[field]) errors[field] = err.msg;
+        }
+        setFieldErrors(errors);
+        document.getElementById(`signup-${FIELD_INPUT_IDS[Object.keys(errors)[0]]}`)?.focus();
       } else if (response.status === 409) {
         setSignUpError({
           kind: "existingAccount",
@@ -106,11 +138,37 @@ export default function Auth() {
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData((prev) => ({
-      ...prev,
-      [e.target.name]: e.target.value,
-    }));
+    const { name, value } = e.target;
+
+    setFormData((prev) => ({ ...prev, [name]: value }));
+
+    // Clear the message as soon as they start fixing that field.
+    setFieldErrors((prev) => {
+      if (!prev[name]) return prev;
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
   };
+
+  // Sign-up inputs share one set of classes; only the border colour changes
+  // when the field is in error.
+  const signUpInputClass = (field: string, extra = "") =>
+    [
+      "h-12 md:h-14 bg-white border-2 text-gray-900 placeholder-gray-400 focus:ring-4",
+      "rounded-xl md:rounded-2xl px-4 md:px-5 text-base md:text-lg transition-all duration-300",
+      extra,
+      fieldErrors[field]
+        ? "border-red-400 focus:border-red-500 focus:ring-red-500/10"
+        : "border-gray-200 focus:border-orange-500 focus:ring-orange-500/10",
+    ].join(" ");
+
+  const renderFieldError = (field: string) =>
+    fieldErrors[field] ? (
+      <p id={`signup-${FIELD_INPUT_IDS[field]}-error`} className="text-sm font-medium text-red-600">
+        {fieldErrors[field]}
+      </p>
+    ) : null;
 
   const handleBackToSignup = () => {
     setShowOTPVerification(false);
@@ -317,8 +375,11 @@ export default function Auth() {
                             value={formData.fullName}
                             onChange={handleInputChange}
                             required
-                            className="h-12 md:h-14 bg-white border-2 border-gray-200 text-gray-900 placeholder-gray-400 focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 rounded-xl md:rounded-2xl px-4 md:px-5 text-base md:text-lg transition-all duration-300"
+                            aria-invalid={!!fieldErrors.fullName}
+                            aria-describedby={fieldErrors.fullName ? "signup-name-error" : undefined}
+                            className={signUpInputClass("fullName")}
                           />
+                          {renderFieldError("fullName")}
                         </div>
                         <div className="space-y-2">
                           <Label
@@ -334,8 +395,11 @@ export default function Auth() {
                             placeholder="+1 234 567 8900"
                             value={formData.phone}
                             onChange={handleInputChange}
-                            className="h-12 md:h-14 bg-white border-2 border-gray-200 text-gray-900 placeholder-gray-400 focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 rounded-xl md:rounded-2xl px-4 md:px-5 text-base md:text-lg transition-all duration-300"
+                            aria-invalid={!!fieldErrors.phone}
+                            aria-describedby={fieldErrors.phone ? "signup-phone-error" : undefined}
+                            className={signUpInputClass("phone")}
                           />
+                          {renderFieldError("phone")}
                         </div>
                       </div>
                       <div className="space-y-2">
@@ -353,8 +417,11 @@ export default function Auth() {
                           value={formData.email}
                           onChange={handleInputChange}
                           required
-                          className="h-12 md:h-14 bg-white border-2 border-gray-200 text-gray-900 placeholder-gray-400 focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 rounded-xl md:rounded-2xl px-4 md:px-5 text-base md:text-lg transition-all duration-300"
+                          aria-invalid={!!fieldErrors.email}
+                          aria-describedby={fieldErrors.email ? "signup-email-error" : undefined}
+                          className={signUpInputClass("email")}
                         />
+                        {renderFieldError("email")}
                       </div>
                       <div className="space-y-2">
                         <Label
@@ -373,7 +440,9 @@ export default function Auth() {
                             onChange={handleInputChange}
                             required
                             minLength={6}
-                            className="h-12 md:h-14 bg-white border-2 border-gray-200 text-gray-900 placeholder-gray-400 focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 pr-12 md:pr-14 rounded-xl md:rounded-2xl px-4 md:px-5 text-base md:text-lg transition-all duration-300"
+                            aria-invalid={!!fieldErrors.password}
+                            aria-describedby={fieldErrors.password ? "signup-password-error" : undefined}
+                            className={signUpInputClass("password", "pr-12 md:pr-14")}
                           />
                           <Button
                             type="button"
@@ -389,6 +458,7 @@ export default function Auth() {
                             )}
                           </Button>
                         </div>
+                        {renderFieldError("password")}
                       </div>
                       <div className="space-y-2">
                         <Label
@@ -404,8 +474,11 @@ export default function Auth() {
                           placeholder="Acme Corporation"
                           value={formData.companyName}
                           onChange={handleInputChange}
-                          className="h-12 md:h-14 bg-white border-2 border-gray-200 text-gray-900 placeholder-gray-400 focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 rounded-xl md:rounded-2xl px-4 md:px-5 text-base md:text-lg transition-all duration-300"
+                          aria-invalid={!!fieldErrors.companyName}
+                          aria-describedby={fieldErrors.companyName ? "signup-company-error" : undefined}
+                          className={signUpInputClass("companyName")}
                         />
+                        {renderFieldError("companyName")}
                       </div>
                       <Button
                         type="submit"
