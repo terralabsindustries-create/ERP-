@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const { generateOTP, hashOTP, verifyOTP, getOTPEmailTemplate } = require('../utils/otpUtils');
 const { createTransporter, getFromAddress, sendMailErrorResponse } = require('../utils/mailer');
 const { hashInvitationToken } = require('../utils/invitationUtils');
+const { syncEmployeeForUser } = require('../utils/employeeSync');
 
 const router = express.Router();
 
@@ -383,6 +384,17 @@ router.post('/invitation/:token/accept', [
     user.invitation.expiresAt = undefined;
     user.invitation.acceptedAt = new Date();
     await user.save();
+
+    // Now that they've joined, add them to the HR directory. Attribute the row
+    // to whoever invited them so it lands in the right tenant scope. A sync
+    // failure must never block the account activation itself.
+    const inviter = user.invitation.invitedBy
+      ? await User.findById(user.invitation.invitedBy)
+      : null;
+
+    await syncEmployeeForUser(user, inviter, { department: user.department }).catch(err =>
+      console.error('Employee sync (accept invitation) failed:', err.message)
+    );
 
     res.status(200).json({
       status: 'success',

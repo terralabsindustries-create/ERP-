@@ -81,6 +81,12 @@ const userSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  // Captured on the invitation form and held here until the invite is accepted,
+  // at which point it seeds the new HR record.
+  department: {
+    type: String,
+    trim: true
+  },
   dataScope: {
     type: String,
     index: true,

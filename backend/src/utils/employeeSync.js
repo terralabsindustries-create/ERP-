@@ -42,6 +42,11 @@ const scopeFor = (user, actor) => {
 async function syncEmployeeForUser(user, actor, seed = {}) {
   if (!user) return null;
 
+  // Someone who was invited but hasn't accepted yet is not on the team, so they
+  // must not appear in the HR directory or in headcount. The record is created
+  // when they accept their invitation and the account becomes active.
+  if (user.status === 'invited') return null;
+
   const scope = scopeFor(user, actor);
   const status = user.isActive === false ? 'inactive' : 'active';
 

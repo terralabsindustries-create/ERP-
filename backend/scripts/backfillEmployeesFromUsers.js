@@ -28,6 +28,12 @@ const DRY_RUN = process.argv.includes('--dry');
   let skipped = 0;
 
   for (const user of users) {
+    // Invitations that were never accepted are not employees yet.
+    if (user.status === 'invited') {
+      skipped++;
+      continue;
+    }
+
     const existing = await Employee.findOne({ linkedUserId: user._id });
     if (existing) {
       skipped++;

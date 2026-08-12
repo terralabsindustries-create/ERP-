@@ -223,6 +223,7 @@ router.post('/', protect, authorize('admin', 'manager'), userValidation, async (
       fullName,
       phone,
       role,
+      department,
       companyName: companyName || req.user.companyName,
       isActive,
       permissions: finalPermissions,
@@ -267,11 +268,9 @@ router.post('/', protect, authorize('admin', 'manager'), userValidation, async (
       return sendMailErrorResponse(res, mailError, 'Send invitation');
     }
 
-    // Mirror the new login into the HR employee directory. Never let a sync
-    // failure fail the user creation itself — the login is the primary record.
-    await syncEmployeeForUser(user, req.user, { department }).catch(err =>
-      console.error('Employee sync (create user) failed:', err.message)
-    );
+    // No HR record yet, on purpose: an invitation that is never accepted must
+    // not show up on the Employees page or in headcount. The record is created
+    // when the invite is accepted (see POST /api/auth/invitation/:token/accept).
 
     // Log activity
     await ActivityLog.logActivity({
