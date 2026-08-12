@@ -119,10 +119,13 @@ export default function Employees() {
   };
 
   const remove = async (emp: any) => {
-    if (!confirm(`Delete employee "${emp.name}"? This cannot be undone.`)) return;
+    const warning = emp.linkedUserId
+      ? `Delete employee "${emp.name}"? Their login is removed as well, freeing ${emp.email} to be invited again. This cannot be undone.`
+      : `Delete employee "${emp.name}"? This cannot be undone.`;
+    if (!confirm(warning)) return;
     try {
-      await apiClient.deleteEmployee(emp._id || emp.id);
-      toast({ title: "Deleted", description: "Employee removed" });
+      const response: any = await apiClient.deleteEmployee(emp._id || emp.id);
+      toast({ title: "Deleted", description: response?.message || "Employee removed" });
       fetchAll();
     } catch (e: any) {
       toast({ title: "Error", description: e.message || "Failed to delete", variant: "destructive" });

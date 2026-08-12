@@ -176,9 +176,15 @@ router.post('/', protect, authorize('admin', 'manager'), userValidation, async (
   try {
     const { email, fullName, phone, role = 'staff', department, companyName, isActive = true, permissions = [] } = req.body;
 
-    // Check if user already exists
+    // An address that is still sitting on an unaccepted invitation isn't really
+    // taken — inviting it again should replace that invitation rather than be
+    // refused. Only a live account (or one in another tenant) is a conflict.
     const existingUser = await User.findOne({ email });
-    if (existingUser) {
+    const isReinvite = !!existingUser &&
+      existingUser.status === 'invited' &&
+      (!req.user.dataScope || existingUser.dataScope === req.user.dataScope);
+
+    if (existingUser && !isReinvite) {
       return res.status(409).json({
         status: 'error',
         message: 'An account already exists with this email'
@@ -193,9 +199,10 @@ router.post('/', protect, authorize('admin', 'manager'), userValidation, async (
       });
     }
 
-    // Enforce the seat limit before creating anything.
+    // Enforce the seat limit before creating anything. A re-invite reuses the
+    // seat the pending invitation already holds, so it is exempt.
     const seatsUsed = await User.countDocuments(staffSeatQuery(req.user));
-    if (seatsUsed >= MAX_STAFF_LOGINS) {
+    if (!isReinvite && seatsUsed >= MAX_STAFF_LOGINS) {
       return res.status(403).json({
         status: 'error',
         message: `Staff limit reached — an admin can create up to ${MAX_STAFF_LOGINS} staff/manager logins. Delete an existing login to free a slot.`
@@ -242,9 +249,13 @@ router.post('/', protect, authorize('admin', 'manager'), userValidation, async (
       userData.dataScope = req.user.dataScope;
     }
 
-    const user = await User.create(userData);
+    // Re-inviting overwrites the pending record — including any detail the
+    // admin corrected on the form — and the new token voids the old link.
+    const user = isReinvite
+      ? await User.findByIdAndUpdate(existingUser._id, userData, { new: true, runValidators: true })
+      : await User.create(userData);
 
-    // Send the invitation. If the mail bounces at this point the account would
+    // Send the invitation. If the mail bounces on a brand new account it would
     // be unreachable, so roll it back and report the failure to the admin.
     try {
       const emailContent = getInvitationEmailTemplate({
@@ -264,7 +275,9 @@ router.post('/', protect, authorize('admin', 'manager'), userValidation, async (
         text: emailContent.text
       });
     } catch (mailError) {
-      await User.findByIdAndDelete(user._id);
+      // Only undo what this request created; a pre-existing pending invitation
+      // stays put so the admin can retry with Resend invitation.
+      if (!isReinvite) await User.findByIdAndDelete(user._id);
       return sendMailErrorResponse(res, mailError, 'Send invitation');
     }
 
@@ -274,14 +287,14 @@ router.post('/', protect, authorize('admin', 'manager'), userValidation, async (
 
     // Log activity
     await ActivityLog.logActivity({
-      action: 'User Invited',
-      description: `${fullName} (${email}) invited as ${role} with ${finalPermissions.length} permissions`,
+      action: isReinvite ? 'User Re-invited' : 'User Invited',
+      description: `${fullName} (${email}) ${isReinvite ? 're-invited' : 'invited'} as ${role} with ${finalPermissions.length} permissions`,
       entityType: 'user',
       entityId: user._id,
       entityName: fullName,
       performedBy: req.user._id,
       performedByName: req.user.fullName,
-      actionType: 'create',
+      actionType: isReinvite ? 'update' : 'create',
       severity: 'medium',
       userId: req.user._id,
     });
@@ -292,7 +305,9 @@ router.post('/', protect, authorize('admin', 'manager'), userValidation, async (
 
     res.status(201).json({
       status: 'success',
-      message: `Invitation sent to ${email}. It expires in ${INVITATION_EXPIRY_HOURS} hours.`,
+      message: isReinvite
+        ? `A new invitation was sent to ${email}, replacing the pending one. It expires in ${INVITATION_EXPIRY_HOURS} hours.`
+        : `Invitation sent to ${email}. It expires in ${INVITATION_EXPIRY_HOURS} hours.`,
       data: {
         user: userResponse,
         invitationExpiresAt: invitation.expiresAt

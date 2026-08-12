@@ -4,16 +4,30 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Mail, Users, Loader2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Mail, Users, Loader2, Pencil, ShieldCheck, Trash2 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
-import { PERMISSION_TREE, ALL_PERMISSIONS, actionName, actionsForModule } from "@/lib/permissions";
-
-// Permission catalogue is shared with the backend enum — see src/lib/permissions.ts
-const permissionsList = ALL_PERMISSIONS;
+import { useAuth } from "@/contexts/AuthContext";
+import { PermissionSelector } from "@/components/users/PermissionSelector";
+import { EditUserPermissionsDialog } from "@/components/users/EditUserPermissionsDialog";
 
 export default function CreateLogin() {
+  const { user: currentUser } = useAuth();
+  // Only an admin may remove a login — the backend enforces the same rule, so
+  // showing the button to a manager would only produce a 403.
+  const canDelete = currentUser?.role === "admin";
+
   const [formData, setFormData] = useState({
     role: "",
     email: "",
@@ -21,19 +35,15 @@ export default function CreateLogin() {
     department: "",
   });
 
-  const [permissions, setPermissions] = useState([]);
+  const [permissions, setPermissions] = useState(["Dashboard"]);
   const [message, setMessage] = useState({ type: "", text: "" });
   const [isLoading, setIsLoading] = useState(false);
   const [seats, setSeats] = useState(null);
-
-  useEffect(() => {
-    if (formData.role === "manager" || formData.role === "staff") {
-      // Managers and staff pick their own permissions - start with Dashboard only
-      if (permissions.length === 0) {
-        setPermissions(["Dashboard"]);
-      }
-    }
-  }, [formData.role]);
+  const [team, setTeam] = useState([]);
+  const [isLoadingTeam, setIsLoadingTeam] = useState(true);
+  const [editingUser, setEditingUser] = useState(null);
+  const [deletingUser, setDeletingUser] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // How many of the admin's staff/manager logins are already taken. The backend
   // enforces the same limit; this only keeps the form honest about it.
@@ -47,9 +57,49 @@ export default function CreateLogin() {
     }
   };
 
+  // The logins this admin has already handed out. Admins are left out: they
+  // always hold every permission, so there is nothing to edit.
+  const loadTeam = async () => {
+    try {
+      setIsLoadingTeam(true);
+      const response = await apiClient.getUsers({ limit: 100 });
+      const users = response?.users || [];
+      setTeam(users.filter((u) => u.role !== "admin"));
+    } catch (error) {
+      console.error("❌ Error loading team logins:", error);
+    } finally {
+      setIsLoadingTeam(false);
+    }
+  };
+
   useEffect(() => {
     loadSeats();
+    loadTeam();
   }, []);
+
+  const handleDelete = async () => {
+    if (!deletingUser) return;
+    setIsDeleting(true);
+
+    try {
+      await apiClient.deleteUser(deletingUser._id || deletingUser.id);
+      setMessage({
+        type: "success",
+        text: deletingUser.status === "invited"
+          ? `✓ Invitation to ${deletingUser.email} cancelled. That seat is free again.`
+          : `✓ ${deletingUser.fullName}'s login was removed. That seat is free again.`,
+      });
+      setDeletingUser(null);
+      await loadTeam();
+      await loadSeats();
+    } catch (error) {
+      console.error("❌ Error deleting login:", error);
+      setMessage({ type: "error", text: error.message || "Failed to remove the login." });
+      setDeletingUser(null);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const seatsFull = seats ? seats.remaining <= 0 : false;
 
@@ -66,44 +116,6 @@ export default function CreateLogin() {
       ...prev,
       role: value,
     }));
-  };
-
-  // Toggling a MODULE. Granting one turns on its "View" action so the user can
-  // actually open the section; revoking one drops every action beneath it, so a
-  // stored list never implies access to a section the user cannot reach.
-  const handleModuleToggle = (module, e) => {
-    if (e) e.stopPropagation();
-
-    setPermissions((prev) => {
-      const children = actionsForModule(module);
-      if (prev.includes(module)) {
-        return prev.filter((p) => p !== module && !children.includes(p));
-      }
-      const viewAction = actionName(module, "View");
-      const next = [...prev, module];
-      if (children.includes(viewAction)) next.push(viewAction);
-      return next;
-    });
-  };
-
-  // Toggling an ACTION. Only reachable when its module is already granted.
-  const handleActionToggle = (action, e) => {
-    if (e) e.stopPropagation();
-
-    setPermissions((prev) =>
-      prev.includes(action) ? prev.filter((p) => p !== action) : [...prev, action]
-    );
-  };
-
-  // Kept for the "Dashboard is always on" case and any legacy caller.
-  const handlePermissionToggle = handleModuleToggle;
-
-  const toggleAllPermissions = () => {
-    if (permissions.length === permissionsList.length) {
-      setPermissions([]);
-    } else {
-      setPermissions([...permissionsList]);
-    }
   };
 
   const handleSubmit = async (e) => {
@@ -150,8 +162,9 @@ export default function CreateLogin() {
 
       console.log("✅ Invitation sent:", response);
 
-      // Reflect the seat we just consumed
+      // Reflect the seat we just consumed and show the new login below
       await loadSeats();
+      await loadTeam();
 
       // Show success message
       setMessage({
@@ -186,7 +199,7 @@ export default function CreateLogin() {
 
   const handleReset = () => {
     setFormData({ role: "", email: "", fullName: "", department: "" });
-    setPermissions([]);
+    setPermissions(["Dashboard"]);
     setMessage({ type: "", text: "" });
   };
 
@@ -307,149 +320,7 @@ export default function CreateLogin() {
                 </div>
               </div>
 
-              {/* Permissions Section */}
-              <div className="space-y-4 p-6 bg-muted rounded-lg border border-input">
-                <div className="flex justify-between items-center gap-4">
-                  <div className="space-y-1">
-                    <h3 className="text-lg font-semibold">Permissions</h3>
-                    {formData.role === "admin" ? (
-                      <p className="text-xs text-green-600 font-medium">Admin automatically gets full access to all features</p>
-                    ) : (
-                      <p className="text-xs text-muted-foreground">Select only the features this user should access</p>
-                    )}
-                    {formData.role && (
-                      <div className="flex items-center gap-2 pt-2">
-                        <div
-                          className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${
-                            formData.role === "admin"
-                              ? "bg-green-100 text-green-700"
-                              : formData.role === "manager"
-                              ? "bg-primary/10 text-primary"
-                              : "bg-secondary/10 text-secondary"
-                          }`}
-                        >
-                          {formData.role === "admin" ? "Admin - Full Access" : formData.role === "manager" ? "Manager - Custom Permissions" : "Staff - Custom Permissions"}
-                        </div>
-                        <span className="text-xs text-muted-foreground">
-                          {permissions.length} / {permissionsList.length} selected
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                  {formData.role !== "admin" && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={toggleAllPermissions}
-                      className="whitespace-nowrap"
-                    >
-                      {permissions.length === permissionsList.length ? "Deselect All" : "Select All"}
-                    </Button>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {PERMISSION_TREE.map(({ module, actions }) => {
-                    const isAdminRole = formData.role === "admin";
-                    const isDashboard = module === "Dashboard";
-                    const moduleLocked = isAdminRole || isDashboard;
-                    const moduleGranted = permissions.includes(module);
-
-                    return (
-                      <div
-                        key={module}
-                        className={`rounded-lg border transition-all ${
-                          isAdminRole
-                            ? "border-green-200 bg-green-50"
-                            : isDashboard
-                            ? "border-primary/50 bg-primary/5"
-                            : moduleGranted
-                            ? "border-primary/40 bg-card"
-                            : "border-input bg-card"
-                        }`}
-                      >
-                        {/* Module */}
-                        <div className="flex items-center space-x-2 p-3">
-                          <Checkbox
-                            id={module}
-                            checked={moduleGranted}
-                            disabled={moduleLocked}
-                            onCheckedChange={() => {
-                              if (!moduleLocked) handleModuleToggle(module);
-                            }}
-                          />
-                          <label
-                            htmlFor={module}
-                            className={`text-sm font-semibold flex-1 ${
-                              moduleLocked ? "cursor-not-allowed" : "cursor-pointer"
-                            } ${
-                              isAdminRole
-                                ? "text-green-700"
-                                : isDashboard
-                                ? "text-primary"
-                                : ""
-                            }`}
-                            onClick={(e) => {
-                              if (!moduleLocked) {
-                                e.preventDefault();
-                                handleModuleToggle(module);
-                              }
-                            }}
-                          >
-                            {module}
-                            {isAdminRole && <span className="text-xs text-green-700 ml-1">(Auto)</span>}
-                            {isDashboard && !isAdminRole && <span className="text-xs text-primary ml-1">(Required)</span>}
-                          </label>
-                          {actions.length > 0 && !isAdminRole && (
-                            <span className="text-[11px] text-muted-foreground">
-                              {actions.filter((a) => permissions.includes(actionName(module, a))).length}/{actions.length}
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Actions inside this module — greyed out until the module is granted */}
-                        {actions.length > 0 && (
-                          <div className="pl-9 pr-3 pb-3 space-y-1.5">
-                            {actions.map((action) => {
-                              const perm = actionName(module, action);
-                              const disabled = isAdminRole || !moduleGranted;
-                              return (
-                                <div key={perm} className="flex items-center space-x-2">
-                                  <Checkbox
-                                    id={perm}
-                                    checked={permissions.includes(perm)}
-                                    disabled={disabled}
-                                    onCheckedChange={() => {
-                                      if (!disabled) handleActionToggle(perm);
-                                    }}
-                                  />
-                                  <label
-                                    htmlFor={perm}
-                                    className={`text-xs flex-1 ${
-                                      disabled
-                                        ? "text-muted-foreground/50 cursor-not-allowed"
-                                        : "cursor-pointer"
-                                    }`}
-                                    onClick={(e) => {
-                                      if (!disabled) {
-                                        e.preventDefault();
-                                        handleActionToggle(perm);
-                                      }
-                                    }}
-                                  >
-                                    {action}
-                                  </label>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+              <PermissionSelector value={permissions} onChange={setPermissions} />
 
               {/* Messages */}
               {message.text && (
@@ -493,7 +364,153 @@ export default function CreateLogin() {
             </form>
           </CardContent>
         </Card>
+
+        {/* Existing logins — permissions can be changed at any time after the
+            invite was sent, whether or not it has been accepted yet. */}
+        <Card className="shadow-elevated mt-6">
+          <CardHeader>
+            <CardTitle className="text-xl">Team Logins</CardTitle>
+            <CardDescription>
+              Change what an existing manager or staff member can access
+            </CardDescription>
+          </CardHeader>
+
+          <CardContent>
+            {isLoadingTeam ? (
+              <div className="flex items-center justify-center gap-2 py-8 text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading team logins...
+              </div>
+            ) : team.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                No logins yet. Invite someone using the form above.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {team.map((member) => (
+                  <div
+                    key={member._id || member.id}
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-input p-3"
+                  >
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold">{member.fullName}</span>
+                        <Badge variant="secondary" className="capitalize">
+                          {member.role}
+                        </Badge>
+                        {member.status === "invited" ? (
+                          <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700">
+                            Invited
+                          </Badge>
+                        ) : member.isActive === false ? (
+                          <Badge variant="outline">Inactive</Badge>
+                        ) : (
+                          <Badge variant="outline" className="border-green-300 bg-green-50 text-green-700">
+                            Active
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="truncate text-xs text-muted-foreground">{member.email}</p>
+                      <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                        <ShieldCheck className="h-3 w-3" />
+                        {(member.permissions || []).length} permissions
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="gap-1"
+                        onClick={() => setEditingUser(member)}
+                      >
+                        <Pencil className="h-3 w-3" />
+                        Edit Access
+                      </Button>
+                      {canDelete && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="gap-1 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          onClick={() => setDeletingUser(member)}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                          {member.status === "invited" ? "Cancel Invite" : "Delete"}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
+
+      <EditUserPermissionsDialog
+        user={editingUser}
+        open={!!editingUser}
+        onOpenChange={(open) => !open && setEditingUser(null)}
+        onSaved={() => {
+          setMessage({ type: "success", text: "✓ Access updated." });
+          loadTeam();
+        }}
+      />
+
+      <AlertDialog
+        open={!!deletingUser}
+        onOpenChange={(open) => !open && !isDeleting && setDeletingUser(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {deletingUser?.status === "invited"
+                ? "Cancel this invitation?"
+                : `Remove ${deletingUser?.fullName}'s login?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {deletingUser?.status === "invited" ? (
+                <>
+                  The link sent to{" "}
+                  <span className="font-semibold text-foreground">{deletingUser?.email}</span> stops
+                  working and the seat is freed. You can invite that address again later.
+                </>
+              ) : (
+                <>
+                  <span className="font-semibold text-foreground">{deletingUser?.email}</span> will
+                  no longer be able to sign in, and the seat is freed. Their HR record is kept as
+                  inactive history, so payroll and attendance stay intact. This cannot be undone.
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Keep</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                // Keep the dialog up while the request is in flight.
+                e.preventDefault();
+                handleDelete();
+              }}
+              disabled={isDeleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isDeleting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Removing...
+                </>
+              ) : deletingUser?.status === "invited" ? (
+                "Cancel Invitation"
+              ) : (
+                "Delete Login"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

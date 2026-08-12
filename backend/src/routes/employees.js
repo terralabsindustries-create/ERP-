@@ -1,6 +1,7 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const Employee = require('../models/Employee');
+const User = require('../models/User');
 const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/requirePermission');
@@ -148,7 +149,44 @@ router.delete('/:id', requirePermission('Human Resources: Delete'), async (req, 
   try {
     const employee = await Employee.findOneAndDelete(scopeFilter(req, { _id: req.params.id }));
     if (!employee) return res.status(404).json({ status: 'error', message: 'Employee not found' });
-    res.json({ status: 'success', message: 'Employee deleted successfully' });
+
+    // Removing someone from the directory has to take their login with them.
+    // The email is unique across accounts, so leaving the login behind means
+    // re-adding the same person is refused as a duplicate account.
+    let note = '';
+    if (employee.linkedUserId) {
+      const linked = await User.findById(employee.linkedUserId);
+      const sameTenant = linked && (!req.user.dataScope || linked.dataScope === req.user.dataScope);
+
+      if (linked && sameTenant) {
+        if (linked._id.equals(req.user._id)) {
+          note = ' Your own login was kept.';
+        } else if (linked.role === 'admin') {
+          // Owner accounts are deliberately not deletable from the HR page.
+          note = ' Their admin login was kept — remove it from User Management if you meant to.';
+        } else {
+          await User.findByIdAndDelete(linked._id);
+          note = ' Their login was removed too, so that email can be invited again.';
+        }
+      }
+    }
+
+    await ActivityLog.logActivity({
+      action: 'Employee Deleted',
+      description: `Employee ${employee.name} (${employee.email || 'no email'}) deleted.${note}`,
+      // 'system' matches how the Employee Created entry above is categorised —
+      // the enum has no dedicated employee type.
+      entityType: 'system',
+      entityId: employee._id,
+      entityName: employee.name,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'delete',
+      severity: 'high',
+      userId: req.user._id,
+    }).catch(err => console.error('Activity log (delete employee) failed:', err.message));
+
+    res.json({ status: 'success', message: `Employee deleted successfully.${note}` });
   } catch (error) {
     console.error('Delete employee error:', error);
     res.status(500).json({ status: 'error', message: 'Server error while deleting employee' });
