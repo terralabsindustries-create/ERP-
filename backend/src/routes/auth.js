@@ -23,7 +23,7 @@ const registerValidation = [
 const sendOTPValidation = [
   body('email').isEmail().normalizeEmail().withMessage('Please provide a valid email'),
   body('fullName').notEmpty().withMessage('Full name is required').trim(),
-  body('phone').optional().isMobilePhone().withMessage('Please provide a valid phone number'),
+  body('phone').optional({ checkFalsy: true }).isMobilePhone().withMessage('Please provide a valid phone number'),
   body('companyName').optional().trim(),
 ];
 
@@ -498,7 +498,7 @@ router.post('/logout', protect, async (req, res) => {
 // @access  Private
 router.put('/profile', protect, [
   body('fullName').optional().notEmpty().trim(),
-  body('phone').optional().isMobilePhone(),
+  body('phone').optional({ checkFalsy: true }).isMobilePhone(),
 ], async (req, res) => {
   try {
     const allowedUpdates = ['fullName', 'phone', 'companyName', 'preferences'];

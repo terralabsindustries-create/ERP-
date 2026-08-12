@@ -34,16 +34,16 @@ const staffSeatQuery = (user) => ({
 const userValidation = [
   body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
   body('fullName').notEmpty().withMessage('Full name is required').trim(),
-  body('phone').optional().isMobilePhone().withMessage('Valid phone number required'),
+  body('phone').optional({ checkFalsy: true }).isMobilePhone().withMessage('Valid phone number required'),
   body('role').optional().isIn(['admin', 'manager', 'staff', 'viewer']).withMessage('Invalid role'),
   body('department').optional().trim(),
   body('isActive').optional().isBoolean().withMessage('isActive must be boolean')
 ];
 
 const updateUserValidation = [
-  body('email').optional().isEmail().normalizeEmail().withMessage('Valid email is required'),
+  body('email').optional({ checkFalsy: true }).isEmail().normalizeEmail().withMessage('Valid email is required'),
   body('fullName').optional().notEmpty().withMessage('Full name is required').trim(),
-  body('phone').optional().isMobilePhone().withMessage('Valid phone number required'),
+  body('phone').optional({ checkFalsy: true }).isMobilePhone().withMessage('Valid phone number required'),
   body('role').optional().isIn(['admin', 'manager', 'staff']).withMessage('Role must be admin, manager, or staff'),
   body('isActive').optional().isBoolean().withMessage('isActive must be boolean')
 ];
