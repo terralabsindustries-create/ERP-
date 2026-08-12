@@ -49,7 +49,7 @@ interface Customer {
 }
 
 export default function Customers() {
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -250,26 +250,32 @@ export default function Customers() {
         </div>
         {user ? (
           <div className="flex gap-2">
-            <Button 
-              variant="outline" 
-              onClick={handleExportCSV}
-              disabled={filteredCustomers.length === 0}
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Export Filtered ({filteredCustomers.length})
-            </Button>
-            <Button 
-              variant="outline" 
-              onClick={handleExportAll}
-              disabled={customers.length === 0}
-            >
-              <FileText className="h-4 w-4 mr-2" />
-              Export All ({customers.length})
-            </Button>
-            <Button onClick={() => setShowCreateDialog(true)}>
-              <Plus className="h-4 w-4 mr-2" />
-              Add Customer
-            </Button>
+            {hasPermission("Customers: Export") && (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={handleExportCSV}
+                  disabled={filteredCustomers.length === 0}
+                >
+                  <Download className="h-4 w-4 mr-2" />
+                  Export Filtered ({filteredCustomers.length})
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleExportAll}
+                  disabled={customers.length === 0}
+                >
+                  <FileText className="h-4 w-4 mr-2" />
+                  Export All ({customers.length})
+                </Button>
+              </>
+            )}
+            {hasPermission("Customers: Create & Edit") && (
+              <Button onClick={() => setShowCreateDialog(true)}>
+                <Plus className="h-4 w-4 mr-2" />
+                Add Customer
+              </Button>
+            )}
           </div>
         ) : (
           <div className="text-sm text-muted-foreground">Please log in to add customers</div>
@@ -533,24 +539,28 @@ export default function Customers() {
                         {customerType}
                       </Badge>
                       <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleCreateJob(customer)}
-                          className="gap-2"
-                        >
-                          <Briefcase className="h-3 w-3" />
-                          Create Job
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleEditCustomer(customer)}
-                          className="gap-2"
-                        >
-                          <Edit className="h-3 w-3" />
-                          Edit
-                        </Button>
+                        {hasPermission("Jobs: Create & Edit") && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleCreateJob(customer)}
+                            className="gap-2"
+                          >
+                            <Briefcase className="h-3 w-3" />
+                            Create Job
+                          </Button>
+                        )}
+                        {hasPermission("Customers: Create & Edit") && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleEditCustomer(customer)}
+                            className="gap-2"
+                          >
+                            <Edit className="h-3 w-3" />
+                            Edit
+                          </Button>
+                        )}
                       </div>
                     </div>
                 </div>
@@ -573,12 +583,12 @@ export default function Customers() {
                 : "Try adjusting your search or filter criteria"
               }
             </p>
-            {customers.length === 0 ? (
+            {customers.length === 0 && hasPermission("Customers: Create & Edit") ? (
               <Button onClick={() => setShowCreateDialog(true)}>
                 <Plus className="h-4 w-4 mr-2" />
                 Add Your First Customer
               </Button>
-            ) : (
+            ) : customers.length === 0 ? null : (
               <Button variant="outline" onClick={() => {
                 setSearchTerm("");
                 setFilterStatus("all");

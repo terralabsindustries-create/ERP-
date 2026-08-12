@@ -1,5 +1,4 @@
 const express = require('express');
-const nodemailer = require('nodemailer');
 const { body } = require('express-validator');
 const { validationResult } = require('express-validator');
 const Quotation = require('../models/Quotation');
@@ -7,6 +6,7 @@ const Customer = require('../models/Customer');
 const Settings = require('../models/Settings');
 const PDFService = require('../services/PDFService');
 const { protect } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/requirePermission');
 
 async function getCompanyInfo(userId) {
   const settings = await Settings.getOrCreateSettings(userId);
@@ -48,16 +48,7 @@ async function getCompanyInfo(userId) {
   };
 }
 
-const createTransporter = () => nodemailer.createTransport({
-  host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-  port: process.env.EMAIL_PORT || 587,
-  secure: false,
-  tls: { rejectUnauthorized: false },
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS ? process.env.EMAIL_PASS.replace(/\s+/g, '') : ''
-  }
-});
+const { createTransporter, getFromAddress, sendMailErrorResponse } = require('../utils/mailer');
 
 const router = express.Router();
 
@@ -121,7 +112,7 @@ router.get('/:id', protect, async (req, res) => {
 });
 
 // POST /api/quotations
-router.post('/', protect, quotationValidation, async (req, res) => {
+router.post('/', protect, requirePermission('Quotations: Create & Edit'), quotationValidation, async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ status: 'error', message: errors.array()[0].msg });
@@ -186,30 +177,166 @@ router.post('/', protect, quotationValidation, async (req, res) => {
 });
 
 // PATCH /api/quotations/:id/status
-router.patch('/:id/status', protect, async (req, res) => {
+const QUOTATION_STATUSES = ['draft', 'sent', 'approved', 'rejected', 'expired', 'converted', 'closed'];
+
+router.patch('/:id/status', protect, requirePermission('Quotations: Change Status'), async (req, res) => {
   try {
     const { status } = req.body;
-    if (!['draft', 'sent', 'approved', 'rejected'].includes(status)) {
-      return res.status(400).json({ status: 'error', message: 'Invalid status' });
+    if (!QUOTATION_STATUSES.includes(status)) {
+      return res.status(400).json({
+        status: 'error',
+        message: `Invalid status. Must be one of: ${QUOTATION_STATUSES.join(', ')}`
+      });
     }
 
     const filter = req.user.dataScope
       ? { _id: req.params.id, dataScope: req.user.dataScope }
       : { _id: req.params.id, userId: req.user._id };
 
+    const existing = await Quotation.findOne(filter);
+    if (!existing) return res.status(404).json({ status: 'error', message: 'Quotation not found' });
+
+    // 'converted' is owned by the conversion endpoint — it must always point at
+    // a real invoice, so it can neither be set nor cleared by hand.
+    if (status === 'converted') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Use the convert-to-invoice action to mark a quotation as converted'
+      });
+    }
+    if (existing.status === 'converted') {
+      return res.status(409).json({
+        status: 'error',
+        message: `This quotation was already converted to invoice ${existing.convertedInvoiceNumber}. Its status can no longer be changed.`
+      });
+    }
+
     const quotation = await Quotation.findOneAndUpdate(filter, { status }, { new: true })
       .populate('customer_id', 'name email phone');
 
-    if (!quotation) return res.status(404).json({ status: 'error', message: 'Quotation not found' });
-
     res.json({ status: 'success', data: { quotation } });
   } catch (err) {
+    console.error('Update quotation status error:', err);
     res.status(500).json({ status: 'error', message: 'Server error' });
   }
 });
 
+// POST /api/quotations/:id/convert-to-invoice
+// Raises an invoice from an accepted quotation. The quotation itself is left
+// intact as a record and marked 'converted' so it can't be billed twice.
+router.post('/:id/convert-to-invoice', protect, requirePermission('Quotations: Convert to Invoice'), async (req, res) => {
+  try {
+    const Invoice = require('../models/Invoice');
+
+    const filter = req.user.dataScope
+      ? { _id: req.params.id, dataScope: req.user.dataScope }
+      : { _id: req.params.id, userId: req.user._id };
+
+    const quotation = await Quotation.findOne(filter).populate('customer_id');
+    if (!quotation) {
+      return res.status(404).json({ status: 'error', message: 'Quotation not found' });
+    }
+
+    if (quotation.status === 'converted') {
+      return res.status(409).json({
+        status: 'error',
+        message: `Already converted to invoice ${quotation.convertedInvoiceNumber}`,
+        data: { invoiceId: quotation.convertedInvoiceId, invoiceNumber: quotation.convertedInvoiceNumber }
+      });
+    }
+    if (['rejected', 'expired', 'closed'].includes(quotation.status)) {
+      return res.status(400).json({
+        status: 'error',
+        message: `A ${quotation.status} quotation cannot be converted to an invoice`
+      });
+    }
+    if (!quotation.items || quotation.items.length === 0) {
+      return res.status(400).json({ status: 'error', message: 'Quotation has no items to invoice' });
+    }
+
+    const customer = quotation.customer_id;
+    const isGst = quotation.gst_type === 'gst';
+    const isInterstate = !!quotation.is_interstate;
+    const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+    // Map quotation line items onto the invoice item shape. A quotation carries
+    // a single tax_amount per line; an invoice needs it split across IGST (for
+    // interstate) or CGST+SGST (intrastate).
+    const items = quotation.items.map((qi) => {
+      const lineTotal = round2(qi.quantity * qi.unit_price);
+      const gstAmount = isGst ? round2(qi.tax_amount || 0) : 0;
+      const half = round2(gstAmount / 2);
+
+      return {
+        itemName: qi.item_name,
+        description: qi.description || '',
+        quantity: qi.quantity,
+        unitPrice: qi.unit_price,
+        totalAmount: lineTotal,
+        gstRate: isGst ? (qi.tax_rate || 0) : 0,
+        cgstAmount: isGst && !isInterstate ? half : 0,
+        sgstAmount: isGst && !isInterstate ? half : 0,
+        igstAmount: isGst && isInterstate ? gstAmount : 0,
+        gstAmount,
+        itemTotal: round2(lineTotal + gstAmount)
+      };
+    });
+
+    const subtotal = round2(items.reduce((s, i) => s + i.totalAmount, 0));
+    const invoiceDate = new Date();
+    const dueDate = new Date(invoiceDate);
+    dueDate.setDate(dueDate.getDate() + 30);
+
+    const invoiceNumber = await Invoice.generateInvoiceNumber(req.user._id, req.user.dataScope);
+
+    const invoiceData = {
+      invoiceNumber,
+      customerId: customer._id,
+      customerName: customer.name,
+      customerGstNumber: customer.gstNumber || '',
+      customerAddress: customer.address || '',
+      invoiceDate,
+      dueDate,
+      items,
+      subtotal,
+      // The pre-save hook recomputes the tax roll-up and grand total from items.
+      taxableAmount: subtotal,
+      totalGstAmount: 0,
+      totalAmount: subtotal,
+      status: 'draft',
+      isInterState: isInterstate,
+      noGst: !isGst,
+      notes: quotation.notes || '',
+      termsAndConditions: quotation.terms_conditions || '',
+      userId: req.user._id
+    };
+    if (req.user.dataScope) invoiceData.dataScope = req.user.dataScope;
+
+    const invoice = await Invoice.create(invoiceData);
+
+    quotation.status = 'converted';
+    quotation.convertedInvoiceId = invoice._id;
+    quotation.convertedInvoiceNumber = invoice.invoiceNumber;
+    quotation.convertedAt = new Date();
+    await quotation.save();
+
+    res.status(201).json({
+      status: 'success',
+      message: `Quotation ${quotation.quotationNumber} converted to invoice ${invoice.invoiceNumber}`,
+      data: { invoice, quotation }
+    });
+  } catch (err) {
+    console.error('Convert quotation to invoice error:', err);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error while converting quotation to invoice',
+      error: err.message
+    });
+  }
+});
+
 // POST /api/quotations/:id/send-email
-router.post('/:id/send-email', protect, async (req, res) => {
+router.post('/:id/send-email', protect, requirePermission('Quotations: Send Email'), async (req, res) => {
   try {
     const { recipientEmail, message } = req.body;
 
@@ -303,7 +430,7 @@ router.post('/:id/send-email', protect, async (req, res) => {
 
     const transporter = createTransporter();
     await transporter.sendMail({
-      from: process.env.EMAIL_FROM || `"${companyName}" <${process.env.EMAIL_USER}>`,
+      from: getFromAddress(companyName),
       to: toEmail,
       subject: `Quotation ${quotation.quotationNumber} from ${companyName}`,
       html,
@@ -354,7 +481,7 @@ router.get('/:id/pdf', protect, async (req, res) => {
 });
 
 // DELETE /api/quotations/:id
-router.delete('/:id', protect, async (req, res) => {
+router.delete('/:id', protect, requirePermission('Quotations: Delete'), async (req, res) => {
   try {
     const filter = req.user.dataScope
       ? { _id: req.params.id, dataScope: req.user.dataScope }

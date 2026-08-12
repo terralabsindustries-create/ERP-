@@ -36,6 +36,8 @@ interface StaffCardProps {
     lastLogin?: string;
     createdAt?: string;
     updatedAt?: string;
+    // Login lifecycle: 'invited' until they accept and set a password.
+    accountStatus?: string;
   };
   onSchedule?: () => void;
   onStaffUpdated?: () => void;
@@ -47,7 +49,30 @@ export function StaffCard({ staff, onSchedule, onStaffUpdated, onDelete }: Staff
   const [isLoadingSchedule, setIsLoadingSchedule] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showCredentialsDialog, setShowCredentialsDialog] = useState(false);
+  const [isResending, setIsResending] = useState(false);
   const { toast } = useToast();
+
+  const isInvited = staff.accountStatus === "invited";
+
+  const handleResendInvitation = async () => {
+    try {
+      setIsResending(true);
+      const response: any = await apiClient.resendInvitation(staff.id);
+      toast({
+        title: "Invitation sent",
+        description: response?.message || `A new invitation link was emailed to ${staff.email}.`,
+      });
+      onStaffUpdated?.();
+    } catch (error: any) {
+      toast({
+        title: "Could not resend the invitation",
+        description: error.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsResending(false);
+    }
+  };
 
   useEffect(() => {
     if (staff.id) {
@@ -131,9 +156,15 @@ export function StaffCard({ staff, onSchedule, onStaffUpdated, onDelete }: Staff
                 <p className="text-sm text-muted-foreground">{staff.role} • {staff.department}</p>
               </div>
             </div>
-            <Badge variant={staff.status === "active" ? "success" : "secondary"}>
-              {staff.status}
-            </Badge>
+            {isInvited ? (
+              <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700">
+                Invited
+              </Badge>
+            ) : (
+              <Badge variant={staff.status === "active" ? "success" : "secondary"}>
+                {staff.status}
+              </Badge>
+            )}
           </div>
         </CardHeader>
         
@@ -192,10 +223,29 @@ export function StaffCard({ staff, onSchedule, onStaffUpdated, onDelete }: Staff
                 <Calendar className="h-3 w-3" />
                 Schedule
               </Button>
-              <Button size="sm" variant="outline" className="gap-1 text-xs px-2 bg-blue-50 text-blue-700 hover:bg-blue-100" onClick={() => setShowCredentialsDialog(true)}>
-                <Key className="h-3 w-3" />
-                Password
-              </Button>
+              {isInvited ? (
+                // No password exists yet, so there is nothing to reset — the only
+                // useful action is putting a fresh link in their inbox.
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1 text-xs px-2 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                  onClick={handleResendInvitation}
+                  disabled={isResending}
+                >
+                  {isResending ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <MailIcon className="h-3 w-3" />
+                  )}
+                  Resend Invite
+                </Button>
+              ) : (
+                <Button size="sm" variant="outline" className="gap-1 text-xs px-2 bg-blue-50 text-blue-700 hover:bg-blue-100" onClick={() => setShowCredentialsDialog(true)}>
+                  <Key className="h-3 w-3" />
+                  Password
+                </Button>
+              )}
               <Button size="sm" variant="outline" className="gap-1 text-xs px-2" onClick={() => setShowEditDialog(true)}>
                 <Edit className="h-3 w-3" />
               </Button>

@@ -3,6 +3,10 @@ import apiClient, { ApiResponse } from '@/lib/apiClient';
 import { useToast } from '@/hooks/use-toast';
 import { SubscriptionModal } from '@/components/subscription/SubscriptionModal';
 
+// Subscription plans are hidden for now. Flip to `true` to bring back the
+// pricing modal (and its Razorpay checkout) exactly as it was.
+const SUBSCRIPTION_PLANS_ENABLED = false;
+
 interface User {
   id: string;
   email: string;
@@ -47,6 +51,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Check subscription status and show modal if needed
   const checkSubscriptionStatus = (userData: User) => {
+    if (!SUBSCRIPTION_PLANS_ENABLED) return;
+
     // Show modal if subscription is not active or doesn't exist
     if (!userData.subscription || !userData.subscription.isActive) {
       setShowSubscriptionModal(true);
@@ -156,13 +162,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  /**
+   * Works for both a MODULE ("Customers") and an ACTION ("Customers: Delete").
+   * Mirrors backend/src/middleware/requirePermission.js exactly — keep the two
+   * in step or the UI will offer buttons the API rejects.
+   */
   const hasPermission = (permission: string): boolean => {
     // Admin has full access to everything
     if (user?.role === 'admin') {
       return true;
     }
-    // Staff and Manager: check if user has the specific permission
-    return user?.permissions?.includes(permission) || false;
+
+    const granted = user?.permissions || [];
+    const sep = permission.indexOf(': ');
+    const module = sep === -1 ? permission : permission.slice(0, sep);
+
+    if (!granted.includes(module)) return false;
+    if (sep === -1) return true;
+
+    // Logins created before granular actions existed have a module grant and no
+    // actions — they keep full access to that module until they are re-saved.
+    const hasAnyActionForModule = granted.some((p) => p.startsWith(`${module}: `));
+    if (!hasAnyActionForModule) return true;
+
+    return granted.includes(permission);
   };
 
   // Re-fetch the current user (e.g. after a successful subscription payment)
@@ -195,12 +218,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return (
     <AuthContext.Provider value={value}>
       {children}
-      <SubscriptionModal
-        open={showSubscriptionModal}
-        onClose={() => setShowSubscriptionModal(false)}
-        userPlan={user?.subscription?.plan}
-        onPaymentSuccess={refreshUser}
-      />
+      {SUBSCRIPTION_PLANS_ENABLED && (
+        <SubscriptionModal
+          open={showSubscriptionModal}
+          onClose={() => setShowSubscriptionModal(false)}
+          userPlan={user?.subscription?.plan}
+          onPaymentSuccess={refreshUser}
+        />
+      )}
     </AuthContext.Provider>
   );
 }

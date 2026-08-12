@@ -1,25 +1,9 @@
 const express = require('express');
-const nodemailer = require('nodemailer');
 const { protect, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
-// Create email transporter (configure based on your email service)
-const createTransporter = () => {
-  // For development, use ethereal.email or configure your SMTP
-  return nodemailer.createTransport({
-    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-    port: process.env.EMAIL_PORT || 587,
-    secure: false, // true for 465, false for other ports
-    tls: {
-      rejectUnauthorized: false // Allow self-signed certificates in development
-    },
-    auth: {
-      user: process.env.EMAIL_USER || 'your-email@gmail.com',
-      pass: process.env.EMAIL_PASS ? process.env.EMAIL_PASS.replace(/\s+/g, '') : 'your-app-password'
-    }
-  });
-};
+const { createTransporter, getFromAddress, sendMailErrorResponse } = require('../utils/mailer');
 
 // Email templates
 const getEmailTemplate = (template, data) => {
@@ -132,7 +116,7 @@ router.post('/send', async (req, res) => {
 
       // Email options
       const mailOptions = {
-        from: process.env.EMAIL_FROM || `"${process.env.COMPANY_NAME || 'SerpY ERP'}" <${process.env.EMAIL_USER}>`,
+        from: getFromAddress(process.env.COMPANY_NAME || 'SerpY ERP'),
         to: Array.isArray(to) ? to.join(', ') : to,
         subject: subject,
         html: emailContent.html,
@@ -172,7 +156,7 @@ router.post('/send', async (req, res) => {
 
     // Email options
     const mailOptions = {
-      from: process.env.EMAIL_FROM || `"${process.env.COMPANY_NAME || 'SerpY ERP'}" <${process.env.EMAIL_USER}>`,
+      from: getFromAddress(process.env.COMPANY_NAME || 'SerpY ERP'),
       to: Array.isArray(to) ? to.join(', ') : to,
       subject: subject,
       html: emailContent.html,
@@ -235,7 +219,7 @@ router.post('/send-staff-credentials', protect, authorize('admin', 'manager'), a
 
     // Email options
     const mailOptions = {
-      from: process.env.EMAIL_FROM || `"${process.env.COMPANY_NAME || 'SerpY ERP'}" <${process.env.EMAIL_USER}>`,
+      from: getFromAddress(process.env.COMPANY_NAME || 'SerpY ERP'),
       to: Array.isArray(to) ? to.join(', ') : to,
       subject: 'Welcome to SerpY ERP - Your Login Credentials',
       html: emailContent.html,
@@ -289,7 +273,7 @@ router.post('/test-public', async (req, res) => {
 
     // Send test email
     const mailOptions = {
-      from: process.env.EMAIL_FROM || `"${process.env.COMPANY_NAME || 'SerpY ERP'}" <${process.env.EMAIL_USER}>`,
+      from: getFromAddress(process.env.COMPANY_NAME || 'SerpY ERP'),
       to: to,
       subject: 'SerpY ERP - Email Configuration Test',
       html: `
@@ -354,7 +338,7 @@ router.post('/test', protect, authorize('admin'), async (req, res) => {
 
     // Send test email
     const mailOptions = {
-      from: process.env.EMAIL_FROM || `"${process.env.COMPANY_NAME || 'SerpY ERP'}" <${process.env.EMAIL_USER}>`,
+      from: getFromAddress(process.env.COMPANY_NAME || 'SerpY ERP'),
       to: to,
       subject: 'SerpY ERP - Email Configuration Test',
       html: `

@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
-import { Plus, Search, FileText, Trash2, Clock, CheckCircle, XCircle, Send, Mail, Download } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Plus, Search, FileText, Trash2, Clock, CheckCircle, XCircle, Send, Mail, Download, Receipt, Ban, TimerOff, Lock } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,19 +20,36 @@ interface Quotation {
   gst_type: "gst" | "non_gst";
   is_interstate: boolean;
   valid_until: string;
-  status: "draft" | "sent" | "approved" | "rejected";
+  status: QuotationStatus;
   total_amount: number;
   payment_link?: string;
   createdAt: string;
   notes?: string;
+  convertedInvoiceId?: string;
+  convertedInvoiceNumber?: string;
 }
+
+type QuotationStatus = "draft" | "sent" | "approved" | "rejected" | "expired" | "converted" | "closed";
 
 const statusConfig = {
   draft: { label: "Draft", variant: "secondary" as const, icon: Clock },
   sent: { label: "Sent", variant: "default" as const, icon: Send },
   approved: { label: "Approved", variant: "default" as const, icon: CheckCircle },
   rejected: { label: "Rejected", variant: "destructive" as const, icon: XCircle },
+  expired: { label: "Expired", variant: "outline" as const, icon: TimerOff },
+  converted: { label: "Converted", variant: "default" as const, icon: Receipt },
+  closed: { label: "Closed", variant: "outline" as const, icon: Lock },
 };
+
+// Statuses the user can set by hand. 'converted' is excluded — it is only ever
+// set by the convert-to-invoice action, which needs a real invoice behind it.
+const SELECTABLE_STATUSES: QuotationStatus[] = ["draft", "sent", "approved", "rejected", "expired", "closed"];
+
+// Summary tiles: the states worth counting at a glance.
+const SUMMARY_STATUSES: QuotationStatus[] = ["draft", "sent", "approved", "converted"];
+
+// A quotation in one of these states is finished and cannot be billed.
+const isTerminal = (s: QuotationStatus) => s === "converted" || s === "closed";
 
 export default function Quotations() {
   const [quotations, setQuotations] = useState<Quotation[]>([]);
@@ -40,7 +59,10 @@ export default function Quotations() {
   const [emailRecipient, setEmailRecipient] = useState("");
   const [emailMessage, setEmailMessage] = useState("");
   const [sendingEmail, setSendingEmail] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [convertDialog, setConvertDialog] = useState<{ open: boolean; quotation: Quotation | null }>({ open: false, quotation: null });
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   const fetchQuotations = async () => {
     setLoading(true);
@@ -113,6 +135,72 @@ export default function Quotations() {
     }
   };
 
+  const handleStatusChange = async (q: Quotation, status: QuotationStatus) => {
+    if (status === q.status) return;
+    setBusyId(q._id);
+    // Optimistic: reflect the new badge immediately, roll back if the call fails.
+    const previous = q.status;
+    setQuotations((prev) => prev.map((x) => (x._id === q._id ? { ...x, status } : x)));
+    try {
+      await apiClient.updateQuotationStatus(q._id, status);
+      toast({ title: "Status updated", description: `${q.quotationNumber} is now ${statusConfig[status].label}` });
+      fetchQuotations();
+    } catch (error: any) {
+      setQuotations((prev) => prev.map((x) => (x._id === q._id ? { ...x, status: previous } : x)));
+      toast({
+        title: "Could not update status",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleConvert = async () => {
+    const q = convertDialog.quotation;
+    if (!q) return;
+    setBusyId(q._id);
+    try {
+      const res: any = await apiClient.convertQuotationToInvoice(q._id);
+      const invoiceNumber = res?.invoice?.invoiceNumber ?? res?.data?.invoice?.invoiceNumber;
+      toast({
+        title: "Invoice created",
+        description: `${q.quotationNumber} → ${invoiceNumber ?? "invoice"}`,
+      });
+      setConvertDialog({ open: false, quotation: null });
+      fetchQuotations();
+    } catch (error: any) {
+      const message: string = error?.message || "Could not convert this quotation.";
+
+      // The server may have finished the conversion even though we stopped
+      // waiting (timeout, restart, dropped connection). Treat "already
+      // converted" as success and re-sync rather than alarming the user.
+      if (/already converted/i.test(message)) {
+        toast({ title: "Already converted", description: message });
+        setConvertDialog({ open: false, quotation: null });
+        fetchQuotations();
+        return;
+      }
+
+      // A timeout is not proof the conversion failed — tell the user to check.
+      if (/timed out/i.test(message)) {
+        toast({
+          title: "Still processing",
+          description: "The server did not respond in time. Refreshing — check whether the invoice was created before retrying.",
+          variant: "destructive",
+        });
+        setConvertDialog({ open: false, quotation: null });
+        fetchQuotations();
+        return;
+      }
+
+      toast({ title: "Conversion failed", description: message, variant: "destructive" });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const handleDelete = async (id: string) => {
     try {
       await apiClient.deleteQuotation(id);
@@ -146,7 +234,7 @@ export default function Quotations() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {(["draft", "sent", "approved", "rejected"] as const).map((status) => {
+        {SUMMARY_STATUSES.map((status) => {
           const count = quotations.filter((q) => q.status === status).length;
           const cfg = statusConfig[status];
           const Icon = cfg.icon;
@@ -233,10 +321,37 @@ export default function Quotations() {
                         <td className="px-4 py-3">{formatDate(q.valid_until)}</td>
                         <td className="px-4 py-3 font-medium">{formatAmount(q.total_amount)}</td>
                         <td className="px-4 py-3">
-                          <Badge variant={cfg.variant} className="gap-1">
-                            <Icon className="w-3 h-3" />
-                            {cfg.label}
-                          </Badge>
+                          {q.status === "converted" ? (
+                            // Terminal and system-owned: show it, don't let it be edited.
+                            <Badge variant={cfg.variant} className="gap-1" title={`Invoice ${q.convertedInvoiceNumber ?? ""}`}>
+                              <Icon className="w-3 h-3" />
+                              {cfg.label}
+                            </Badge>
+                          ) : (
+                            <Select
+                              value={q.status}
+                              onValueChange={(v) => handleStatusChange(q, v as QuotationStatus)}
+                              disabled={busyId === q._id}
+                            >
+                              <SelectTrigger className="h-7 w-[135px] text-xs">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {SELECTABLE_STATUSES.map((s) => {
+                                  const sc = statusConfig[s];
+                                  const SIcon = sc.icon;
+                                  return (
+                                    <SelectItem key={s} value={s} className="text-xs">
+                                      <span className="flex items-center gap-2">
+                                        <SIcon className="w-3 h-3" />
+                                        {sc.label}
+                                      </span>
+                                    </SelectItem>
+                                  );
+                                })}
+                              </SelectContent>
+                            </Select>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-muted-foreground">{formatDate(q.createdAt)}</td>
                         <td className="px-4 py-3">
@@ -261,6 +376,34 @@ export default function Quotations() {
                               <Mail className="w-3 h-3" />
                               Send
                             </Button>
+                            {q.status === "converted" ? (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="gap-1 h-7 px-2 text-xs"
+                                onClick={() => navigate("/invoices")}
+                                title={`View invoice ${q.convertedInvoiceNumber ?? ""}`}
+                              >
+                                <Receipt className="w-3 h-3" />
+                                {q.convertedInvoiceNumber ?? "Invoice"}
+                              </Button>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="gap-1 h-7 px-2 text-xs"
+                                disabled={busyId === q._id || isTerminal(q.status) || q.status === "rejected" || q.status === "expired"}
+                                onClick={() => setConvertDialog({ open: true, quotation: q })}
+                                title={
+                                  q.status === "rejected" || q.status === "expired" || isTerminal(q.status)
+                                    ? `A ${q.status} quotation cannot be invoiced`
+                                    : "Convert to invoice"
+                                }
+                              >
+                                <Receipt className="w-3 h-3" />
+                                Invoice
+                              </Button>
+                            )}
                             <Button
                               size="sm"
                               variant="ghost"
@@ -281,6 +424,52 @@ export default function Quotations() {
           )}
         </CardContent>
       </Card>
+      {/* Convert to Invoice confirmation */}
+      <Dialog open={convertDialog.open} onOpenChange={(open) => !open && setConvertDialog({ open: false, quotation: null })}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Receipt className="w-5 h-5" />
+              Convert to Invoice
+            </DialogTitle>
+          </DialogHeader>
+
+          {convertDialog.quotation && (
+            <div className="space-y-3 py-2 text-sm">
+              <div className="rounded-md bg-muted px-3 py-2">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Quotation</span>
+                  <span className="font-mono font-medium">{convertDialog.quotation.quotationNumber}</span>
+                </div>
+                <div className="flex justify-between mt-1">
+                  <span className="text-muted-foreground">Customer</span>
+                  <span className="font-medium">{convertDialog.quotation.customer_id?.name}</span>
+                </div>
+                <div className="flex justify-between mt-1">
+                  <span className="text-muted-foreground">Amount</span>
+                  <span className="font-medium">{formatAmount(convertDialog.quotation.total_amount)}</span>
+                </div>
+              </div>
+              <p className="text-muted-foreground">
+                A draft invoice will be created with these items, due 30 days from today. This
+                quotation stays on record and is marked <span className="font-medium">Converted</span> —
+                it cannot be invoiced again.
+              </p>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConvertDialog({ open: false, quotation: null })}>
+              Cancel
+            </Button>
+            <Button onClick={handleConvert} disabled={busyId !== null} className="gap-2">
+              <Receipt className="w-4 h-4" />
+              {busyId ? "Converting..." : "Create Invoice"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Send Email Dialog */}
       <Dialog open={emailDialog.open} onOpenChange={(open) => !open && setEmailDialog({ open: false, quotation: null })}>
         <DialogContent className="max-w-md">

@@ -47,6 +47,7 @@ import TermsAndConditions from "./pages/TermsAndConditions";
 import PrivacyPolicy from "./pages/PrivacyPolicy";
 import DataPolicy from "./pages/DataPolicy";
 import PaymentReminders from "./pages/PaymentReminders";
+import AcceptInvitation from "./pages/AcceptInvitation";
 
 const queryClient = new QueryClient();
 
@@ -59,6 +60,8 @@ const App = () => (
         <AuthProvider>
           <Routes>
             <Route path="/auth" element={<Auth />} />
+            {/* Public: the invitation token in the URL is the only credential */}
+            <Route path="/accept-invitation/:token" element={<AcceptInvitation />} />
             <Route path="/terms-and-conditions" element={<TermsAndConditions />} />
             <Route path="/privacy-policy" element={<PrivacyPolicy />} />
             <Route path="/data-security-policy" element={<DataPolicy />} />

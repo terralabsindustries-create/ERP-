@@ -390,7 +390,8 @@ export default function Staff() {
                     }
                     return false;
                   }).length,
-                  status: member.isActive ? 'active' : 'inactive'
+                  status: member.isActive ? 'active' : 'inactive',
+                  accountStatus: member.status
                 }}
                 onSchedule={() => handleScheduleClick(member)}
                 onStaffUpdated={fetchStaff}
@@ -446,7 +447,8 @@ export default function Staff() {
                     }
                     return false;
                   }).length,
-                  status: member.isActive ? 'active' : 'inactive'
+                  status: member.isActive ? 'active' : 'inactive',
+                  accountStatus: member.status
                 }}
                 onSchedule={() => handleScheduleClick(member)}
                 onStaffUpdated={fetchManagers}

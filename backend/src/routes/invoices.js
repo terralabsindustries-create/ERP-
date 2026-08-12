@@ -8,6 +8,7 @@ const Settings = require('../models/Settings');
 const PDFService = require('../services/PDFService');
 const InventoryService = require('../services/InventoryService');
 const { protect } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/requirePermission');
 
 const router = express.Router();
 
@@ -247,7 +248,7 @@ router.get('/:id', protect, async (req, res) => {
 // @route   POST /api/invoices
 // @desc    Create new invoice
 // @access  Private
-router.post('/', protect, invoiceValidation, async (req, res) => {
+router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoiceValidation, async (req, res) => {
   try {
     // Set default due date if not provided (30 days from invoice date)
     if (!req.body.dueDate || req.body.dueDate === '') {
@@ -441,7 +442,7 @@ router.post('/', protect, invoiceValidation, async (req, res) => {
 // @route   PUT /api/invoices/:id
 // @desc    Update invoice
 // @access  Private
-router.put('/:id', protect, async (req, res) => {
+router.put('/:id', protect, requirePermission('Invoicing: Create & Edit'), async (req, res) => {
   try {
     // Check if invoice exists and belongs to user's dataScope
     const findQuery = req.user.dataScope
@@ -527,7 +528,7 @@ router.put('/:id', protect, async (req, res) => {
 // @route   DELETE /api/invoices/:id
 // @desc    Delete invoice (soft delete)
 // @access  Private
-router.delete('/:id', protect, async (req, res) => {
+router.delete('/:id', protect, requirePermission('Invoicing: Delete'), async (req, res) => {
   try {
     const findQuery = req.user.dataScope
       ? { _id: req.params.id, dataScope: req.user.dataScope }
@@ -661,7 +662,7 @@ router.patch('/:id/cancel', protect, async (req, res) => {
 // @route   PATCH /api/invoices/:id/payment-status
 // @desc    Update invoice payment status
 // @access  Private
-router.patch('/:id/payment-status', protect, [
+router.patch('/:id/payment-status', protect, requirePermission('Invoicing: Record Payment'), [
   body('paymentStatus').isIn(['pending', 'partial', 'paid', 'overdue']).withMessage('Invalid payment status'),
   body('amountPaid').optional().isFloat({ min: 0 }).withMessage('Amount paid must be greater than or equal to 0')
 ], async (req, res) => {
@@ -905,7 +906,7 @@ router.get('/:id/pdf', protect, async (req, res) => {
 // @route   POST /api/invoices/:id/send-email
 // @desc    Send invoice via email
 // @access  Private
-router.post('/:id/send-email', protect, [
+router.post('/:id/send-email', protect, requirePermission('Invoicing: Send Email'), [
   body('email').isEmail().withMessage('Valid email is required'),
   body('message').optional().isString().trim()
 ], async (req, res) => {

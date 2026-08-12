@@ -44,7 +44,15 @@ const protect = async (req, res, next) => {
         message: 'Account has been deactivated.'
       });
     }
-    
+
+    // Belt and braces: an invited account cannot hold a valid session yet.
+    if (user.status === 'invited') {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Account setup is not complete.'
+      });
+    }
+
     // Add user to request object
     req.user = user;
     next();
@@ -114,12 +122,32 @@ const generateToken = (userId) => {
   });
 };
 
+// Convert a jsonwebtoken-style duration ('7d', '24h', '30m', '60s', or bare
+// seconds) into milliseconds, so the cookie expiry matches the token's own
+// lifetime. Falls back to 24h if the value is missing or unparseable.
+const DURATION_UNITS = { s: 1000, m: 60 * 1000, h: 60 * 60 * 1000, d: 24 * 60 * 60 * 1000 };
+const DEFAULT_EXPIRE_MS = 24 * 60 * 60 * 1000;
+
+const parseExpiryToMs = (value) => {
+  if (!value) return DEFAULT_EXPIRE_MS;
+
+  const match = String(value).trim().match(/^(\d+(?:\.\d+)?)\s*(s|m|h|d)?$/i);
+  if (!match) {
+    console.warn(`⚠️  JWT_EXPIRE="${value}" is not a recognised duration; defaulting the cookie to 24h.`);
+    return DEFAULT_EXPIRE_MS;
+  }
+
+  const [, amount, unit] = match;
+  // jsonwebtoken treats a bare number as seconds.
+  return Number(amount) * (unit ? DURATION_UNITS[unit.toLowerCase()] : 1000);
+};
+
 // Send token response
 const sendTokenResponse = (user, statusCode, res, message = 'Success') => {
   const token = generateToken(user._id);
-  
+
   const options = {
-    expires: new Date(Date.now() + (process.env.JWT_EXPIRE || '24h').replace('h', '') * 60 * 60 * 1000),
+    expires: new Date(Date.now() + parseExpiryToMs(process.env.JWT_EXPIRE)),
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'strict'

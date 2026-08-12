@@ -726,7 +726,7 @@ export function AdvancedCreateInvoiceDialog({
                 onCheckedChange={(checked) => setFormData(prev => ({ ...prev, noGst: checked as boolean }))}
               />
               <Label htmlFor="noGst" className="font-medium cursor-pointer">
-                No GST (Invoice will be hidden from management section)
+                No GST (invoice is listed with a "No GST" badge)
               </Label>
             </div>
 

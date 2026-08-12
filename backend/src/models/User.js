@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { ALL_PERMISSIONS } = require('../config/permissions');
 const bcrypt = require('bcryptjs');
 
 const userSchema = new mongoose.Schema({
@@ -11,7 +12,12 @@ const userSchema = new mongoose.Schema({
   },
   password: {
     type: String,
-    required: [true, 'Password is required'],
+    // Invited users have no password until they accept their invitation and
+    // choose one themselves — the admin never sets it for them.
+    required: [
+      function () { return this.status !== 'invited'; },
+      'Password is required'
+    ],
     minlength: [6, 'Password must be at least 6 characters'],
     select: false // Don't include password in queries by default
   },
@@ -36,6 +42,38 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  // Lifecycle of the login itself: 'invited' until the invitation link has been
+  // used to set a password, 'active' once it has. Separate from isActive, which
+  // is the admin's enable/disable switch on an already-established account.
+  status: {
+    type: String,
+    enum: ['invited', 'active'],
+    default: 'active',
+    index: true
+  },
+  invitation: {
+    // Only the SHA-256 hash of the token is stored — the raw token exists in
+    // the invitation email and nowhere else, so a database leak cannot be
+    // replayed into an account takeover.
+    tokenHash: {
+      type: String,
+      select: false,
+      index: true
+    },
+    expiresAt: {
+      type: Date
+    },
+    invitedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    invitedAt: {
+      type: Date
+    },
+    acceptedAt: {
+      type: Date
+    }
+  },
   lastLogin: {
     type: Date
   },
@@ -51,39 +89,8 @@ const userSchema = new mongoose.Schema({
   permissions: [
     {
       type: String,
-      enum: [
-        'Dashboard',
-        'Customers',
-        'Jobs',
-        'Quotations',
-        'Invoicing',
-        'Invoicing (View No GST)',
-        'Calendar',
-        'Inventory',
-        'HSN Codes',
-        'SAC Codes',
-        'Vendors',
-        'Purchase Bills',
-        'Staff & Tasks',
-        'Human Resources',
-        'Payroll',
-        'Delivery',
-        'Emergency Orders',
-        'Cost & Profit',
-        'Payments',
-        'Accounts',
-        'Reports',
-        'Designer Timer',
-        'Discounts',
-        'Job Proofing',
-        'WhatsApp',
-        'Payment Reminders',
-        'Walk-In Jobs',
-        'Customer Portal',
-        'Activity Log',
-        'User Management',
-        'Settings'
-      ]
+      // Modules plus their granular actions - see src/config/permissions.js
+      enum: ALL_PERMISSIONS
     }
   ],
   subscription: {
@@ -171,6 +178,8 @@ userSchema.methods.generateProfile = function () {
     dataScope: this.dataScope,
     permissions: this.permissions || [],
     isActive: this.isActive,
+    status: this.status,
+    invitationExpiresAt: this.invitation ? this.invitation.expiresAt : undefined,
     preferences: this.preferences,
     subscription: this.subscription,
     lastLogin: this.lastLogin,

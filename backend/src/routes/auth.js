@@ -5,7 +5,8 @@ const OTP = require('../models/OTP');
 const { protect, sendTokenResponse } = require('../middleware/auth');
 const crypto = require('crypto');
 const { generateOTP, hashOTP, verifyOTP, getOTPEmailTemplate } = require('../utils/otpUtils');
-const nodemailer = require('nodemailer');
+const { createTransporter, getFromAddress, sendMailErrorResponse } = require('../utils/mailer');
+const { hashInvitationToken } = require('../utils/invitationUtils');
 
 const router = express.Router();
 
@@ -35,36 +36,6 @@ const loginValidation = [
   body('password').notEmpty().withMessage('Password is required'),
 ];
 
-// Email transporter utility
-const createTransporter = () => {
-  const emailUser = process.env.EMAIL_USER;
-  const emailPass = process.env.EMAIL_PASS ? process.env.EMAIL_PASS.replace(/\s+/g, '') : '';
-
-  console.log('📧 Email Config:', {
-    hasUser: !!emailUser,
-    hasPass: !!emailPass,
-    user: emailUser ? emailUser.substring(0, 5) + '...' : 'not set',
-    passLength: emailPass.length
-  });
-
-  if (!emailUser || !emailPass) {
-    throw new Error('Email credentials not configured. Please set EMAIL_USER and EMAIL_PASS in .env');
-  }
-
-  return nodemailer.createTransport({
-    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-    port: process.env.EMAIL_PORT || 587,
-    secure: false,
-    tls: {
-      rejectUnauthorized: false
-    },
-    auth: {
-      user: emailUser,
-      pass: emailPass
-    }
-  });
-};
-
 // @route   POST /api/auth/send-otp
 // @desc    Send OTP for email verification
 // @access  Public
@@ -85,6 +56,19 @@ router.post('/send-otp', sendOTPValidation, async (req, res) => {
 
     const { email, fullName, phone, companyName } = req.body;
 
+    // Signup mints a brand new admin account — an email that already has one
+    // must go through login, not through a second signup.
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(409).json({
+        status: 'error',
+        message: 'An account already exists with this email. Please sign in instead.'
+      });
+    }
+
+    // Fail before touching the DB if email can't be delivered anyway.
+    const transporter = createTransporter();
+
     // Delete any existing OTPs for this email
     await OTP.deleteMany({ email, type: 'signup' });
 
@@ -101,12 +85,10 @@ router.post('/send-otp', sendOTPValidation, async (req, res) => {
     });
 
     // Send OTP via email
-    const transporter = createTransporter();
-
     const emailTemplate = getOTPEmailTemplate(otp, fullName);
 
     const mailOptions = {
-      from: process.env.EMAIL_FROM || `"SerpY ERP" <${process.env.EMAIL_USER}>`,
+      from: getFromAddress('SerpY ERP'),
       to: email,
       subject: 'Verify Your Email - SerpY ERP',
       html: emailTemplate.html,
@@ -127,15 +109,7 @@ router.post('/send-otp', sendOTPValidation, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Send OTP error:', error.message);
-    console.error('Full error:', error);
-    console.error('Error stack:', error.stack);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to send OTP',
-      error: error.message,
-      details: error.stack
-    });
+    sendMailErrorResponse(res, error, 'Send OTP');
   }
 });
 
@@ -158,6 +132,16 @@ router.post('/verify-otp', verifyOTPValidation, async (req, res) => {
     }
 
     const { email, otp, password, fullName, phone, companyName } = req.body;
+
+    // Re-check before burning the OTP: the account may have been created between
+    // send-otp and now. Signup never logs an existing account in.
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(409).json({
+        status: 'error',
+        message: 'An account already exists with this email. Please sign in instead.'
+      });
+    }
 
     // Find and validate OTP
     const otpRecord = await OTP.findOne({
@@ -205,14 +189,6 @@ router.post('/verify-otp', verifyOTPValidation, async (req, res) => {
     otpRecord.isUsed = true;
     await otpRecord.save();
 
-    // Check if user already exists
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      // User already exists, just log them in
-      sendTokenResponse(existingUser, 200, res, 'Login successful!');
-      return;
-    }
-
     // Generate unique dataScope for new admin
     const dataScope = `scope_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
 
@@ -257,9 +233,9 @@ router.post('/register', registerValidation, async (req, res) => {
     // Check if user already exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
-      return res.status(400).json({
+      return res.status(409).json({
         status: 'error',
-        message: 'User already exists with this email'
+        message: 'An account already exists with this email. Please sign in instead.'
       });
     }
 
@@ -297,6 +273,114 @@ router.post('/register', registerValidation, async (req, res) => {
   }
 });
 
+// Look up an invited user from the raw token in their link. Only the hash is
+// stored, so we hash what we were given and compare — the raw token is never
+// written anywhere. Returns null for unknown, used, or expired invitations.
+const findInvitedUserByToken = async (token) => {
+  if (!token) return null;
+
+  const user = await User.findOne({
+    'invitation.tokenHash': hashInvitationToken(token)
+  }).select('+invitation.tokenHash');
+
+  if (!user) return null;
+  // A used invitation has already flipped the account to 'active'.
+  if (user.status !== 'invited') return null;
+  if (!user.invitation || !user.invitation.expiresAt) return null;
+  if (user.invitation.expiresAt.getTime() < Date.now()) return null;
+
+  return user;
+};
+
+// @route   GET /api/auth/invitation/:token
+// @desc    Validate an invitation link and describe the account it belongs to
+// @access  Public
+router.get('/invitation/:token', async (req, res) => {
+  try {
+    const user = await findInvitedUserByToken(req.params.token);
+
+    if (!user) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'This invitation link is invalid or has expired. Ask your administrator to send a new one.'
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        invitation: {
+          fullName: user.fullName,
+          email: user.email,
+          role: user.role,
+          companyName: user.companyName,
+          expiresAt: user.invitation.expiresAt
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Get invitation error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error while validating the invitation'
+    });
+  }
+});
+
+// @route   POST /api/auth/invitation/:token/accept
+// @desc    Set the password on an invited account and activate it
+// @access  Public
+router.post('/invitation/:token/accept', [
+  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+], async (req, res) => {
+  try {
+    const { validationResult } = require('express-validator');
+    const errors = validationResult(req);
+
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const user = await findInvitedUserByToken(req.params.token);
+
+    if (!user) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'This invitation link is invalid or has expired. Ask your administrator to send a new one.'
+      });
+    }
+
+    // Password is hashed by the pre-save hook. Clearing the token is what makes
+    // the link one-time — replaying it will no longer match any account. The
+    // paths are unset individually because assigning a fresh object to a nested
+    // path merges rather than replaces, which would leave the hash behind.
+    user.password = req.body.password;
+    user.status = 'active';
+    user.invitation.tokenHash = undefined;
+    user.invitation.expiresAt = undefined;
+    user.invitation.acceptedAt = new Date();
+    await user.save();
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Your password has been set. You can now sign in.',
+      data: { email: user.email }
+    });
+
+  } catch (error) {
+    console.error('Accept invitation error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error while setting your password'
+    });
+  }
+});
+
 // @route   POST /api/auth/login
 // @desc    Login user
 // @access  Public
@@ -313,7 +397,16 @@ router.post('/login', loginValidation, async (req, res) => {
         message: 'Invalid credentials'
       });
     }
-    
+
+    // An invited account has no password yet — there is nothing to compare.
+    if (user.status === 'invited') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Your account setup is not complete. Use the invitation link emailed to you to set a password, or ask your administrator to resend it.',
+        code: 'INVITATION_PENDING'
+      });
+    }
+
     // Check password
     const isMatch = await user.comparePassword(password);
     

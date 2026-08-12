@@ -1,59 +1,13 @@
 const PDFDocument = require('pdfkit');
-const nodemailer = require('nodemailer');
+const { createTransporter } = require('../utils/mailer');
 const puppeteer = require('puppeteer');
 
 class PDFService {
+  // Invoices and quotations both render through the shared PDFKit layout
+  // (renderSynxDocument), so the two documents stay visually identical and
+  // neither depends on a working Chrome install.
   static async generateInvoicePDFFromHTML(invoice, companyInfo) {
-    try {
-      console.log('🔄 Starting HTML to PDF conversion for invoice:', invoice.invoiceNumber);
-
-      // Generate HTML template
-      const htmlContent = this.generateInvoiceHTML(invoice, companyInfo);
-
-      // Use Puppeteer to convert HTML to PDF
-      let browser;
-      try {
-        console.log('📦 Launching Puppeteer browser...');
-        browser = await puppeteer.launch({
-          headless: 'new',
-          args: ['--no-sandbox', '--disable-setuid-sandbox']
-        });
-
-        const page = await browser.newPage();
-        await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
-
-        const pdfBuffer = await page.pdf({
-          format: 'A4',
-          margin: {
-            top: '20mm',
-            right: '20mm',
-            bottom: '20mm',
-            left: '20mm'
-          },
-          printBackground: true
-        });
-
-        await browser.close();
-
-        console.log('✅ PDF generated from HTML, size:', pdfBuffer.length, 'bytes');
-        return pdfBuffer;
-      } catch (puppeteerError) {
-        console.warn('⚠️ Puppeteer error, falling back to PDFKit:', puppeteerError.message);
-        if (browser) {
-          try {
-            await browser.close();
-          } catch (e) {
-            console.warn('Error closing browser:', e.message);
-          }
-        }
-        // Fallback to PDFKit if Puppeteer fails (e.g., Chrome not installed)
-        console.log('🔄 Falling back to PDFKit generation...');
-        return await this.generateInvoicePDF(invoice, companyInfo);
-      }
-    } catch (error) {
-      console.error('❌ PDF generation error:', error.message);
-      throw new Error('Failed to generate PDF: ' + error.message);
-    }
+    return this.generateInvoicePDF(invoice, companyInfo);
   }
 
   static async generatePurchaseBillPDFFromHTML(bill, companyInfo) {
@@ -65,7 +19,7 @@ class PDFService {
       let browser;
       try {
         browser = await puppeteer.launch({
-          headless: 'new',
+          headless: true,
           args: ['--no-sandbox', '--disable-setuid-sandbox']
         });
 
@@ -80,7 +34,7 @@ class PDFService {
 
         await browser.close();
         console.log('✅ Purchase bill PDF generated, size:', pdfBuffer.length, 'bytes');
-        return pdfBuffer;
+        return Buffer.from(pdfBuffer);
       } catch (puppeteerError) {
         console.warn('⚠️ Puppeteer error for purchase bill:', puppeteerError.message);
         if (browser) {
@@ -506,6 +460,13 @@ class PDFService {
     const customerPhone = quotation.customer_id?.phone ? this.formatPhone(quotation.customer_id.phone) : '';
     const amountInWords = this.numberToWords(Math.floor(quotation.total_amount || 0));
 
+    const isInterState = quotation.is_interstate;
+    // Derived the same way as the invoice, so an identical order shows an
+    // identical tax breakdown on both documents.
+    const gstRate = (quotation.tax_amount || 0) > 0 && (quotation.subtotal || 0) > 0
+      ? (quotation.tax_amount / quotation.subtotal * 100).toFixed(0)
+      : 0;
+
     const itemsRows = quotation.items.map((item, index) => {
       return `
       <tr>
@@ -520,8 +481,11 @@ class PDFService {
       </tr>`;
     }).join('');
 
-    const gstRow = quotation.gst_type === 'gst' && (quotation.tax_amount || 0) > 0
-      ? `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>GST</span><span>₹ ${(quotation.tax_amount || 0).toFixed(2)}</span></div>`
+    const gstBreakdown = quotation.gst_type === 'gst' && Number(gstRate) > 0
+      ? (isInterState
+          ? `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>IGST @ ${gstRate}%</span><span>₹ ${(quotation.tax_amount || 0).toFixed(2)}</span></div>`
+          : `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>CGST @ ${(gstRate / 2).toFixed(0)}%</span><span>₹ ${((quotation.tax_amount || 0) / 2).toFixed(2)}</span></div>
+             <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>SGST @ ${(gstRate / 2).toFixed(0)}%</span><span>₹ ${((quotation.tax_amount || 0) / 2).toFixed(2)}</span></div>`)
       : '';
 
     const addressLines = (companyInfo.address || '').split(',').map(s => s.trim()).filter(Boolean).join('<br>');
@@ -551,6 +515,7 @@ class PDFService {
           ${companyInfo.email ? `<div style="font-size:9pt;color:#555;margin-top:2px;">Email: ${companyInfo.email}</div>` : ''}
           ${companyInfo.phone ? `<div style="font-size:9pt;color:#555;margin-top:2px;">Mobile: ${companyPhone}</div>` : ''}
           ${companyInfo.gstNumber ? `<div style="font-size:9pt;color:#555;margin-top:2px;">GSTIN: ${companyInfo.gstNumber}</div>` : ''}
+          ${companyInfo.panNumber ? `<div style="font-size:9pt;color:#555;margin-top:2px;">PAN: ${companyInfo.panNumber}</div>` : ''}
         </div>
       </td>
       <td style="vertical-align:top;text-align:right;">
@@ -582,10 +547,10 @@ class PDFService {
         ${quotation.customer_id?.address ? `<div style="font-size:9pt;color:#555;">${quotation.customer_id.address}</div>` : ''}
       </td>
       <td style="width:33%;vertical-align:top;padding-left:12px;border-left:1px solid #e5e5e5;">
-        <div style="font-weight:700;font-size:10pt;margin-bottom:5px;">GST Type</div>
-        <div style="font-size:9.5pt;font-weight:600;">${quotation.gst_type === 'gst' ? 'GST Invoice' : 'Non-GST'}</div>
-        ${quotation.is_interstate ? `<div style="font-size:9pt;color:#555;">Inter-State Supply</div>` : ''}
-        ${quotation.notes ? `<div style="font-size:9pt;color:#888;margin-top:6px;">${quotation.notes}</div>` : ''}
+        <div style="font-weight:700;font-size:10pt;margin-bottom:5px;">Shipping Address</div>
+        <div style="font-weight:600;font-size:9.5pt;">${quotation.customer_id?.name || ''}</div>
+        ${quotation.customer_id?.address ? `<div style="font-size:9pt;color:#555;">${quotation.customer_id.address}</div>` : ''}
+        ${quotation.notes ? `<div style="font-size:9pt;color:#888;margin-top:4px;">${quotation.notes}</div>` : ''}
       </td>
     </tr>
   </table>
@@ -606,15 +571,20 @@ class PDFService {
     </tbody>
   </table>
 
-  <!-- TOTALS -->
+  <!-- BANK DETAILS + TOTALS -->
   <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">
     <tr>
-      <td style="vertical-align:top;">
-        ${quotation.payment_link ? `<div style="font-size:9pt;color:#555;"><strong>Payment Link:</strong> <a href="${quotation.payment_link}" style="color:#8b2fc9;">${quotation.payment_link}</a></div>` : ''}
+      <td style="vertical-align:top;padding-right:20px;">
+        ${companyInfo.bankName ? `<div style="font-size:9.5pt;margin:3px 0;"><span style="color:#555;display:inline-block;min-width:128px;">Bank Name:</span> <strong>${companyInfo.bankName}</strong></div>` : ''}
+        ${companyInfo.accountName ? `<div style="font-size:9.5pt;margin:3px 0;"><span style="color:#555;display:inline-block;min-width:128px;">Account Name:</span> ${companyInfo.accountName}</div>` : ''}
+        ${companyInfo.accountNumber ? `<div style="font-size:9.5pt;margin:3px 0;"><span style="color:#555;display:inline-block;min-width:128px;">Account Number:</span> ${companyInfo.accountNumber}</div>` : ''}
+        ${companyInfo.ifscCode ? `<div style="font-size:9.5pt;margin:3px 0;"><span style="color:#555;display:inline-block;min-width:128px;">IFSC Code:</span> ${companyInfo.ifscCode}</div>` : ''}
+        ${companyInfo.upiId ? `<div style="font-size:9.5pt;margin:3px 0;"><span style="color:#555;display:inline-block;min-width:128px;">UPI ID:</span> ${companyInfo.upiId}</div>` : ''}
+        ${quotation.payment_link ? `<div style="font-size:9pt;color:#555;margin-top:6px;"><strong>Payment Link:</strong> <a href="${quotation.payment_link}" style="color:#8b2fc9;">${quotation.payment_link}</a></div>` : ''}
       </td>
       <td style="vertical-align:top;text-align:right;white-space:nowrap;min-width:210px;">
         <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>Taxable</span><span>₹ ${(quotation.subtotal || 0).toFixed(2)}</span></div>
-        ${gstRow}
+        ${gstBreakdown}
         <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:11pt;font-weight:700;border-top:1px solid #ccc;margin-top:4px;"><span>Total</span><span>₹ ${(quotation.total_amount || 0).toFixed(2)}</span></div>
       </td>
     </tr>
@@ -637,7 +607,7 @@ class PDFService {
       </td>
       <td style="vertical-align:top;text-align:right;min-width:210px;">
         <div style="font-weight:700;font-size:10pt;">For ${companyInfo.name || 'Company'}</div>
-        <div style="height:55px;"></div>
+        ${companyInfo.paymentQRCode ? `<img src="${companyInfo.paymentQRCode}" style="width:80px;height:80px;margin:8px 0;" alt="QR">` : '<div style="height:55px;"></div>'}
         <div style="font-size:9.5pt;color:#555;">Authorised Signatory</div>
       </td>
     </tr>
@@ -648,22 +618,9 @@ class PDFService {
 </html>`;
   }
 
+  // Same shared PDFKit layout as the invoice — see generateInvoicePDFFromHTML.
   static async generateQuotationPDFFromHTML(quotation, companyInfo) {
-    const htmlContent = this.generateQuotationHTML(quotation, companyInfo);
-    let browser;
-    try {
-      browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox', '--disable-setuid-sandbox'] });
-      const page = await browser.newPage();
-      await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
-      const pdfBuffer = await page.pdf({ format: 'A4', margin: { top: '10mm', right: '10mm', bottom: '10mm', left: '10mm' }, printBackground: true });
-      await browser.close();
-      return pdfBuffer;
-    } catch (err) {
-      console.warn('⚠️ Puppeteer error for quotation, falling back to PDFKit:', err.message);
-      if (browser) { try { await browser.close(); } catch (e) {} }
-      // Fallback to PDFKit if Puppeteer/Chrome is unavailable
-      return await this.generateQuotationPDF(quotation, companyInfo);
-    }
+    return this.generateQuotationPDF(quotation, companyInfo);
   }
 
   static async generateQuotationPDF(quotation, companyInfo) {
@@ -1713,23 +1670,7 @@ class PDFService {
 
   static async sendInvoiceEmail(invoiceBuffer, recipientEmail, invoiceName, customMessage = null) {
     try {
-      // Validate email credentials
-      if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-        throw new Error('Email credentials not configured. Please set EMAIL_USER and EMAIL_PASS in .env file');
-      }
-
-      const transporter = nodemailer.createTransport({
-        host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-        port: parseInt(process.env.EMAIL_PORT) || 587,
-        secure: false,
-        auth: {
-          user: process.env.EMAIL_USER,
-          pass: process.env.EMAIL_PASS
-        },
-        tls: {
-          rejectUnauthorized: false
-        }
-      });
+      const transporter = createTransporter();
 
       // Use custom message if provided, otherwise use default
       const emailBody = customMessage

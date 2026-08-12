@@ -5,7 +5,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Building2, Eye, EyeOff, Shield, Users, BarChart3 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Building2, Eye, EyeOff, Shield, Users, BarChart3, AlertCircle, UserCheck } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { OTPVerification } from "@/components/auth/OTPVerification";
 import { BASE_URL } from "@/lib/apiClient";
@@ -15,6 +23,12 @@ export default function Auth() {
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showOTPVerification, setShowOTPVerification] = useState(false);
+  const [activeTab, setActiveTab] = useState("signin");
+  // Signup failures are shown in a dialog. `existingAccount` gets its own
+  // treatment because the fix is an action (sign in), not just a message.
+  const [signUpError, setSignUpError] = useState<
+    { kind: "existingAccount" | "generic"; message: string } | null
+  >(null);
   const [formData, setFormData] = useState({
     email: "",
     password: "",
@@ -57,15 +71,38 @@ export default function Auth() {
 
       if (response.ok) {
         setShowOTPVerification(true);
+      } else if (response.status === 409) {
+        setSignUpError({
+          kind: "existingAccount",
+          message: data.message || 'An account already exists with this email.',
+        });
       } else {
-        // Show error message from server
-        alert(data.message || 'Failed to send OTP');
+        setSignUpError({
+          kind: "generic",
+          message: data.message || 'Failed to send OTP. Please try again.',
+        });
       }
     } catch (error) {
-      alert('An error occurred. Please try again.');
+      setSignUpError({
+        kind: "generic",
+        message: 'We could not reach the server. Please check your connection and try again.',
+      });
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // Carry the email over to the Sign In tab so the user only types a password.
+  const handleGoToSignIn = () => {
+    setSignUpError(null);
+    setFormData((prev) => ({ ...prev, password: "" }));
+    setActiveTab("signin");
+  };
+
+  const handleUseDifferentEmail = () => {
+    setSignUpError(null);
+    setFormData((prev) => ({ ...prev, email: "" }));
+    document.getElementById("signup-email")?.focus();
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -181,7 +218,7 @@ export default function Auth() {
                   </p>
                 </CardHeader>
                 <CardContent className="px-6 md:px-8 pb-8 md:pb-10">
-                  <Tabs defaultValue="signin" className="w-full">
+                  <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
                     <TabsList className="grid w-full grid-cols-2 mb-6 md:mb-8 bg-gradient-to-r from-orange-50 to-orange-100/50 backdrop-blur-xl p-1 rounded-2xl border border-orange-200/50 shadow-sm">
                       <TabsTrigger
                         value="signin"
@@ -386,6 +423,66 @@ export default function Auth() {
             </Card>
           </div>
         </div>
+
+        {/* Sign-up error dialog */}
+        <Dialog open={!!signUpError} onOpenChange={(open) => !open && setSignUpError(null)}>
+          <DialogContent className="sm:max-w-md rounded-2xl border-2 border-orange-100">
+            <DialogHeader className="space-y-4">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-orange-100">
+                {signUpError?.kind === "existingAccount" ? (
+                  <UserCheck className="h-7 w-7 text-orange-600" />
+                ) : (
+                  <AlertCircle className="h-7 w-7 text-orange-600" />
+                )}
+              </div>
+              <DialogTitle className="text-center text-xl font-bold text-gray-900">
+                {signUpError?.kind === "existingAccount"
+                  ? "Account already exists"
+                  : "Sign up failed"}
+              </DialogTitle>
+              <DialogDescription className="text-center text-base text-gray-600">
+                {signUpError?.kind === "existingAccount" ? (
+                  <>
+                    <span className="font-semibold text-gray-900">{formData.email}</span> is already
+                    registered. Please sign in with this account instead.
+                  </>
+                ) : (
+                  signUpError?.message
+                )}
+              </DialogDescription>
+            </DialogHeader>
+
+            <DialogFooter className="mt-2 gap-2 sm:gap-3">
+              {signUpError?.kind === "existingAccount" ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleUseDifferentEmail}
+                    className="h-12 flex-1 rounded-xl border-2 border-gray-200 text-gray-700 font-semibold hover:bg-gray-50"
+                  >
+                    Use another email
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={handleGoToSignIn}
+                    className="h-12 flex-1 rounded-xl bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 font-semibold text-white shadow-lg shadow-orange-500/30"
+                  >
+                    Sign in instead
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  type="button"
+                  onClick={() => setSignUpError(null)}
+                  className="h-12 w-full rounded-xl bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 font-semibold text-white shadow-lg shadow-orange-500/30"
+                >
+                  Try again
+                </Button>
+              )}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Footer */}
         <div className="relative z-10 pt-6 md:pt-8 pb-4 px-4">

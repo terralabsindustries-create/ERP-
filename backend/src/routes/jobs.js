@@ -3,6 +3,7 @@ const { body, query } = require('express-validator');
 const Job = require('../models/Job');
 const Customer = require('../models/Customer');
 const { protect } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/requirePermission');
 
 const router = express.Router();
 
@@ -219,7 +220,7 @@ router.get('/:id', protect, async (req, res) => {
 // @route   POST /api/jobs
 // @desc    Create new job
 // @access  Private
-router.post('/', protect, jobValidation, async (req, res) => {
+router.post('/', protect, requirePermission('Jobs: Create & Edit'), jobValidation, async (req, res) => {
   try {
     // Verify customer exists and belongs to the authenticated user's dataScope or userId
     const customerQuery = req.user.dataScope
@@ -283,7 +284,7 @@ router.post('/', protect, jobValidation, async (req, res) => {
 // @route   PUT /api/jobs/:id
 // @desc    Update job
 // @access  Private
-router.put('/:id', protect, jobValidation, async (req, res) => {
+router.put('/:id', protect, requirePermission('Jobs: Create & Edit'), jobValidation, async (req, res) => {
   try {
     const findQuery = req.user.dataScope
       ? { _id: req.params.id, dataScope: req.user.dataScope }
@@ -361,7 +362,7 @@ router.put('/:id', protect, jobValidation, async (req, res) => {
 // @route   DELETE /api/jobs/:id
 // @desc    Delete job (hard delete)
 // @access  Private
-router.delete('/:id', protect, async (req, res) => {
+router.delete('/:id', protect, requirePermission('Jobs: Delete'), async (req, res) => {
   try {
     const findQuery = req.user.dataScope
       ? { _id: req.params.id, dataScope: req.user.dataScope }
@@ -395,7 +396,7 @@ router.delete('/:id', protect, async (req, res) => {
 // @route   POST /api/jobs/:id/update-status
 // @desc    Update job status
 // @access  Private
-router.post('/:id/update-status', protect, [
+router.post('/:id/update-status', protect, requirePermission('Jobs: Change Status'), [
   body('status').isIn([
     'inquiry', 'quotation_sent', 'quotation_approved', 'design_in_progress',
     'design_approved', 'production_ready', 'ready_for_print', 'quality_check',

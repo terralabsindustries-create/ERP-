@@ -2,6 +2,7 @@ const express = require('express');
 const { body, query } = require('express-validator');
 const Vendor = require('../models/Vendor');
 const { protect } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/requirePermission');
 
 const router = express.Router();
 
@@ -173,7 +174,7 @@ router.get('/:id', protect, async (req, res) => {
 // @route   POST /api/vendors
 // @desc    Create new vendor
 // @access  Private
-router.post('/', protect, vendorValidation, async (req, res) => {
+router.post('/', protect, requirePermission('Vendors: Create & Edit'), vendorValidation, async (req, res) => {
   try {
     const vendorData = {
       ...req.body,
@@ -202,7 +203,7 @@ router.post('/', protect, vendorValidation, async (req, res) => {
 // @route   PUT /api/vendors/:id
 // @desc    Update vendor
 // @access  Private
-router.put('/:id', protect, vendorValidation, async (req, res) => {
+router.put('/:id', protect, requirePermission('Vendors: Create & Edit'), vendorValidation, async (req, res) => {
   try {
     const vendor = await Vendor.findOneAndUpdate(
       { _id: req.params.id },
@@ -237,7 +238,7 @@ router.put('/:id', protect, vendorValidation, async (req, res) => {
 // @route   DELETE /api/vendors/:id
 // @desc    Delete vendor
 // @access  Private
-router.delete('/:id', protect, async (req, res) => {
+router.delete('/:id', protect, requirePermission('Vendors: Delete'), async (req, res) => {
   try {
     const vendor = await Vendor.findOneAndDelete({
       _id: req.params.id,

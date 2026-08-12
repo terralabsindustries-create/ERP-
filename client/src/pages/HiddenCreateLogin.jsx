@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Eye, EyeOff, Users, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Mail, Users, Loader2 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 
 // Move permissionsList OUTSIDE the component to prevent recreation on every render
@@ -42,12 +42,10 @@ export default function HiddenCreateLogin() {
   const [formData, setFormData] = useState({
     role: "",
     email: "",
-    password: "",
     fullName: "",
   });
 
   const [permissions, setPermissions] = useState([]);
-  const [showPassword, setShowPassword] = useState(false);
   const [message, setMessage] = useState({ type: "", text: "" });
   const [isLoading, setIsLoading] = useState(false);
 
@@ -111,14 +109,8 @@ export default function HiddenCreateLogin() {
     setIsLoading(true);
 
     // Validation
-    if (!formData.role || !formData.email || !formData.password || !formData.fullName) {
+    if (!formData.role || !formData.email || !formData.fullName) {
       setMessage({ type: "error", text: "Please fill in all required fields." });
-      setIsLoading(false);
-      return;
-    }
-
-    if (formData.password.length < 6) {
-      setMessage({ type: "error", text: "Password must be at least 6 characters." });
       setIsLoading(false);
       return;
     }
@@ -135,7 +127,6 @@ export default function HiddenCreateLogin() {
       const userData = {
         role: formData.role,
         email: formData.email.toLowerCase().trim(),
-        password: formData.password,
         fullName: formData.fullName.trim(),
         permissions: permissions,
         isActive: true,
@@ -154,7 +145,7 @@ export default function HiddenCreateLogin() {
         : `${permissions.length} permissions`;
       setMessage({
         type: "success",
-        text: `✓ Login created successfully for ${formData.email} with ${formData.role} role and ${permissionText}. User saved to database.`,
+        text: `✓ Invitation sent to ${formData.email} for the ${formData.role} role with ${permissionText}. They will set their own password from the link in that email.`,
       });
 
       // Reset form after 2 seconds
@@ -183,10 +174,9 @@ export default function HiddenCreateLogin() {
   };
 
   const handleReset = () => {
-    setFormData({ role: "", email: "", password: "", fullName: "" });
+    setFormData({ role: "", email: "", fullName: "" });
     setPermissions([]);
     setMessage({ type: "", text: "" });
-    setShowPassword(false);
   };
 
   return (
@@ -233,7 +223,6 @@ export default function HiddenCreateLogin() {
                       <SelectValue placeholder="Select a role" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="admin">Admin - Full Access</SelectItem>
                       <SelectItem value="manager">Manager - Custom Permissions</SelectItem>
                       <SelectItem value="staff">Staff - Custom Permissions</SelectItem>
                     </SelectContent>
@@ -255,35 +244,12 @@ export default function HiddenCreateLogin() {
                   />
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="password" className="font-semibold">
-                    Password <span className="text-destructive">*</span>
-                  </Label>
-                  <div className="relative">
-                    <Input
-                      id="password"
-                      name="password"
-                      type={showPassword ? "text" : "password"}
-                      placeholder="Enter secure password"
-                      value={formData.password}
-                      onChange={handleInputChange}
-                      required
-                      minLength={6}
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
-                      onClick={() => setShowPassword(!showPassword)}
-                    >
-                      {showPassword ? (
-                        <EyeOff className="h-4 w-4 text-muted-foreground" />
-                      ) : (
-                        <Eye className="h-4 w-4 text-muted-foreground" />
-                      )}
-                    </Button>
-                  </div>
+                <div className="flex gap-3 rounded-lg border border-primary/30 bg-primary/5 p-4">
+                  <Mail className="h-5 w-5 shrink-0 text-primary" />
+                  <p className="text-xs text-muted-foreground">
+                    No password is set here. We email a one-time invitation link that expires in
+                    24 hours; the account activates once they choose their own password.
+                  </p>
                 </div>
               </div>
 

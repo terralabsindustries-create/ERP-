@@ -3,6 +3,7 @@ const { body, validationResult } = require('express-validator');
 const Employee = require('../models/Employee');
 const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/requirePermission');
 
 const router = express.Router();
 router.use(protect);
@@ -78,7 +79,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // POST /api/hr/employees
-router.post('/', [
+router.post('/', requirePermission('Human Resources: Create & Edit'), [
   body('name').notEmpty().withMessage('Employee name is required').trim(),
   body('email').optional({ checkFalsy: true }).isEmail().withMessage('Valid email required')
 ], async (req, res) => {
@@ -117,7 +118,7 @@ router.post('/', [
 });
 
 // PUT /api/hr/employees/:id
-router.put('/:id', async (req, res) => {
+router.put('/:id', requirePermission('Human Resources: Create & Edit'), async (req, res) => {
   try {
     const data = { ...req.body };
     delete data._id;
@@ -143,7 +144,7 @@ router.put('/:id', async (req, res) => {
 });
 
 // DELETE /api/hr/employees/:id
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requirePermission('Human Resources: Delete'), async (req, res) => {
   try {
     const employee = await Employee.findOneAndDelete(scopeFilter(req, { _id: req.params.id }));
     if (!employee) return res.status(404).json({ status: 'error', message: 'Employee not found' });

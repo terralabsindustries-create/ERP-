@@ -4,6 +4,7 @@ const AccountTransaction = require('../models/AccountTransaction');
 const AccountBalance = require('../models/AccountBalance');
 const Cheque = require('../models/Cheque');
 const { protect } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/requirePermission');
 
 const router = express.Router();
 
@@ -227,7 +228,7 @@ router.get('/cheques', protect, [
 // @route   POST /api/accounts/transactions
 // @desc    Create new account transaction
 // @access  Private
-router.post('/transactions', protect, transactionValidation, async (req, res) => {
+router.post('/transactions', protect, requirePermission('Accounts: Create & Edit'), transactionValidation, async (req, res) => {
   try {
     // Check for validation errors
     const { validationResult } = require('express-validator');
@@ -316,7 +317,7 @@ router.post('/transactions', protect, transactionValidation, async (req, res) =>
 // @route   PUT /api/accounts/transactions/:id
 // @desc    Update account transaction
 // @access  Private
-router.put('/transactions/:id', protect, transactionValidation, async (req, res) => {
+router.put('/transactions/:id', protect, requirePermission('Accounts: Create & Edit'), transactionValidation, async (req, res) => {
   try {
     const transaction = await AccountTransaction.findOneAndUpdate(
       { _id: req.params.id, userId: req.user._id },
@@ -358,7 +359,7 @@ router.put('/transactions/:id', protect, transactionValidation, async (req, res)
 // @route   DELETE /api/accounts/transactions/:id
 // @desc    Delete account transaction
 // @access  Private
-router.delete('/transactions/:id', protect, async (req, res) => {
+router.delete('/transactions/:id', protect, requirePermission('Accounts: Delete'), async (req, res) => {
   try {
     const transaction = await AccountTransaction.findOneAndDelete({
       _id: req.params.id,

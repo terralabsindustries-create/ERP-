@@ -40,9 +40,22 @@ const quotationSchema = new mongoose.Schema({
   total_amount: { type: Number, default: 0 },
   status: {
     type: String,
-    enum: ['draft', 'sent', 'approved', 'rejected'],
+    // draft/sent/approved/rejected are the working lifecycle.
+    // expired  - validity date passed without a decision
+    // converted- an invoice was raised from this quotation (terminal)
+    // closed   - manually closed off, no further action (terminal)
+    enum: ['draft', 'sent', 'approved', 'rejected', 'expired', 'converted', 'closed'],
     default: 'draft'
   },
+
+  // Set when the quotation is turned into an invoice.
+  convertedInvoiceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Invoice'
+  },
+  convertedInvoiceNumber: { type: String, trim: true },
+  convertedAt: { type: Date },
+
   payment_link: { type: String, trim: true },
   terms_conditions: { type: String, trim: true },
   notes: { type: String, trim: true },
@@ -77,10 +90,18 @@ quotationSchema.statics.generateQuotationNumber = async function(userId, dataSco
   let seq = count + 1;
   let quotationNumber = `QUO-${year}${month}-${String(seq).padStart(4, '0')}`;
 
-  const existingQuery = dataScope ? { dataScope, quotationNumber } : { userId, quotationNumber };
-  while (await this.findOne(existingQuery)) {
+  // Rebuild the query each pass — reusing one object would keep testing the
+  // first number forever and spin here indefinitely.
+  const scope = dataScope ? { dataScope } : { userId };
+  const MAX_ATTEMPTS = 10000;
+  let attempts = 0;
+
+  while (await this.findOne({ ...scope, quotationNumber })) {
     seq++;
     quotationNumber = `QUO-${year}${month}-${String(seq).padStart(4, '0')}`;
+    if (++attempts >= MAX_ATTEMPTS) {
+      throw new Error(`Could not allocate a unique quotation number after ${MAX_ATTEMPTS} attempts`);
+    }
   }
 
   return quotationNumber;

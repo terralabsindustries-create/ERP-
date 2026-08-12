@@ -317,22 +317,34 @@ invoiceSchema.set('toObject', { virtuals: true });
 invoiceSchema.pre('save', function(next) {
   // Calculate subtotal from items
   this.subtotal = this.items.reduce((sum, item) => sum + item.totalAmount, 0);
-  
-  // For No GST invoices, taxable amount equals subtotal minus discount
+
   this.taxableAmount = this.subtotal - this.discountAmount;
-  
-  // Set all GST amounts to 0 for No GST invoices
-  this.totalCgstAmount = 0;
-  this.totalSgstAmount = 0;
-  this.totalIgstAmount = 0;
-  this.totalGstAmount = 0;
-  
-  // Calculate total amount (no GST)
-  this.totalAmount = this.taxableAmount;
-  
+
+  if (this.noGst) {
+    // No-GST invoice: zero out every tax figure and total the taxable amount.
+    this.totalCgstAmount = 0;
+    this.totalSgstAmount = 0;
+    this.totalIgstAmount = 0;
+    this.totalGstAmount = 0;
+    this.totalAmount = this.taxableAmount;
+  } else {
+    // GST invoice: roll the per-item tax up to the header. Interstate invoices
+    // carry IGST only; intrastate splits the same tax into CGST + SGST.
+    const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const sum = (field) => this.items.reduce((t, item) => t + (item[field] || 0), 0);
+
+    this.totalCgstAmount = round2(sum('cgstAmount'));
+    this.totalSgstAmount = round2(sum('sgstAmount'));
+    this.totalIgstAmount = round2(sum('igstAmount'));
+    this.totalGstAmount = round2(
+      this.totalCgstAmount + this.totalSgstAmount + this.totalIgstAmount
+    );
+    this.totalAmount = round2(this.taxableAmount + this.totalGstAmount);
+  }
+
   // Calculate balance amount
   this.balanceAmount = this.totalAmount - this.paidAmount;
-  
+
   next();
 });
 
@@ -357,14 +369,22 @@ invoiceSchema.statics.generateInvoiceNumber = async function(userId, dataScope) 
   let sequenceNumber = count + 1;
   let invoiceNumber = `INV-${year}${month}-${String(sequenceNumber).padStart(4, '0')}`;
 
-  // Keep incrementing until we find a unique invoice number
-  const existingQuery = dataScope
-    ? { dataScope, invoiceNumber }
-    : { userId, invoiceNumber };
+  // Keep incrementing until we find a unique invoice number. The query has to be
+  // rebuilt each pass — reusing one object would keep testing the first number
+  // forever and spin here indefinitely.
+  const scope = dataScope ? { dataScope } : { userId };
 
-  while (await this.findOne(existingQuery)) {
+  // Bounded so a future logic slip can never hang the request thread. 10k is far
+  // beyond any real monthly volume; hitting it means something is genuinely wrong.
+  const MAX_ATTEMPTS = 10000;
+  let attempts = 0;
+
+  while (await this.findOne({ ...scope, invoiceNumber })) {
     sequenceNumber++;
     invoiceNumber = `INV-${year}${month}-${String(sequenceNumber).padStart(4, '0')}`;
+    if (++attempts >= MAX_ATTEMPTS) {
+      throw new Error(`Could not allocate a unique invoice number after ${MAX_ATTEMPTS} attempts`);
+    }
   }
 
   return invoiceNumber;

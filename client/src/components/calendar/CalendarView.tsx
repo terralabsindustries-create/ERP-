@@ -65,39 +65,71 @@ export function CalendarView({ selectedDate, onDateSelect, refreshKey }: Calenda
       return;
     }
     
-    try {
-      const staffId = (user as any).id;
-      console.log('📅 Fetching calendar events for staff:', staffId);
-      
-      // Fetch staff's assigned tasks
-      const tasksResponse: any = await apiClient.get(`/tasks/by-staff/${staffId}`);
-      console.log('📅 Raw tasks response:', tasksResponse);
-      const tasksData = tasksResponse?.data || tasksResponse || [];
-      console.log('📅 Processed tasks data:', tasksData);
-      console.log('📅 Tasks count:', tasksData.length);
-      
-      // Convert tasks to event format
-      const taskEvents = tasksData.map((task: any) => {
-        console.log('🔍 Processing calendar task:', task);
-        return {
-          id: task._id || task.id,
-          title: task.title,
-          description: task.description,
-          priority: task.priority,
-          eventType: 'task',
-          status: task.status,
-          startDate: task.dueDate || task.createdAt || new Date().toISOString(),
-          endDate: task.dueDate || task.createdAt || new Date().toISOString()
-        };
-      });
-      
-      console.log('📅 All calendar events:', taskEvents);
-      setEvents(taskEvents);
-    } catch (error) {
-      console.error("Error fetching calendar events:", error);
-      // Set empty array on error to prevent showing old data
-      setEvents([]);
+    const staffId = (user as any).id;
+
+    // Two task sources, because they scope differently:
+    //   /tasks              -> tasks this user owns (what an admin/manager sees)
+    //   /tasks/by-staff/:id -> tasks assigned to this user (what staff sees)
+    // Fetching both and merging means the calendar is correct for every role.
+    // Calendar events are a third, independent source; one failing must not
+    // blank out the others, so they all settle separately.
+    const [ownedResult, assignedResult, eventsResult] = await Promise.allSettled([
+      apiClient.getTasks(),
+      apiClient.get(`/tasks/by-staff/${staffId}`),
+      apiClient.getEvents(),
+    ]);
+
+    const toTaskList = (result: PromiseSettledResult<any>) => {
+      if (result.status !== "fulfilled") {
+        console.error("Error fetching tasks:", result.reason);
+        return [];
+      }
+      const v: any = result.value;
+      const list = v?.tasks || (Array.isArray(v?.data) ? v.data : null) || (Array.isArray(v) ? v : []);
+      return Array.isArray(list) ? list : [];
+    };
+
+    // Merge by id — a task you own and are assigned to must not appear twice.
+    const byId = new Map<string, any>();
+    [...toTaskList(ownedResult), ...toTaskList(assignedResult)].forEach((task: any) => {
+      const id = task._id || task.id;
+      if (id) byId.set(String(id), task);
+    });
+
+    const taskEvents = Array.from(byId.values()).map((task: any) => ({
+      id: task._id || task.id,
+      title: task.title,
+      description: task.description,
+      priority: task.priority,
+      eventType: "task",
+      status: task.status,
+      startDate: task.dueDate || task.createdAt || new Date().toISOString(),
+      endDate: task.dueDate || task.createdAt || new Date().toISOString(),
+    }));
+
+    const rawEvents =
+      eventsResult.status === "fulfilled"
+        ? ((eventsResult.value as any)?.events || (eventsResult.value as any) || [])
+        : [];
+
+    const calendarEvents = (Array.isArray(rawEvents) ? rawEvents : []).map((ev: any) => ({
+      id: ev._id || ev.id,
+      _id: ev._id,
+      title: ev.title,
+      description: ev.description,
+      priority: ev.priority,
+      eventType: ev.eventType || "other",
+      status: ev.status,
+      startDate: ev.startDate,
+      endDate: ev.endDate || ev.startDate,
+    }));
+
+    if (eventsResult.status === "rejected") {
+      console.error("Error fetching calendar events:", eventsResult.reason);
+      toast.error("Could not load calendar events");
     }
+
+    setEvents([...taskEvents, ...calendarEvents]);
   };
 
   useEffect(() => {
@@ -158,6 +190,11 @@ export function CalendarView({ selectedDate, onDateSelect, refreshKey }: Calenda
     
     return filteredEvents;
   };
+
+  // Items for the day the user clicked, soonest first.
+  const selectedEvents = getEventsForDate(selectedDate).sort(
+    (a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime()
+  );
 
   // Helper function to get event badge variant based on priority and status
   const getEventBadgeVariant = (event: any) => {
@@ -314,17 +351,24 @@ export function CalendarView({ selectedDate, onDateSelect, refreshKey }: Calenda
           })}
         </div>
         
-        {/* Today's Events Summary */}
+        {/* Events for the day the user clicked (defaults to today) */}
         <div className="mt-6 space-y-4">
           <div className="border-t pt-4">
-            <h3 className="text-lg font-semibold mb-3">Today's Tasks</h3>
-            {(() => {
-              const todayEvents = getEventsForDate(new Date());
-              console.log('📅 Today\'s events:', todayEvents);
-              return todayEvents.length > 0;
-            })() ? (
+            <div className="flex items-baseline justify-between mb-3">
+              <h3 className="text-lg font-semibold">
+                {isToday(selectedDate)
+                  ? "Today's Tasks"
+                  : `Tasks on ${format(selectedDate, 'EEEE, MMM d')}`}
+              </h3>
+              {selectedEvents.length > 0 && (
+                <span className="text-xs text-muted-foreground">
+                  {selectedEvents.length} {selectedEvents.length === 1 ? 'item' : 'items'}
+                </span>
+              )}
+            </div>
+            {selectedEvents.length > 0 ? (
               <div className="space-y-2">
-                {getEventsForDate(new Date()).map((event) => (
+                {selectedEvents.map((event) => (
                   <div key={event.id} className="flex items-center gap-3 p-3 bg-muted/30 rounded-lg">
                     {getEventIcon(event)}
                     <div className="flex-1">
@@ -364,7 +408,11 @@ export function CalendarView({ selectedDate, onDateSelect, refreshKey }: Calenda
                 ))}
               </div>
             ) : (
-              <p className="text-muted-foreground text-sm">No tasks due today</p>
+              <p className="text-muted-foreground text-sm">
+                {isToday(selectedDate)
+                  ? 'No tasks due today'
+                  : `Nothing scheduled for ${format(selectedDate, 'MMM d, yyyy')}`}
+              </p>
             )}
           </div>
         </div>

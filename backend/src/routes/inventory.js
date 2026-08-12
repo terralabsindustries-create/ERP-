@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const router = express.Router();
 const Inventory = require('../models/Inventory');
 const { protect } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/requirePermission');
 
 // Apply auth middleware to all routes
 router.use(protect);
@@ -331,7 +332,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // POST /api/inventory - Create new inventory item
-router.post('/', async (req, res) => {
+router.post('/', requirePermission('Inventory: Create & Edit'), async (req, res) => {
   try {
     const inventoryData = {
       ...req.body,
@@ -361,7 +362,7 @@ router.post('/', async (req, res) => {
 });
 
 // PUT /api/inventory/:id - Update inventory item
-router.put('/:id', async (req, res) => {
+router.put('/:id', requirePermission('Inventory: Create & Edit'), async (req, res) => {
   try {
     // Build query with dataScope or userId filtering
     const findQuery = req.user.dataScope
@@ -391,7 +392,7 @@ router.put('/:id', async (req, res) => {
 });
 
 // DELETE /api/inventory/:id - Delete inventory item
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requirePermission('Inventory: Delete'), async (req, res) => {
   try {
     // Build query with dataScope or userId filtering
     const findQuery = req.user.dataScope
@@ -410,7 +411,7 @@ router.delete('/:id', async (req, res) => {
 });
 
 // POST /api/inventory/:id/adjust - Adjust inventory quantity
-router.post('/:id/adjust', async (req, res) => {
+router.post('/:id/adjust', requirePermission('Inventory: Adjust Stock'), async (req, res) => {
   try {
     const { quantity, reason, notes } = req.body;
 

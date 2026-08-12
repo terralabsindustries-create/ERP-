@@ -123,8 +123,9 @@ export default function Invoices() {
 
   const fetchInvoices = async () => {
     try {
-      // Fetch only No GST invoices
-      const response = await apiClient.getInvoices({ noGst: true });
+      // Every invoice is listed here. No-GST invoices are no longer hidden —
+      // they are shown with a "No GST" badge instead.
+      const response = await apiClient.getInvoices();
       console.log('📄 Invoices response:', response);
       // Sort invoices by creation date (newest first)
       const sortedInvoices = (response.invoices || []).sort((a, b) => {
@@ -478,6 +479,11 @@ export default function Invoices() {
                       <div className="flex items-center justify-between mb-2">
                         <h3 className="text-lg font-semibold">{invoice.invoiceNumber}</h3>
                         <div className="flex items-center gap-2">
+                          {invoice.noGst && (
+                            <Badge variant="outline" className="font-medium">
+                              No GST
+                            </Badge>
+                          )}
                           <Badge
                             variant={paymentStatusConfig.variant}
                             className="cursor-pointer hover:opacity-80 transition-opacity"

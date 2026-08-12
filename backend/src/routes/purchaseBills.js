@@ -5,6 +5,7 @@ const Vendor = require('../models/Vendor');
 const Settings = require('../models/Settings');
 const PDFService = require('../services/PDFService');
 const { protect } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/requirePermission');
 
 const router = express.Router();
 
@@ -180,7 +181,7 @@ router.get('/:id', protect, async (req, res) => {
 // @route   POST /api/purchase-bills
 // @desc    Create a purchase bill
 // @access  Private
-router.post('/', protect, billValidation, async (req, res) => {
+router.post('/', protect, requirePermission('Purchase Bills: Create & Edit'), billValidation, async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -233,7 +234,7 @@ router.post('/', protect, billValidation, async (req, res) => {
 // @route   PUT /api/purchase-bills/:id
 // @desc    Update a purchase bill
 // @access  Private
-router.put('/:id', protect, async (req, res) => {
+router.put('/:id', protect, requirePermission('Purchase Bills: Create & Edit'), async (req, res) => {
   try {
     const bill = await PurchaseBill.findOne({ _id: req.params.id, userId: req.user._id });
     if (!bill) {
@@ -288,7 +289,7 @@ router.put('/:id', protect, async (req, res) => {
 // @route   DELETE /api/purchase-bills/:id
 // @desc    Delete a purchase bill
 // @access  Private
-router.delete('/:id', protect, async (req, res) => {
+router.delete('/:id', protect, requirePermission('Purchase Bills: Delete'), async (req, res) => {
   try {
     const bill = await PurchaseBill.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
     if (!bill) {

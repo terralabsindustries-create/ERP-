@@ -48,11 +48,30 @@ export function ReminderPanel({ refreshKey }: { refreshKey: number }) {
       const staffId = (user as any).id;
       console.log('🔔 Fetching reminders for staff:', staffId);
       
-      // Fetch staff's assigned tasks
-      const tasksResponse: any = await apiClient.get(`/tasks/by-staff/${staffId}`);
-      console.log('📋 Raw tasks response:', tasksResponse);
-      const tasksData = tasksResponse?.data || tasksResponse || [];
-      console.log('📋 Processed tasks data:', tasksData);
+      // Tasks come from two differently-scoped endpoints: /tasks returns what
+      // this user owns (admin/manager view), /tasks/by-staff returns what is
+      // assigned to them (staff view). Merge both so every role sees its work.
+      const [ownedRes, assignedRes] = await Promise.allSettled([
+        apiClient.getTasks(),
+        apiClient.get(`/tasks/by-staff/${staffId}`),
+      ]);
+
+      const toList = (r: PromiseSettledResult<any>) => {
+        if (r.status !== 'fulfilled') {
+          console.error('📋 Error fetching tasks:', r.reason);
+          return [];
+        }
+        const v: any = r.value;
+        const list = v?.tasks || (Array.isArray(v?.data) ? v.data : null) || (Array.isArray(v) ? v : []);
+        return Array.isArray(list) ? list : [];
+      };
+
+      const taskMap = new Map<string, any>();
+      [...toList(ownedRes), ...toList(assignedRes)].forEach((t: any) => {
+        const id = t._id || t.id;
+        if (id) taskMap.set(String(id), t);
+      });
+      const tasksData = Array.from(taskMap.values());
       
       // Fetch staff's schedule for today
       const scheduleResponse: any = await apiClient.getStaffSchedule(staffId);
@@ -115,9 +134,32 @@ export function ReminderPanel({ refreshKey }: { refreshKey: number }) {
         }];
       }
       
-      const allEvents = [...taskEvents, ...scheduleEvents];
-      console.log('🔔 All combined events:', allEvents);
-      
+      // Calendar events (reminders, meetings, deadlines) created on this page.
+      // Fetched separately so a failure here still leaves tasks and schedule.
+      let calendarEvents: any[] = [];
+      try {
+        const eventsResponse: any = await apiClient.getEvents();
+        const raw = eventsResponse?.events || eventsResponse || [];
+        calendarEvents = (Array.isArray(raw) ? raw : [])
+          .filter((ev: any) => ev.status !== 'completed' && ev.status !== 'cancelled')
+          .map((ev: any) => ({
+            id: ev._id || ev.id,
+            title: ev.title,
+            description: ev.description,
+            priority: ev.priority || 'medium',
+            eventType: ev.eventType || 'reminder',
+            status: ev.status,
+            startDate: ev.startDate,
+            endDate: ev.endDate || ev.startDate,
+          }));
+      } catch (err) {
+        console.error('🔔 Error fetching calendar events:', err);
+      }
+
+      const allEvents = [...taskEvents, ...calendarEvents, ...scheduleEvents]
+        // Soonest first, so what needs attention is at the top.
+        .sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
+
       // If no events were found, create a default schedule event for today
       if (allEvents.length === 0) {
         console.log('🔔 No events found, creating default schedule');
@@ -141,22 +183,25 @@ export function ReminderPanel({ refreshKey }: { refreshKey: number }) {
     }
   };
 
-  const markAsCompleted = async (eventId: string) => {
+  const markAsCompleted = async (eventId: string, eventType?: string) => {
     try {
       // Check if this is a task (starts with task ID format) or schedule
-      if (eventId.startsWith('schedule-')) {
+      if (eventId.startsWith('schedule-') || eventId === 'default-schedule') {
         // Schedules can't be marked as completed
         toast.info("Schedule cannot be marked as completed");
         return;
       }
-      
-      console.log('🔔 Marking task as completed:', eventId);
-      
-      // This is a task, update its status
-      const response = await apiClient.updateTaskStatus(eventId, 'completed');
-      console.log('🔔 Update response:', response);
-      
-      toast.success("Task completed");
+
+      // Tasks and calendar events live in different collections and have
+      // different status endpoints, so dispatch on where the row came from.
+      if (eventType === 'task') {
+        await apiClient.updateTaskStatus(eventId, 'completed');
+        toast.success("Task completed");
+      } else {
+        await apiClient.updateEventStatus(eventId, 'completed');
+        toast.success("Event completed");
+      }
+
       fetchReminders();
     } catch (error: any) {
       console.error("🔔 Error marking task as completed:", error);
@@ -299,7 +344,7 @@ export function ReminderPanel({ refreshKey }: { refreshKey: number }) {
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => markAsCompleted(event.id)}
+                        onClick={() => markAsCompleted(event.id, event.eventType)}
                         className="h-6 w-6 p-0 hover:bg-green-100"
                         title="Mark as completed"
                       >

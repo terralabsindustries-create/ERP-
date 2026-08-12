@@ -4,6 +4,7 @@ const Payment = require('../models/Payment');
 const Customer = require('../models/Customer');
 const Invoice = require('../models/Invoice');
 const { protect } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/requirePermission');
 
 const router = express.Router();
 
@@ -134,7 +135,7 @@ router.get('/:id', protect, async (req, res) => {
 // @route   POST /api/payments
 // @desc    Create new payment
 // @access  Private
-router.post('/', protect, paymentValidation, async (req, res) => {
+router.post('/', protect, requirePermission('Payments: Record Payment'), paymentValidation, async (req, res) => {
   try {
     // Generate payment ID
     const paymentId = `PAY-${Date.now()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
@@ -227,7 +228,7 @@ router.post('/', protect, paymentValidation, async (req, res) => {
 // @route   PUT /api/payments/:id
 // @desc    Update payment
 // @access  Private
-router.put('/:id', protect, paymentValidation, async (req, res) => {
+router.put('/:id', protect, requirePermission('Payments: Record Payment'), paymentValidation, async (req, res) => {
   try {
     const payment = await Payment.findOneAndUpdate(
       { _id: req.params.id },
@@ -264,7 +265,7 @@ router.put('/:id', protect, paymentValidation, async (req, res) => {
 // @route   DELETE /api/payments/:id
 // @desc    Delete payment
 // @access  Private
-router.delete('/:id', protect, async (req, res) => {
+router.delete('/:id', protect, requirePermission('Payments: Delete'), async (req, res) => {
   try {
     const payment = await Payment.findOneAndDelete({
       _id: req.params.id,

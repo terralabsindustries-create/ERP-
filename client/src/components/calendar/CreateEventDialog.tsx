@@ -49,7 +49,7 @@ export function CreateEventDialog({ onEventCreated, selectedDate }: CreateEventD
     title: "",
     description: "",
     priority: "medium",
-    category: "general",
+    category: "reminder",
   });
 
   const handleInputChange = (field: string, value: string) => {
@@ -97,7 +97,7 @@ export function CreateEventDialog({ onEventCreated, selectedDate }: CreateEventD
         title: "",
         description: "",
         priority: "medium",
-        category: "general",
+        category: "reminder",
       });
       
       onEventCreated?.();
@@ -200,12 +200,13 @@ export function CreateEventDialog({ onEventCreated, selectedDate }: CreateEventD
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="general">General</SelectItem>
-                <SelectItem value="deadline">Deadline</SelectItem>
+                {/* Must match the Event model's eventType enum */}
+                <SelectItem value="reminder">Reminder</SelectItem>
                 <SelectItem value="meeting">Meeting</SelectItem>
-                <SelectItem value="payment">Payment</SelectItem>
+                <SelectItem value="deadline">Deadline</SelectItem>
                 <SelectItem value="delivery">Delivery</SelectItem>
-                <SelectItem value="maintenance">Maintenance</SelectItem>
+                <SelectItem value="task">Task</SelectItem>
+                <SelectItem value="other">Other</SelectItem>
               </SelectContent>
             </Select>
           </div>

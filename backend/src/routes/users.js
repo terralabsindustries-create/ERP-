@@ -4,16 +4,39 @@ const User = require('../models/User');
 const ActivityLog = require('../models/ActivityLog');
 const { protect, authorize } = require('../middleware/auth');
 const bcrypt = require('bcryptjs');
+const { ALL_PERMISSIONS, pruneOrphanedActions } = require('../config/permissions');
+const {
+  syncEmployeeForUser,
+  syncEmployeeStatusForUser,
+  unlinkEmployeeForUser
+} = require('../utils/employeeSync');
+const {
+  createInvitationToken,
+  buildAcceptUrl,
+  getInvitationEmailTemplate,
+  INVITATION_EXPIRY_HOURS
+} = require('../utils/invitationUtils');
+const { createTransporter, getFromAddress, sendMailErrorResponse } = require('../utils/mailer');
 
 const router = express.Router();
 
-// Validation rules
+// An admin is minted by signup and owns one dataScope. Inside that scope they can
+// hand out a limited number of manager/staff logins.
+const MAX_STAFF_LOGINS = parseInt(process.env.MAX_STAFF_LOGINS, 10) || 5;
+
+// Everyone in the admin's dataScope except the admins themselves occupies a seat.
+const staffSeatQuery = (user) => ({
+  ...(user.dataScope ? { dataScope: user.dataScope } : { createdBy: user._id }),
+  role: { $ne: 'admin' }
+});
+
+// Validation rules. No password here — invited users choose their own.
 const userValidation = [
   body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
-  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
   body('fullName').notEmpty().withMessage('Full name is required').trim(),
   body('phone').optional().isMobilePhone().withMessage('Valid phone number required'),
   body('role').optional().isIn(['admin', 'manager', 'staff', 'viewer']).withMessage('Invalid role'),
+  body('department').optional().trim(),
   body('isActive').optional().isBoolean().withMessage('isActive must be boolean')
 ];
 
@@ -146,53 +169,71 @@ router.get('/:id', protect, async (req, res) => {
 });
 
 // @route   POST /api/users
-// @desc    Create new user (admin/manager)
+// @desc    Invite a new user (admin/manager). The account is created in the
+//          'invited' state and activated when the recipient sets their password.
 // @access  Private
 router.post('/', protect, authorize('admin', 'manager'), userValidation, async (req, res) => {
   try {
-    const { email, password, fullName, phone, role = 'operator', companyName, isActive = true, permissions = [] } = req.body;
+    const { email, fullName, phone, role = 'staff', department, companyName, isActive = true, permissions = [] } = req.body;
 
     // Check if user already exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
-      return res.status(400).json({
+      return res.status(409).json({
         status: 'error',
-        message: 'User with this email already exists'
+        message: 'An account already exists with this email'
       });
     }
 
-    // Admin gets all permissions automatically
-    // Staff and Manager roles use explicitly selected permissions
-    let finalPermissions = permissions || [];
-
+    // Only the signup flow mints admins. Logins created here are manager/staff.
     if (role === 'admin') {
-      // Admin has full access to everything
-      finalPermissions = [
-        'Dashboard', 'Customers', 'Jobs', 'Quotations', 'Invoicing', 'Invoicing (View No GST)', 'Calendar', 'Inventory',
-        'HSN Codes', 'SAC Codes', 'Vendors', 'Purchase Bills', 'Staff & Tasks', 'Human Resources', 'Payroll', 'Delivery', 'Emergency Orders',
-        'Cost & Profit', 'Payments', 'Accounts', 'Reports', 'Designer Timer',
-        'Discounts', 'Job Proofing', 'WhatsApp', 'Walk-In Jobs', 'Customer Portal',
-        'Activity Log', 'User Management', 'Settings'
-      ];
-    } else {
-      // Staff and Manager: use selected permissions
-      // Ensure Dashboard is always included
-      if (!finalPermissions.includes('Dashboard')) {
-        finalPermissions = ['Dashboard', ...finalPermissions];
-      }
+      return res.status(403).json({
+        status: 'error',
+        message: 'Admin accounts can only be created through signup. Choose the manager or staff role.'
+      });
     }
+
+    // Enforce the seat limit before creating anything.
+    const seatsUsed = await User.countDocuments(staffSeatQuery(req.user));
+    if (seatsUsed >= MAX_STAFF_LOGINS) {
+      return res.status(403).json({
+        status: 'error',
+        message: `Staff limit reached — an admin can create up to ${MAX_STAFF_LOGINS} staff/manager logins. Delete an existing login to free a slot.`
+      });
+    }
+
+    // Staff and Manager use explicitly selected permissions, with Dashboard always on.
+    let finalPermissions = permissions || [];
+    if (!finalPermissions.includes('Dashboard')) {
+      finalPermissions = ['Dashboard', ...finalPermissions];
+    }
+    // Drop any action whose module was not granted.
+    finalPermissions = pruneOrphanedActions(finalPermissions);
+
+    // An invitation that can't be delivered is useless, so fail before writing
+    // anything if the mail transport isn't usable.
+    const transporter = createTransporter();
+
+    const invitation = createInvitationToken();
 
     // Assign dataScope: new users inherit the creator's (admin's) dataScope
     // This ensures staff/managers created by an admin can access that admin's data
     const userData = {
       email,
-      password, // Pass plain password, pre-save hook will hash it
       fullName,
       phone,
       role,
-      companyName,
+      companyName: companyName || req.user.companyName,
       isActive,
-      permissions: finalPermissions
+      permissions: finalPermissions,
+      // No password: the invitee sets one through their one-time link.
+      status: 'invited',
+      invitation: {
+        tokenHash: invitation.tokenHash,
+        expiresAt: invitation.expiresAt,
+        invitedBy: req.user._id,
+        invitedAt: new Date()
+      }
     };
 
     // Only add dataScope if admin has one (post-migration)
@@ -200,38 +241,150 @@ router.post('/', protect, authorize('admin', 'manager'), userValidation, async (
       userData.dataScope = req.user.dataScope;
     }
 
-    // Create user - password will be hashed by pre-save hook
     const user = await User.create(userData);
+
+    // Send the invitation. If the mail bounces at this point the account would
+    // be unreachable, so roll it back and report the failure to the admin.
+    try {
+      const emailContent = getInvitationEmailTemplate({
+        fullName,
+        email,
+        role,
+        department,
+        companyName: userData.companyName || process.env.COMPANY_NAME,
+        acceptUrl: buildAcceptUrl(invitation.token)
+      });
+
+      await transporter.sendMail({
+        from: getFromAddress(userData.companyName || process.env.COMPANY_NAME || 'SerpY ERP'),
+        to: email,
+        subject: emailContent.subject,
+        html: emailContent.html,
+        text: emailContent.text
+      });
+    } catch (mailError) {
+      await User.findByIdAndDelete(user._id);
+      return sendMailErrorResponse(res, mailError, 'Send invitation');
+    }
+
+    // Mirror the new login into the HR employee directory. Never let a sync
+    // failure fail the user creation itself — the login is the primary record.
+    await syncEmployeeForUser(user, req.user, { department }).catch(err =>
+      console.error('Employee sync (create user) failed:', err.message)
+    );
 
     // Log activity
     await ActivityLog.logActivity({
-      action: 'User Created',
-      description: `New user ${fullName} (${email}) created with role ${role} and ${finalPermissions.length} permissions`,
+      action: 'User Invited',
+      description: `${fullName} (${email}) invited as ${role} with ${finalPermissions.length} permissions`,
       entityType: 'user',
       entityId: user._id,
       entityName: fullName,
       performedBy: req.user._id,
       performedByName: req.user.fullName,
       actionType: 'create',
-      userId: req.user._id,
       severity: 'medium',
       userId: req.user._id,
     });
 
     const userResponse = user.toObject();
     delete userResponse.password;
+    delete userResponse.invitation;
 
     res.status(201).json({
       status: 'success',
-      message: 'User created successfully',
-      data: { user: userResponse }
+      message: `Invitation sent to ${email}. It expires in ${INVITATION_EXPIRY_HOURS} hours.`,
+      data: {
+        user: userResponse,
+        invitationExpiresAt: invitation.expiresAt
+      }
     });
 
   } catch (error) {
     console.error('Create user error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Server error while creating user'
+      message: 'Server error while inviting user'
+    });
+  }
+});
+
+// @route   POST /api/users/:id/resend-invitation
+// @desc    Issue a fresh invitation link for a user who hasn't accepted yet
+// @access  Private/Admin/Manager
+router.post('/:id/resend-invitation', protect, authorize('admin', 'manager'), async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+
+    if (!user || (req.user.dataScope && user.dataScope !== req.user.dataScope)) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+
+    if (user.status !== 'invited') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'This user has already set up their account.'
+      });
+    }
+
+    const transporter = createTransporter();
+
+    // Any previously mailed link stops working the moment we store a new hash.
+    const invitation = createInvitationToken();
+    user.invitation = {
+      tokenHash: invitation.tokenHash,
+      expiresAt: invitation.expiresAt,
+      invitedBy: req.user._id,
+      invitedAt: new Date()
+    };
+    await user.save({ validateBeforeSave: false });
+
+    const emailContent = getInvitationEmailTemplate({
+      fullName: user.fullName,
+      email: user.email,
+      role: user.role,
+      companyName: user.companyName || req.user.companyName || process.env.COMPANY_NAME,
+      acceptUrl: buildAcceptUrl(invitation.token)
+    });
+
+    await transporter.sendMail({
+      from: getFromAddress(user.companyName || process.env.COMPANY_NAME || 'SerpY ERP'),
+      to: user.email,
+      subject: emailContent.subject,
+      html: emailContent.html,
+      text: emailContent.text
+    });
+
+    await ActivityLog.logActivity({
+      action: 'Invitation Resent',
+      description: `Invitation resent to ${user.fullName} (${user.email})`,
+      entityType: 'user',
+      entityId: user._id,
+      entityName: user.fullName,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      severity: 'low',
+      userId: req.user._id,
+    });
+
+    res.status(200).json({
+      status: 'success',
+      message: `Invitation resent to ${user.email}. It expires in ${INVITATION_EXPIRY_HOURS} hours.`,
+      data: { invitationExpiresAt: invitation.expiresAt }
+    });
+
+  } catch (error) {
+    if (error.code === 'EMAIL_NOT_CONFIGURED' || error.code === 'EAUTH') {
+      return sendMailErrorResponse(res, error, 'Resend invitation');
+    }
+    console.error('Resend invitation error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error while resending the invitation'
     });
   }
 });
@@ -269,13 +422,22 @@ router.put('/:id', protect, updateUserValidation, async (req, res) => {
       });
     }
 
+    // Closing the back door on the seat limit: a manager/staff login cannot be
+    // promoted into an admin, which would carry unlimited seats of its own.
+    if (role === 'admin' && user.role !== 'admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Users cannot be promoted to admin. Admin accounts are created through signup only.'
+      });
+    }
+
     // Check if email is being changed and if it already exists
     if (email && email !== user.email) {
       const existingUser = await User.findOne({ email });
       if (existingUser) {
-        return res.status(400).json({
+        return res.status(409).json({
           status: 'error',
-          message: 'User with this email already exists'
+          message: 'An account already exists with this email'
         });
       }
     }
@@ -292,13 +454,7 @@ router.put('/:id', protect, updateUserValidation, async (req, res) => {
         // Admin gets all permissions automatically
         // Staff and Manager roles use selected permissions
         if (role === 'admin') {
-          updateData.permissions = [
-            'Dashboard', 'Customers', 'Jobs', 'Quotations', 'Invoicing', 'Invoicing (View No GST)', 'Calendar', 'Inventory',
-            'HSN Codes', 'SAC Codes', 'Vendors', 'Purchase Bills', 'Staff & Tasks', 'Human Resources', 'Payroll', 'Delivery', 'Emergency Orders',
-            'Cost & Profit', 'Payments', 'Accounts', 'Reports', 'Designer Timer',
-            'Discounts', 'Job Proofing', 'WhatsApp', 'Walk-In Jobs', 'Customer Portal',
-            'Activity Log', 'User Management', 'Settings'
-          ];
+          updateData.permissions = [...ALL_PERMISSIONS];
         } else {
           // Staff and Manager: use selected permissions
           let finalPerms = permissions || [];
@@ -306,9 +462,25 @@ router.put('/:id', protect, updateUserValidation, async (req, res) => {
           if (!finalPerms.includes('Dashboard')) {
             finalPerms = ['Dashboard', ...finalPerms];
           }
-          updateData.permissions = finalPerms;
+          updateData.permissions = pruneOrphanedActions(finalPerms);
         }
       }
+    }
+
+    // Correcting the address of someone who hasn't accepted yet: the link that
+    // went to the old address must stop working, and the new address needs one.
+    const emailChangedForInvitee =
+      user.status === 'invited' && email && email !== user.email;
+    let reissuedInvitation = null;
+
+    if (emailChangedForInvitee) {
+      reissuedInvitation = createInvitationToken();
+      updateData.invitation = {
+        tokenHash: reissuedInvitation.tokenHash,
+        expiresAt: reissuedInvitation.expiresAt,
+        invitedBy: req.user._id,
+        invitedAt: new Date()
+      };
     }
 
     const updatedUser = await User.findByIdAndUpdate(
@@ -316,6 +488,37 @@ router.put('/:id', protect, updateUserValidation, async (req, res) => {
       updateData,
       { new: true, runValidators: true }
     ).select('-password');
+
+    let invitationNote = '';
+    if (reissuedInvitation) {
+      try {
+        const emailContent = getInvitationEmailTemplate({
+          fullName: updatedUser.fullName,
+          email: updatedUser.email,
+          role: updatedUser.role,
+          companyName: updatedUser.companyName || req.user.companyName || process.env.COMPANY_NAME,
+          acceptUrl: buildAcceptUrl(reissuedInvitation.token)
+        });
+
+        await createTransporter().sendMail({
+          from: getFromAddress(updatedUser.companyName || process.env.COMPANY_NAME || 'SerpY ERP'),
+          to: updatedUser.email,
+          subject: emailContent.subject,
+          html: emailContent.html,
+          text: emailContent.text
+        });
+        invitationNote = ' A new invitation was sent to the updated address.';
+      } catch (mailError) {
+        // The address change stands; the admin can retry with Resend invitation.
+        console.error('Invitation re-send after email change failed:', mailError.message);
+        invitationNote = ' The invitation could not be emailed — use Resend invitation to try again.';
+      }
+    }
+
+    // Keep the linked employee's identity fields in step with the login.
+    await syncEmployeeForUser(updatedUser, req.user).catch(err =>
+      console.error('Employee sync (update user) failed:', err.message)
+    );
 
     // Log activity
     await ActivityLog.logActivity({
@@ -339,7 +542,7 @@ router.put('/:id', protect, updateUserValidation, async (req, res) => {
 
     res.status(200).json({
       status: 'success',
-      message: 'User updated successfully',
+      message: `User updated successfully.${invitationNote}`,
       data: { user: updatedUser }
     });
 
@@ -447,6 +650,12 @@ router.delete('/:id', protect, authorize('admin'), async (req, res) => {
 
     await User.findByIdAndDelete(req.params.id);
 
+    // Keep the employee record (payroll/attendance history points at it) but
+    // unlink it from the deleted login and mark it inactive.
+    await unlinkEmployeeForUser(req.params.id).catch(err =>
+      console.error('Employee sync (delete user) failed:', err.message)
+    );
+
     // Log activity
     await ActivityLog.logActivity({
       action: 'User Deleted',
@@ -500,6 +709,10 @@ router.put('/:id/toggle-status', protect, authorize('admin'), async (req, res) =
     user.isActive = !user.isActive;
     await user.save();
 
+    await syncEmployeeStatusForUser(user).catch(err =>
+      console.error('Employee sync (toggle status) failed:', err.message)
+    );
+
     // Log activity
     await ActivityLog.logActivity({
       action: 'User Status Changed',
@@ -545,7 +758,8 @@ router.get('/stats/summary', protect, authorize('admin', 'manager'), async (req,
       activeUsers,
       inactiveUsers,
       usersByRole,
-      recentUsers
+      recentUsers,
+      staffSeatsUsed
     ] = await Promise.all([
       User.countDocuments(dataScopeQuery),
       User.countDocuments({ ...dataScopeQuery, isActive: true }),
@@ -558,7 +772,8 @@ router.get('/stats/summary', protect, authorize('admin', 'manager'), async (req,
       User.find(dataScopeQuery)
         .select('-password')
         .sort({ createdAt: -1 })
-        .limit(5)
+        .limit(5),
+      User.countDocuments(staffSeatQuery(req.user))
     ]);
 
     res.status(200).json({
@@ -569,7 +784,12 @@ router.get('/stats/summary', protect, authorize('admin', 'manager'), async (req,
           activeUsers,
           inactiveUsers,
           usersByRole,
-          recentUsers
+          recentUsers,
+          staffSeats: {
+            used: staffSeatsUsed,
+            limit: MAX_STAFF_LOGINS,
+            remaining: Math.max(0, MAX_STAFF_LOGINS - staffSeatsUsed)
+          }
         }
       }
     });

@@ -1,23 +1,23 @@
 import { useState } from "react";
-import { Calendar, Clock, AlertTriangle, CheckCircle } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { CalendarView } from "@/components/calendar/CalendarView";
 import { ReminderPanel } from "@/components/calendar/ReminderPanel";
+import { CreateEventDialog } from "@/components/calendar/CreateEventDialog";
 
 export default function CalendarPage() {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [refreshKey, setRefreshKey] = useState(0);
 
-  console.log('📅 CalendarPage rendered with refreshKey:', refreshKey);
+  // Bumping this re-runs the fetches in both panels.
+  const refresh = () => setRefreshKey((k) => k + 1);
 
   return (
     <div className="flex-1 space-y-6 p-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Calendar & Reminders</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Calendar &amp; Reminders</h1>
           <p className="text-muted-foreground">Centralized view of tasks, deliveries, and deadlines</p>
         </div>
+        <CreateEventDialog selectedDate={selectedDate} onEventCreated={refresh} />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-4">

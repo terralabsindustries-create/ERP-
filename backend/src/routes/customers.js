@@ -2,6 +2,7 @@ const express = require('express');
 const { body, query } = require('express-validator');
 const Customer = require('../models/Customer');
 const { protect } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/requirePermission');
 const { createDataScopeQuery } = require('../utils/dataScopeHelper');
 
 const router = express.Router();
@@ -135,7 +136,7 @@ router.get('/:id', protect, async (req, res) => {
 // @route   POST /api/customers
 // @desc    Create new customer
 // @access  Private
-router.post('/', protect, customerValidation, async (req, res) => {
+router.post('/', protect, requirePermission('Customers: Create & Edit'), customerValidation, async (req, res) => {
   try {
 
     console.log('REQUEST BODY IS WORKING', req.body)
@@ -194,7 +195,7 @@ router.post('/', protect, customerValidation, async (req, res) => {
 // @route   PUT /api/customers/:id
 // @desc    Update customer
 // @access  Private
-router.put('/:id', protect, customerValidation, async (req, res) => {
+router.put('/:id', protect, requirePermission('Customers: Create & Edit'), customerValidation, async (req, res) => {
   try {
     // Use dataScope if available, fallback to userId during migration
     const findQuery = req.user.dataScope
@@ -258,7 +259,7 @@ router.put('/:id', protect, customerValidation, async (req, res) => {
 // @route   DELETE /api/customers/:id
 // @desc    Delete customer (soft delete)
 // @access  Private
-router.delete('/:id', protect, async (req, res) => {
+router.delete('/:id', protect, requirePermission('Customers: Delete'), async (req, res) => {
   try {
     // Use dataScope if available, fallback to userId during migration
     const findQuery = req.user.dataScope

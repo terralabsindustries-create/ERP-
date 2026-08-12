@@ -19,6 +19,9 @@ interface QuotationItem {
   quantity: number;
   unit_price: number;
   tax_rate: number;
+  /** Stock on hand when the item was picked, for the availability hint. */
+  available_stock?: number;
+  unit?: string;
 }
 
 interface CreateQuotationDialogProps {
@@ -30,6 +33,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [customers, setCustomers] = useState<any[]>([]);
+  const [inventoryItems, setInventoryItems] = useState<any[]>([]);
   const [formData, setFormData] = useState({
     customer_id: "",
     valid_until: "",
@@ -59,6 +63,39 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
         variant: "destructive",
       });
     }
+  };
+
+  const fetchInventoryItems = async () => {
+    try {
+      const response = await apiClient.getInventory();
+      const data = Array.isArray(response) ? response : ((response as any)?.inventory || []);
+      setInventoryItems(data);
+    } catch (error) {
+      console.error('Error fetching inventory items:', error);
+      toast({
+        title: "Inventory unavailable",
+        description: "Could not load inventory. You can still enter items manually.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Picking an inventory item fills in its price, description and GST rate, and
+  // records the stock on hand so the row can warn when the quantity exceeds it.
+  const selectInventoryItem = (index: number, name: string) => {
+    const inv = inventoryItems.find((i) => i.name === name);
+    if (!inv) return;
+    const updated = [...items];
+    updated[index] = {
+      ...updated[index],
+      item_name: inv.name,
+      description: inv.description || updated[index].description,
+      unit_price: inv.unitCost || 0,
+      tax_rate: inv.gstRate ?? updated[index].tax_rate,
+      available_stock: inv.quantity ?? 0,
+      unit: inv.unit || 'pieces',
+    };
+    setItems(updated);
   };
 
   const addItem = () => {
@@ -129,7 +166,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild onClick={fetchCustomers}>
+      <DialogTrigger asChild onClick={() => { fetchCustomers(); fetchInventoryItems(); }}>
         {children}
       </DialogTrigger>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
@@ -237,13 +274,32 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
                   <div className="grid grid-cols-6 gap-4 items-end">
                     <div className="space-y-2">
                       <Label>Item Name</Label>
-                      <Input
-                        value={item.item_name}
-                        onChange={(e) => updateItem(index, 'item_name', e.target.value)}
-                        placeholder="Item name"
-                      />
+                      <Select value={item.item_name} onValueChange={(v) => selectInventoryItem(index, v)}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select item from inventory" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {inventoryItems.length === 0 ? (
+                            <div className="p-2 text-sm text-muted-foreground">
+                              No inventory items available
+                            </div>
+                          ) : (
+                            inventoryItems.map((invItem) => (
+                              <SelectItem key={invItem._id || invItem.id} value={invItem.name}>
+                                <div className="flex flex-col">
+                                  <span className="font-medium">{invItem.name}</span>
+                                  <span className="text-xs text-muted-foreground">
+                                    Stock: {invItem.quantity ?? 0}{invItem.unit ? ` ${invItem.unit}` : ''} | ₹{invItem.unitCost ?? 0}
+                                    {invItem.gstRate != null ? ` | GST ${invItem.gstRate}%` : ''}
+                                  </span>
+                                </div>
+                              </SelectItem>
+                            ))
+                          )}
+                        </SelectContent>
+                      </Select>
                     </div>
-                    
+
                     <div className="space-y-2">
                       <Label>Description</Label>
                       <Input
@@ -293,7 +349,24 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
                       </div>
                     </div>
                   </div>
-                  
+
+                  {item.available_stock !== undefined && (
+                    <div className="mt-2 text-xs">
+                      {item.quantity > item.available_stock ? (
+                        // A quotation does not reserve or deduct stock, so this is a
+                        // heads-up for the person quoting, not a blocker.
+                        <span className="text-amber-600 font-medium">
+                          Quoting {item.quantity} but only {item.available_stock}
+                          {item.unit ? ` ${item.unit}` : ''} in stock — you may need to restock before invoicing.
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">
+                          In stock: {item.available_stock}{item.unit ? ` ${item.unit}` : ''}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
                   {items.length > 1 && (
                     <Button
                       type="button"

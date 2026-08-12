@@ -677,6 +677,10 @@ class ApiClient {
     return this.patch(`/quotations/${id}/status`, { status });
   }
 
+  async convertQuotationToInvoice(id: string) {
+    return this.post(`/quotations/${id}/convert-to-invoice`, {});
+  }
+
   async deleteQuotation(id: string) {
     return this.delete(`/quotations/${id}`);
   }
@@ -1435,6 +1439,20 @@ class ApiClient {
 
   async createUser(data: any) {
     return this.post('/users', data);
+  }
+
+  async resendInvitation(id: string) {
+    return this.post(`/users/${id}/resend-invitation`, {});
+  }
+
+  // Invitation acceptance is public — the one-time token in the URL is the
+  // only credential, so these calls must not carry (or need) a session.
+  async getInvitation(token: string) {
+    return this.get<any>(`/auth/invitation/${token}`);
+  }
+
+  async acceptInvitation(token: string, password: string) {
+    return this.post<any>(`/auth/invitation/${token}/accept`, { password });
   }
 
   async updateUser(id: string, data: any) {

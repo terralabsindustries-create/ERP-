@@ -1,0 +1,5 @@
+allowBuilds:
+  core-js: true
+  puppeteer: true
+patchedDependencies:
+  yargs@17.7.2: patches/yargs@17.7.2.patch
