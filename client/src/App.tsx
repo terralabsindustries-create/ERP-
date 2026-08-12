@@ -60,7 +60,6 @@ const App = () => (
         <AuthProvider>
           <Routes>
             <Route path="/auth" element={<Auth />} />
-            {/* Public: the invitation token in the URL is the only credentials */}
             <Route path="/accept-invitation/:token" element={<AcceptInvitation />} />
             <Route path="/terms-and-conditions" element={<TermsAndConditions />} />
             <Route path="/privacy-policy" element={<PrivacyPolicy />} />
