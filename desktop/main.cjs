@@ -21,7 +21,6 @@ const { pathToFileURL } = require('url');
 const { resolveRequestPath } = require('./resolve-request-path.cjs');
 const { startBackend } = require('./backend-runner.cjs');
 const { checkForUpdates } = require('./updater.cjs');
-const { showSetupWindow } = require('./setup.cjs');
 
 const APP_SCHEME = 'app';
 const APP_HOST = 'serpy';
@@ -42,20 +41,17 @@ const BACKEND_DIR = app.isPackaged
   ? path.join(process.resourcesPath, 'backend')
   : path.join(__dirname, '..', 'backend');
 
-// Credentials live in the user's app-data folder, never inside the installer.
-// A checkout falls back to the backend's own .env so `npm start` just works.
+// The database is never user-configured — every installation talks to the same
+// company Atlas cluster, baked in at build time by build/embed-config.cjs and
+// bundled here as a resource. A checkout falls back to the backend's own .env
+// so `npm start` just works for development.
 const CONFIG_FILE = app.isPackaged
-  ? path.join(app.getPath('userData'), 'serpy.env')
+  ? path.join(process.resourcesPath, 'app.env')
   : path.join(BACKEND_DIR, '.env');
 
 // Set once the local server is listening; the renderer reads it through preload.
 let apiBase = null;
 let stopBackend = () => {};
-
-// The setup window closes before the main window opens, which leaves the app
-// briefly with no windows at all. Without this, `window-all-closed` would quit
-// during that gap and first-run setup could never finish on Windows or Linux.
-let mainWindowOpened = false;
 
 // Must run before the app is ready, otherwise fetch/XHR from the page is
 // treated as a non-standard scheme and blocked.
@@ -75,19 +71,15 @@ function registerAppProtocol() {
 }
 
 /**
- * Bring the backend up, asking the user for the missing configuration instead of
- * quitting when there is none. A fresh installation has no credentials by design
- * — they are never baked into the installer — so first launch always lands here.
+ * Bring the backend up. There is nothing here for an end user to configure —
+ * the database connection ships baked into the app — so failures never open a
+ * form. A packaged app with no config file is a broken build (reinstall fixes
+ * it); a live connection failure (no internet, Atlas paused) is the one case
+ * worth retrying in place rather than forcing a relaunch.
  *
- * Wrong credentials are the same situation as missing ones: the setup window is
- * shown again with the failure, rather than the app quitting and leaving the user
- * to edit a file in AppData by hand.
- *
- * @returns {Promise<object|null>} the running backend, or null if the user gave up
+ * @returns {Promise<object|null>} the running backend, or null if the user quit
  */
-async function startBackendWithSetup() {
-  let message = '';
-
+async function startBackendOrQuit() {
   for (;;) {
     try {
       return await startBackend({
@@ -97,8 +89,10 @@ async function startBackendWithSetup() {
         onLog: (line) => console.log(line)
       });
     } catch (error) {
+      const isMissingConfig = error.code === 'NO_DB_CONFIG';
+
       // A checkout reads backend/.env, which is the developer's own file — fixing
-      // it belongs in the editor, not in a setup window.
+      // it belongs in the editor, not in a dialog.
       if (!app.isPackaged) {
         dialog.showErrorBox(
           'SerpY — backend failed to start',
@@ -107,13 +101,26 @@ async function startBackendWithSetup() {
         return null;
       }
 
-      message = error.code === 'NO_DB_CONFIG'
-        ? ''
-        : `SerpY could not reach the database.\n\n${error.message}\n\nCheck the connection string, ` +
-          'and confirm this computer\'s IP is allowed under Atlas → Network Access.';
+      const message = isMissingConfig
+        ? `This build is missing its database configuration (${CONFIG_FILE} not found).\n\n` +
+          'Reinstall the latest version of SerpY, or contact support.'
+        : `SerpY could not reach the database.\n\n${error.message}\n\n` +
+          'Check your internet connection and try again.';
 
-      const configured = await showSetupWindow({ configFile: CONFIG_FILE, message });
-      if (!configured) return null;
+      // A missing bundled file will never appear on retry — only a live
+      // connection problem is worth asking the user to try again.
+      const buttons = isMissingConfig ? ['Quit'] : ['Retry', 'Quit'];
+      const { response } = await dialog.showMessageBox({
+        type: 'error',
+        title: 'SerpY — could not start',
+        message,
+        buttons,
+        defaultId: 0,
+        cancelId: buttons.length - 1
+      });
+
+      if (!isMissingConfig && response === 0) continue; // Retry
+      return null;
     }
   }
 }
@@ -204,7 +211,7 @@ if (!app.requestSingleInstanceLock()) {
 
     // Start the local server first — the window must not open against an API
     // that isn't listening yet.
-    const backend = await startBackendWithSetup();
+    const backend = await startBackendOrQuit();
     if (!backend) {
       app.quit();
       return;
@@ -217,7 +224,6 @@ if (!app.requestSingleInstanceLock()) {
     }
 
     const mainWindow = createWindow();
-    mainWindowOpened = true;
 
     // Check once the window is up, and again daily for machines left running.
     if (app.isPackaged) {
@@ -236,7 +242,6 @@ if (!app.requestSingleInstanceLock()) {
 app.on('before-quit', () => stopBackend());
 
 app.on('window-all-closed', () => {
-  if (!mainWindowOpened) return; // still in first-run setup
   if (process.platform !== 'darwin') app.quit();
 });
 

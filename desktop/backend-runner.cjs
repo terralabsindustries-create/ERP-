@@ -5,12 +5,10 @@
  * (ELECTRON_RUN_AS_NODE=1), so the target machine needs nothing installed — no
  * Node, no npm. Only MongoDB stays remote, in Atlas.
  *
- * Configuration (MONGODB_URI, JWT_SECRET, mail credentials) is NOT compiled into
- * the app. It is read from a file in the user's app-data directory so that
- * credentials are never baked into a distributable installer:
- *
- *   macOS    ~/Library/Application Support/SerpY/serpy.env
- *   Windows  %APPDATA%\SerpY\serpy.env
+ * Configuration (MONGODB_URI, JWT_SECRET, mail credentials) is the company's
+ * own — never something an end user supplies. It is baked into the installer at
+ * build time (see desktop/build/embed-config.cjs) and shipped as a bundled
+ * resource, `resources/app.env`, read by main.cjs alongside this module.
  *
  * When running from a checkout, backend/.env is used instead.
  */

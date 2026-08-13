@@ -7,10 +7,17 @@
 # Windows installers cannot be produced reliably on a Mac, so each platform is
 # built on its own runner.
 #
-# Required repository secret:
+# Required repository secrets:
 #   RELEASES_TOKEN — a GitHub personal access token with `contents: write` on
 #                    Akbarhaleel1/serpy-releases. The built-in GITHUB_TOKEN
 #                    cannot write to a different repository.
+#   MONGODB_URI    — the company's own Atlas connection string. Every install
+#                    of the app talks to this one database; it is baked into
+#                    the installer here and never entered by an end user. See
+#                    desktop/build/embed-config.cjs and desktop/README.md.
+#   JWT_SECRET     — long random string, generate once with:
+#                      node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+#   EMAIL_USER, EMAIL_PASS — optional; system mailbox for OTP/invitation email.
 name: Desktop build
 
 on:
@@ -69,6 +76,19 @@ jobs:
       - name: Build renderer
         working-directory: desktop
         run: npm run build:renderer
+
+      # Writes desktop/build/app.env, which extraResources then bundles into
+      # the installer as resources/app.env. Fails the build if the secrets
+      # below are not configured on this repository — nothing silently ships
+      # without a database to connect to.
+      - name: Embed database configuration
+        working-directory: desktop
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+        run: node build/embed-config.cjs
 
       - name: Build and publish installer
         working-directory: desktop

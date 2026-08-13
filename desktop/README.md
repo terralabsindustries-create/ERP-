@@ -80,42 +80,86 @@ The server is stopped on quit, and the app refuses to open a window until
 
 ### Configuration — read this before distributing
 
-Credentials are **not** compiled into the app. On first run the app looks for:
+SerpY desktop is a **single-database product**. Every installation — every
+shop, every machine — talks to the same company-owned Atlas cluster.
+Multi-tenancy is handled in the app layer by the `dataScope`/`userId` fields
+already on every model (see `backend/src/models/Settings.js` and the rest of
+`backend/src/models/`), not by giving each install its own database. Nobody
+running the app ever sees or types a connection string.
 
-| Platform | File |
-|---|---|
-| macOS | `~/Library/Application Support/SerpY/serpy.env` |
-| Windows | `%APPDATA%\SerpY\serpy.env` |
+The credentials are baked in at **build time**, not runtime:
 
 ```
-MONGODB_URI=mongodb+srv://user:password@cluster.mongodb.net/serpy
-JWT_SECRET=<a long random string>
-EMAIL_USER=...
-EMAIL_PASS=...
+desktop/build/embed-config.cjs
+   reads MONGODB_URI, JWT_SECRET, EMAIL_USER, EMAIL_PASS from the environment
+   → writes desktop/build/app.env (gitignored — never commit this file)
+   → package.json → build.extraResources bundles it as resources/app.env
+   → main.cjs points CONFIG_FILE at that bundled resource for a packaged app
 ```
 
-That folder name comes from `app.getName()`, which is why **`productName` must
-stay at the top level of package.json**, not only inside `build`. Electron reads
-the top-level field; with it missing the folder silently becomes `serpy-desktop`
-and no one following these docs can find it.
+In CI those four values come from repository secrets (set once, see
+`.github/workflows/desktop-build.yml`). For a manual local release build,
+export them in your shell first:
 
-If the file is missing — which is the case for every fresh installation — the app
-opens a setup window asking for the connection string, then writes the file
-itself. `JWT_SECRET` is generated there rather than typed. Bad credentials bring
-the same window back with the connection error, so a wrong paste is recoverable
-without hunting through AppData. Closing the window quits the app.
+```bash
+export MONGODB_URI='mongodb+srv://user:password@cluster.mongodb.net/serpy'
+export JWT_SECRET="$(node -e "console.log(require('crypto').randomBytes(48).toString('hex'))")"
+npm run dist:mac   # or dist:win
+```
 
-Keys already in the file are preserved when it is rewritten, so mail settings
-added by hand survive a later trip through the setup window.
+`npm run dist*` fails fast with a clear message if `MONGODB_URI` or
+`JWT_SECRET` isn't set — it will not silently ship a build with no database.
 
-Running from a checkout uses `backend/.env` instead and skips the setup window
-entirely — a developer's broken `.env` belongs in the editor, so `npm start`
-reports the error and exits.
+If the bundled `app.env` is somehow missing from a packaged app (a broken
+build, not something a shop can cause), the app shows an error dialog naming
+the problem and reinstalling is the fix — there is no setup form, because
+there is nothing an end user is meant to configure. A live connection failure
+(no internet, Atlas paused) instead offers **Retry**, since that one can clear
+on its own.
 
-**Anything you put in that file is readable by whoever runs the app.** A shared
-Atlas user in every installation means every shop holds credentials to the whole
-database. Give each installation its own Atlas user with least privilege, and
-restrict Atlas network access — or put an API in front of Atlas instead.
+Running from a checkout uses `backend/.env` instead, exactly as before — a
+developer's own `.env` is edited by hand, not baked in.
+
+**Anything shipped in `resources/app.env` is readable by whoever has the
+installed app** — it is a plaintext file inside the bundle, trivially
+extracted. Because every install shares one database, that means the Atlas
+connection string for your *entire* customer base sits inside a binary you
+hand out widely. Mitigate what you can:
+
+- Give the Atlas user used here the minimum privileges the backend actually
+  needs — not an Atlas admin credential.
+- Restrict Atlas Network Access to the ranges you expect connections from, if
+  your customers' networks allow it.
+- Be ready to rotate `MONGODB_URI` (new database user + password) and ship a
+  new release if a credential leak is ever suspected — nothing else revokes it.
+
+This is a real tradeoff of shipping a fat client against a shared cloud
+database, not a bug — accepted deliberately in exchange for never asking a
+shop to source or manage their own database.
+
+## Installing on macOS
+
+Open the `.dmg` and drag SerpY to Applications. The `-mac.zip` beside it is the
+updater's download format, not a second installer.
+
+Builds are unsigned — there is no Apple Developer certificate — so the first
+launch must be **right-click → Open → Open**. A plain double-click is refused.
+
+`build/adhoc-sign.cjs` runs after packaging and ad-hoc signs the bundle. Without
+it macOS reports *"SerpY is damaged and can't be opened"*, because electron-builder
+skips signing entirely when no certificate is found and the app is left with only
+Electron's linker signature — not valid for a bundle on Apple Silicon. "Damaged"
+is misleading; nothing is corrupt.
+
+If a copy built before that hook existed is already installed:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/SerpY.app
+codesign --force --deep --sign - /Applications/SerpY.app
+```
+
+Ad-hoc signing only makes the app openable. Getting rid of the warning entirely
+needs a Developer ID certificate and notarisation.
 
 ## Updates
 

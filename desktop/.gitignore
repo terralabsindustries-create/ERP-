@@ -1,2 +1,6 @@
 node_modules
 release
+
+# Written by build/embed-config.cjs from CI secrets right before packaging.
+# Holds the real Atlas connection string — must never be committed.
+build/app.env
