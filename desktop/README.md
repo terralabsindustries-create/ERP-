@@ -94,9 +94,23 @@ EMAIL_USER=...
 EMAIL_PASS=...
 ```
 
-If it is missing, the app shows a dialog naming the exact file to create and
-quits. Running from a checkout uses `backend/.env` instead, so `npm start`
-works with no setup.
+That folder name comes from `app.getName()`, which is why **`productName` must
+stay at the top level of package.json**, not only inside `build`. Electron reads
+the top-level field; with it missing the folder silently becomes `serpy-desktop`
+and no one following these docs can find it.
+
+If the file is missing — which is the case for every fresh installation — the app
+opens a setup window asking for the connection string, then writes the file
+itself. `JWT_SECRET` is generated there rather than typed. Bad credentials bring
+the same window back with the connection error, so a wrong paste is recoverable
+without hunting through AppData. Closing the window quits the app.
+
+Keys already in the file are preserved when it is rewritten, so mail settings
+added by hand survive a later trip through the setup window.
+
+Running from a checkout uses `backend/.env` instead and skips the setup window
+entirely — a developer's broken `.env` belongs in the editor, so `npm start`
+reports the error and exits.
 
 **Anything you put in that file is readable by whoever runs the app.** A shared
 Atlas user in every installation means every shop holds credentials to the whole

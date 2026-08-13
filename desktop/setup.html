@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+  <title>SerpY — Setup</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --fg: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --accent: #0f766e;
+      --accent-fg: #ffffff;
+      --danger-bg: #fef2f2;
+      --danger-border: #fecaca;
+      --danger-fg: #991b1b;
+      --field-bg: #ffffff;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f172a;
+        --fg: #e2e8f0;
+        --muted: #94a3b8;
+        --border: #1e293b;
+        --accent: #14b8a6;
+        --accent-fg: #04211e;
+        --danger-bg: #2a1213;
+        --danger-border: #7f1d1d;
+        --danger-fg: #fca5a5;
+        --field-bg: #111c33;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 28px 32px;
+      background: var(--bg);
+      color: var(--fg);
+      font: 14px/1.5 -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    h1 { font-size: 19px; margin: 0 0 4px; }
+    p.lede { margin: 0 0 20px; color: var(--muted); }
+    .alert {
+      background: var(--danger-bg);
+      border: 1px solid var(--danger-border);
+      color: var(--danger-fg);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 18px;
+      font-size: 13px;
+      white-space: pre-wrap;
+      user-select: text;
+    }
+    .alert:empty { display: none; }
+    label { display: block; font-weight: 600; margin-bottom: 6px; }
+    .hint { font-weight: 400; color: var(--muted); font-size: 12.5px; margin: 0 0 6px; }
+    input {
+      width: 100%;
+      padding: 9px 11px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--field-bg);
+      color: var(--fg);
+      font: inherit;
+      font-size: 13px;
+      user-select: text;
+    }
+    input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+    .field { margin-bottom: 18px; }
+    details { margin-bottom: 18px; }
+    summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+    details .field { margin-top: 14px; margin-bottom: 12px; }
+    .row { display: flex; gap: 12px; }
+    .row .field { flex: 1; }
+    footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-top: 1px solid var(--border);
+      padding-top: 16px;
+    }
+    button {
+      font: inherit;
+      font-size: 13px;
+      border-radius: 8px;
+      padding: 9px 18px;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--fg);
+    }
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-fg);
+      font-weight: 600;
+    }
+    button:disabled { opacity: .6; cursor: default; }
+    code {
+      font-family: ui-monospace, "SF Mono", Consolas, monospace;
+      font-size: 12px;
+      color: var(--muted);
+      word-break: break-all;
+      user-select: text;
+    }
+  </style>
+</head>
+<body>
+  <h1>Connect SerpY to your database</h1>
+  <p class="lede">This is asked once on this computer. The details are saved locally and are never sent anywhere except your own database.</p>
+
+  <div class="alert" id="alert"></div>
+
+  <div class="field">
+    <label for="mongoUri">MongoDB connection string</label>
+    <p class="hint">Atlas → Database → Connect → Drivers. Replace <code>&lt;password&gt;</code> with the real password.</p>
+    <input id="mongoUri" type="text" spellcheck="false" autocomplete="off"
+           placeholder="mongodb+srv://user:password@cluster.mongodb.net/serpy" />
+  </div>
+
+  <details>
+    <summary>Email settings (optional — needed for OTP and invitation emails)</summary>
+    <div class="row">
+      <div class="field">
+        <label for="emailUser">Email address</label>
+        <input id="emailUser" type="text" spellcheck="false" autocomplete="off" placeholder="you@gmail.com" />
+      </div>
+      <div class="field">
+        <label for="emailPass">App password</label>
+        <input id="emailPass" type="password" autocomplete="off" placeholder="16-character app password" />
+      </div>
+    </div>
+  </details>
+
+  <footer>
+    <button type="button" id="reveal">Show config folder</button>
+    <button type="button" id="save" class="primary">Save and start SerpY</button>
+  </footer>
+
+  <script>
+    const { data, save, revealConfigFolder } = window.serpySetup;
+    const alertBox = document.getElementById('alert');
+    const uriInput = document.getElementById('mongoUri');
+    const saveBtn = document.getElementById('save');
+
+    uriInput.value = data.mongoUri || '';
+    if (data.message) alertBox.textContent = data.message;
+    uriInput.focus();
+
+    async function submit() {
+      alertBox.textContent = '';
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Starting…';
+
+      const result = await save({
+        mongoUri: uriInput.value,
+        emailUser: document.getElementById('emailUser').value,
+        emailPass: document.getElementById('emailPass').value
+      });
+
+      // On success the main process closes this window, so only failures land here.
+      if (!result.ok) {
+        alertBox.textContent = result.error;
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save and start SerpY';
+        uriInput.focus();
+      }
+    }
+
+    saveBtn.addEventListener('click', submit);
+    document.getElementById('reveal').addEventListener('click', revealConfigFolder);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !saveBtn.disabled) submit();
+    });
+  </script>
+</body>
+</html>

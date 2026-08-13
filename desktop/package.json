@@ -2,6 +2,8 @@
   "name": "serpy-desktop",
   "version": "1.0.0",
   "private": true,
+  "//productName": "Electron prefers this over `name` for app.getName(), which decides app.getPath('userData'). Without it the config file lands in serpy-desktop/ while the docs say SerpY/.",
+  "productName": "SerpY",
   "description": "SerpY ERP desktop shell \u2014 wraps the web client, does not fork it",
   "main": "main.cjs",
   "scripts": {
@@ -29,7 +31,11 @@
       "main.cjs",
       "preload.cjs",
       "backend-runner.cjs",
-      "resolve-request-path.cjs"
+      "resolve-request-path.cjs",
+      "setup.cjs",
+      "setup-preload.cjs",
+      "setup.html",
+      "updater.cjs"
     ],
     "extraResources": [
       {
