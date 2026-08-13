@@ -98,8 +98,10 @@ const invoiceSchema = new mongoose.Schema({
   invoiceNumber: {
     type: String,
     required: [true, 'Invoice number is required'],
-    unique: true,
     trim: true
+    // Uniqueness is enforced per-tenant below, not globally — see the
+    // dataScope/userId compound indexes. A bare `unique: true` here would make
+    // it a single shared numbering sequence across every business on SerpY.
   },
   customerId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -261,14 +263,25 @@ const invoiceSchema = new mongoose.Schema({
 });
 
 // Indexes
-invoiceSchema.index({ userId: 1, invoiceNumber: 1 });
 invoiceSchema.index({ userId: 1, customerId: 1 });
 invoiceSchema.index({ userId: 1, invoiceDate: -1 });
 invoiceSchema.index({ userId: 1, status: 1 });
 invoiceSchema.index({ userId: 1, paymentStatus: 1 });
-invoiceSchema.index({ dataScope: 1, invoiceNumber: 1 });
 invoiceSchema.index({ dataScope: 1, status: 1 });
 invoiceSchema.index({ dataScope: 1, paymentStatus: 1 });
+
+// invoiceNumber only needs to be unique within one tenant, not across all of
+// them — two businesses each having their own "INV-202608-0001" is correct,
+// not a collision. Split by whether dataScope is the modern per-tenant string
+// or absent (pre-dataScope accounts, scoped by userId instead).
+invoiceSchema.index(
+  { dataScope: 1, invoiceNumber: 1 },
+  { unique: true, partialFilterExpression: { dataScope: { $type: 'string' } } }
+);
+invoiceSchema.index(
+  { userId: 1, invoiceNumber: 1 },
+  { unique: true, partialFilterExpression: { dataScope: null } }
+);
 
 // Virtual for invoice status display
 invoiceSchema.virtual('statusDisplay').get(function() {
