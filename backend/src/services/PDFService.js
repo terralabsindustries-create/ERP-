@@ -266,9 +266,16 @@ class PDFService {
     const customerPhone = invoice.customerId?.phone ? this.formatPhone(invoice.customerId.phone) : '';
 
     const isInterState = invoice.isInterState;
-    const gstRate = invoice.totalGstAmount > 0 && invoice.taxableAmount > 0
-      ? (invoice.totalGstAmount / invoice.taxableAmount * 100).toFixed(0)
-      : 0;
+
+    // Label the tax rate only when every line carries the same one. A mixed-rate
+    // invoice has no single rate, and printing a blended average would be wrong,
+    // so those show the amounts without a rate suffix.
+    const itemRates = [...new Set((invoice.items || [])
+      .filter((i) => (i.totalAmount || 0) > 0)
+      .map((i) => i.gstRate || 0))];
+    const uniformRate = itemRates.length === 1 ? itemRates[0] : null;
+    const gstRateLabel = uniformRate ? ` @ ${uniformRate}%` : '';
+    const halfRateLabel = uniformRate ? ` @ ${uniformRate / 2}%` : '';
 
     const amountInWords = this.numberToWords(Math.floor(invoice.totalAmount || 0));
     const isFullyPaid = (invoice.amountPaid || 0) >= (invoice.totalAmount || 0) && (invoice.amountPaid || 0) > 0;
@@ -288,8 +295,8 @@ class PDFService {
           ${hsnLabel ? `<div style="color:#888;font-size:8pt;margin-top:1px;">${hsnLabel}</div>` : ''}
         </td>
         <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${(item.unitPrice || 0).toFixed(2)}</td>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${(item.quantity || 0)}</td>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${((item.unitPrice || 0) * (item.quantity || 0)).toFixed(2)}</td>
+        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${(item.itemType === 'Square Feet' ? (item.totalSquareFeet || 0) : (item.quantity || 0))}</td>
+        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${(item.totalAmount || 0).toFixed(2)}</td>
       </tr>`;
     }).join('');
 
@@ -302,11 +309,11 @@ class PDFService {
         <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${(invoice.designCharge.amount || 0).toFixed(2)}</td>
       </tr>` : '';
 
-    const gstBreakdown = !invoice.noGst && Number(gstRate) > 0
+    const gstBreakdown = !invoice.noGst && (invoice.totalGstAmount || 0) > 0
       ? (isInterState
-          ? `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>IGST @ ${gstRate}%</span><span>₹ ${(invoice.totalGstAmount || 0).toFixed(2)}</span></div>`
-          : `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>CGST @ ${(gstRate / 2).toFixed(0)}%</span><span>₹ ${((invoice.totalGstAmount || 0) / 2).toFixed(2)}</span></div>
-             <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>SGST @ ${(gstRate / 2).toFixed(0)}%</span><span>₹ ${((invoice.totalGstAmount || 0) / 2).toFixed(2)}</span></div>`)
+          ? `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>IGST${gstRateLabel}</span><span>₹ ${(invoice.totalIgstAmount || invoice.totalGstAmount || 0).toFixed(2)}</span></div>`
+          : `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>CGST${halfRateLabel}</span><span>₹ ${(invoice.totalCgstAmount || 0).toFixed(2)}</span></div>
+             <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>SGST${halfRateLabel}</span><span>₹ ${(invoice.totalSgstAmount || 0).toFixed(2)}</span></div>`)
       : '';
 
     const paidRows = (invoice.amountPaid || 0) > 0 ? `

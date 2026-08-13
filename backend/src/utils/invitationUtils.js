@@ -31,7 +31,7 @@ const createInvitationToken = () => {
 };
 
 const buildAcceptUrl = (token) => {
-  const base = (process.env.FRONTEND_URL || 'https://api.serpy.in/api').replace(/\/+$/, '');
+  const base = (process.env.FRONTEND_URL || 'https://app.serpy.in').replace(/\/+$/, '');
   return `${base}/accept-invitation/${token}`;
 };
 

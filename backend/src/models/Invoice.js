@@ -315,10 +315,13 @@ invoiceSchema.set('toObject', { virtuals: true });
 
 // Pre-save middleware to calculate totals
 invoiceSchema.pre('save', function(next) {
-  // Calculate subtotal from items
-  this.subtotal = this.items.reduce((sum, item) => sum + item.totalAmount, 0);
+  const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
-  this.taxableAmount = this.subtotal - this.discountAmount;
+  // Calculate subtotal from items. Rounded at every step: repeated float sums
+  // otherwise store values like 299.96999999999997 that leak into reports.
+  this.subtotal = round2(this.items.reduce((sum, item) => sum + item.totalAmount, 0));
+
+  this.taxableAmount = round2(this.subtotal - this.discountAmount);
 
   if (this.noGst) {
     // No-GST invoice: zero out every tax figure and total the taxable amount.
@@ -330,7 +333,6 @@ invoiceSchema.pre('save', function(next) {
   } else {
     // GST invoice: roll the per-item tax up to the header. Interstate invoices
     // carry IGST only; intrastate splits the same tax into CGST + SGST.
-    const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
     const sum = (field) => this.items.reduce((t, item) => t + (item[field] || 0), 0);
 
     this.totalCgstAmount = round2(sum('cgstAmount'));
@@ -342,8 +344,9 @@ invoiceSchema.pre('save', function(next) {
     this.totalAmount = round2(this.taxableAmount + this.totalGstAmount);
   }
 
-  // Calculate balance amount
-  this.balanceAmount = this.totalAmount - this.paidAmount;
+  // Calculate balance amount. Rounded so a fully settled invoice reads exactly
+  // 0 instead of a float residue like -0.19999999999999998.
+  this.balanceAmount = round2(this.totalAmount - this.paidAmount);
 
   next();
 });

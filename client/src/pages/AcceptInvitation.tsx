@@ -14,6 +14,7 @@ import {
   ShieldAlert,
 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface Invitation {
   fullName: string;
@@ -31,6 +32,7 @@ interface Invitation {
 export default function AcceptInvitation() {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
+  const { refreshUser } = useAuth();
 
   const [invitation, setInvitation] = useState<Invitation | null>(null);
   const [isValidating, setIsValidating] = useState(true);
@@ -42,6 +44,10 @@ export default function AcceptInvitation() {
   const [formError, setFormError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDone, setIsDone] = useState(false);
+  // Accepting signs them in, so the button leads to the dashboard. If no token
+  // comes back we fall back to sending them to the login page instead.
+  const [signedIn, setSignedIn] = useState(false);
+  const destination = signedIn ? "/" : "/auth";
 
   useEffect(() => {
     const validate = async () => {
@@ -61,13 +67,11 @@ export default function AcceptInvitation() {
     validate();
   }, [token]);
 
-  // Once the password is set the account is active; send them to the normal
-  // login page rather than signing them in off the back of an email link.
   useEffect(() => {
     if (!isDone) return;
-    const timer = setTimeout(() => navigate("/auth"), 4000);
+    const timer = setTimeout(() => navigate(destination, { replace: true }), 4000);
     return () => clearTimeout(timer);
-  }, [isDone, navigate]);
+  }, [isDone, destination, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -86,7 +90,16 @@ export default function AcceptInvitation() {
     setIsSubmitting(true);
 
     try {
-      await apiClient.acceptInvitation(token || "", password);
+      const response: any = await apiClient.acceptInvitation(token || "", password);
+
+      // Adopt the new session, replacing any account already signed in on this
+      // browser — otherwise they would land in someone else's dashboard.
+      if (response?.token) {
+        apiClient.setToken(response.token);
+        await refreshUser();
+        setSignedIn(true);
+      }
+
       setIsDone(true);
     } catch (error: any) {
       setFormError(error.message || "Could not set your password. Please try again.");
@@ -153,15 +166,25 @@ export default function AcceptInvitation() {
         </CardHeader>
         <CardContent className="space-y-6 text-center">
           <p className="text-gray-600">
-            You can now sign in with{" "}
-            <span className="font-semibold text-gray-900">{invitation?.email}</span> and the
-            password you just set.
+            {signedIn ? (
+              <>
+                You're signed in as{" "}
+                <span className="font-semibold text-gray-900">{invitation?.email}</span>. Next time,
+                sign in with that address and the password you just set.
+              </>
+            ) : (
+              <>
+                You can now sign in with{" "}
+                <span className="font-semibold text-gray-900">{invitation?.email}</span> and the
+                password you just set.
+              </>
+            )}
           </p>
           <Button
-            onClick={() => navigate("/auth")}
+            onClick={() => navigate(destination, { replace: true })}
             className="h-12 w-full rounded-xl bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 font-semibold text-white"
           >
-            Go to login
+            {signedIn ? "Go to Dashboard" : "Go to login"}
           </Button>
           <p className="text-xs text-gray-500">Taking you there automatically…</p>
         </CardContent>

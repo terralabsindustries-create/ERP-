@@ -144,7 +144,7 @@ export function AppSidebar() {
     <Sidebar>
       <SidebarHeader className="border-b border-sidebar-border px-4 py-4">
         <div className="flex items-center gap-2">
-          <span className="text-lg font-bold">
+s          <span className="text-lg font-bold">
             <span className="text-orange-500">Serp</span>
             <span className="text-black">Y</span>
           </span>

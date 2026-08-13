@@ -270,13 +270,26 @@ export function AdvancedCreateInvoiceDialog({
     });
   };
 
+  // Mirrors the server: discount comes off first, GST is charged on what is
+  // left, and a "No GST" invoice carries no tax at all. Keep this in step with
+  // the maths in backend/src/routes/invoices.js.
   const calculateTotals = () => {
-    const subtotal = formData.items.reduce((sum, item) => sum + item.totalAmount, 0);
-    const totalGst = formData.items.reduce((sum, item) => sum + item.gstAmount, 0);
-    const discount = formData.discountAmount;
-    const grandTotal = subtotal + totalGst - discount;
+    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
-    return { subtotal, totalGst, discount, grandTotal };
+    const subtotal = round2(formData.items.reduce((sum, item) => sum + item.totalAmount, 0));
+    const discount = round2(Math.min(formData.discountAmount || 0, subtotal));
+    const taxable = round2(subtotal - discount);
+
+    const totalGst = formData.noGst
+      ? 0
+      : round2(
+          formData.items.reduce((sum, item) => {
+            const share = subtotal > 0 ? discount * (item.totalAmount / subtotal) : 0;
+            return sum + (item.totalAmount - share) * ((item.gstRate || 0) / 100);
+          }, 0)
+        );
+
+    return { subtotal, totalGst, discount, taxable, grandTotal: round2(taxable + totalGst) };
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -701,12 +714,16 @@ export function AdvancedCreateInvoiceDialog({
                   <span>₹{totals.subtotal.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>GST:</span>
-                  <span>₹{totals.totalGst.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between">
                   <span>Discount:</span>
                   <span>-₹{totals.discount.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Taxable Value:</span>
+                  <span>₹{totals.taxable.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>{formData.noGst ? "GST (not charged):" : "GST:"}</span>
+                  <span>₹{totals.totalGst.toFixed(2)}</span>
                 </div>
                 <Separator />
                 <div className="flex justify-between font-bold text-lg">

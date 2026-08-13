@@ -297,10 +297,15 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
       });
     }
     
-    // Process invoice items and calculate totals (No GST)
+    // Every money figure is recomputed here from quantity and unit price. The
+    // client sends its own totals for display, but they are never trusted.
+    const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const isNoGst = req.body.noGst === true;
+    const isInterState = req.body.isInterState === true;
+
     const processedItems = [];
     let subtotal = 0;
-    console.log('1')
+
     for (const item of req.body.items) {
       // Skip design charge items - they are processed separately
       if (item.isDesignCharge) {
@@ -314,33 +319,31 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
         ? (item.totalSquareFeet || 0)
         : (item.quantity || 0);
 
-      const totalAmount = itemQuantity * item.unitPrice;
-          console.log('4')
+      const totalAmount = round2(itemQuantity * item.unitPrice);
 
-      const processedItem = {
+      processedItems.push({
         ...item,
         itemQuantity,  // Store the actual quantity used for calculation
         totalAmount,
-        gstRate: 0,
+        gstRate: isNoGst ? 0 : (item.gstRate || 0),
+        // Tax is filled in below, once the discount has been apportioned — GST
+        // is charged on the discounted taxable value, not the list price.
         gstAmount: 0,
         cgstAmount: 0,
         sgstAmount: 0,
         igstAmount: 0,
         itemTotal: totalAmount
-      };
+      });
 
-      processedItems.push(processedItem);
-      subtotal += totalAmount;
+      subtotal = round2(subtotal + totalAmount);
     }
-        console.log('6')
 
-    // Process design charge if provided (No GST)
+    // Process design charge if provided. Carries its own GST rate (SAC 9983)
+    // so a taxable invoice charges tax on the service too.
     let designChargeSubtotal = 0;
-    let designChargeTotal = 0;
 
     if (req.body.designCharge && req.body.designCharge.amount) {
-      designChargeSubtotal = req.body.designCharge.amount || 0;
-      designChargeTotal = designChargeSubtotal;
+      designChargeSubtotal = round2(req.body.designCharge.amount || 0);
 
       // Add design charge to processed items for consistency
       processedItems.push({
@@ -350,22 +353,56 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
         unitPrice: designChargeSubtotal,
         hsnCode: '9983',
         hsnDescription: 'Service - Design & Consultation',
-        gstRate: 0,
+        gstRate: isNoGst ? 0 : (req.body.designCharge.gstRate || 0),
         totalAmount: designChargeSubtotal,
         gstAmount: 0,
         cgstAmount: 0,
         sgstAmount: 0,
         igstAmount: 0,
-        itemTotal: designChargeTotal,
+        itemTotal: designChargeSubtotal,
         isDesignCharge: true
       });
     }
 
-    // Calculate totals including design charge (No GST)
-    const discountAmount = req.body.discountAmount || 0;
-    const grandSubtotal = subtotal + designChargeSubtotal;
-    const totalAmount = grandSubtotal - discountAmount;
-        console.log('7')
+    const grandSubtotal = round2(subtotal + designChargeSubtotal);
+    const discountAmount = round2(req.body.discountAmount || 0);
+
+    if (discountAmount > grandSubtotal) {
+      return res.status(400).json({
+        status: 'error',
+        message: `Discount (${discountAmount}) cannot be more than the invoice value (${grandSubtotal}).`
+      });
+    }
+
+    // Apportion the discount across items by value, then charge GST on what is
+    // left. Taxing the list price would leave the printed taxable value and the
+    // tax on the invoice disagreeing with each other.
+    let totalGstAmount = 0;
+
+    if (!isNoGst) {
+      processedItems.forEach((item) => {
+        const share = grandSubtotal > 0
+          ? round2(discountAmount * (item.totalAmount / grandSubtotal))
+          : 0;
+        const taxableValue = round2(item.totalAmount - share);
+        const gstAmount = round2(taxableValue * (item.gstRate || 0) / 100);
+
+        // Split so the halves always add back to the exact total — halving an
+        // odd number of paise and rounding twice would lose one.
+        const half = round2(gstAmount / 2);
+
+        item.gstAmount = gstAmount;
+        item.cgstAmount = isInterState ? 0 : half;
+        item.sgstAmount = isInterState ? 0 : round2(gstAmount - half);
+        item.igstAmount = isInterState ? gstAmount : 0;
+        item.itemTotal = round2(item.totalAmount + gstAmount);
+
+        totalGstAmount = round2(totalGstAmount + gstAmount);
+      });
+    }
+
+    const taxableAmount = round2(grandSubtotal - discountAmount);
+    const totalAmount = round2(taxableAmount + totalGstAmount);
 
     const invoiceData = {
       ...req.body,
@@ -374,11 +411,13 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
       customerGstNumber: customer.gstNumber,
       customerAddress: customer.address,
       items: processedItems,
+      discountAmount,
       subtotal: grandSubtotal,
-      taxableAmount: totalAmount,
-      totalGstAmount: 0,
+      taxableAmount,
+      totalGstAmount,
       totalAmount,
-      noGst: true, // Mark as No GST invoice
+      noGst: isNoGst,
+      isInterState,
       userId: req.user._id
     };
 
@@ -386,9 +425,7 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
     if (req.user.dataScope) {
       invoiceData.dataScope = req.user.dataScope;
     }
-    console.log('invoiceData',invoiceData)
     const invoice = await Invoice.create(invoiceData);
-        console.log('8')
 
     // Deduct inventory for all items
     try {
@@ -398,7 +435,6 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
         invoiceNumber,
         req.user._id
       );
-          console.log('9')
 
       if (!inventoryResult.success) {
         // If inventory deduction fails, we should ideally rollback the invoice
@@ -413,13 +449,11 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
       // Log the error but don't fail the invoice creation
       // In a production system, you might want to implement proper rollback
     }
-        console.log('10')
 
     // Populate the created invoice
     const populatedInvoice = await Invoice.findById(invoice._id)
       .populate('customerId', 'name email phone gstNumber')
       .populate('jobId', 'title status');
-        console.log('11')
 
     res.status(201).json({
       status: 'success',
@@ -428,7 +462,6 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
         invoice: populatedInvoice
       }
     });
-        console.log('12')
 
   } catch (error) {
     console.error('Create invoice error:', error);

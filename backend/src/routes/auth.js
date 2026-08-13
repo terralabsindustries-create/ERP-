@@ -396,11 +396,11 @@ router.post('/invitation/:token/accept', [
       console.error('Employee sync (accept invitation) failed:', err.message)
     );
 
-    res.status(200).json({
-      status: 'success',
-      message: 'Your password has been set. You can now sign in.',
-      data: { email: user.email }
-    });
+    // Sign them straight in. They proved control of the mailbox by opening a
+    // one-time link and just chose the password, so making them retype it adds
+    // nothing — and the token replaces whatever session the browser held.
+    await user.updateLastLogin();
+    sendTokenResponse(user, 200, res, 'Your password has been set.');
 
   } catch (error) {
     console.error('Accept invitation error:', error);
