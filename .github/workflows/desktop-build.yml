@@ -1,15 +1,26 @@
-# Builds the SerpY desktop installers for macOS and Windows.
+# Builds and publishes the SerpY desktop app.
+#
+# Every push to main produces a new version and publishes the installers to the
+# public releases repository. Installed copies check that feed on launch, tell
+# the user a new version is available, and install it when they agree.
 #
 # Windows installers cannot be produced reliably on a Mac, so each platform is
-# built on its own runner. Download the results from the run's Artifacts section,
-# or from the Release page when the run was triggered by a tag.
+# built on its own runner.
+#
+# Required repository secret:
+#   RELEASES_TOKEN — a GitHub personal access token with `contents: write` on
+#                    Akbarhaleel1/serpy-releases. The built-in GITHUB_TOKEN
+#                    cannot write to a different repository.
 name: Desktop build
 
 on:
   push:
-    tags:
-      - 'v*'            # e.g. git tag v1.0.1 && git push --tags
-  workflow_dispatch: {}  # or run it by hand from the Actions tab
+    branches: [main]
+    # Documentation-only edits should not ship a new app version.
+    paths-ignore:
+      - '**.md'
+      - '.github/**'
+  workflow_dispatch: {}
 
 jobs:
   build:
@@ -18,10 +29,10 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            target: dist:mac
+            target: --mac
             artifact: SerpY-macOS
           - os: windows-latest
-            target: dist:win
+            target: --win
             artifact: SerpY-Windows
 
     runs-on: ${{ matrix.os }}
@@ -33,30 +44,43 @@ jobs:
         with:
           node-version: 20
 
-      # The installer carries the backend and its dependencies, so they must be
-      # installed before packaging. Puppeteer's Chromium is skipped: the app uses
-      # whatever Chrome/Edge is on the user's machine.
+      # One version per push, so every build is newer than the last and the
+      # updater has something to compare against.
+      - name: Set version from run number
+        working-directory: desktop
+        run: npm version 1.0.${{ github.run_number }} --no-git-tag-version --allow-same-version
+
+      # The installer carries the backend and its dependencies. Puppeteer's
+      # Chromium is skipped — the app uses the Chrome/Edge already on the machine.
       - name: Install backend dependencies
         working-directory: backend
         env:
           PUPPETEER_SKIP_DOWNLOAD: 'true'
-        run: npm ci --omit=dev || npm install --omit=dev
+        run: npm install --omit=dev
 
       - name: Install client dependencies
         working-directory: client
-        run: npm ci || npm install
+        run: npm install
 
       - name: Install desktop dependencies
         working-directory: desktop
         run: npm install
 
-      - name: Build installer
+      - name: Build renderer
+        working-directory: desktop
+        run: npm run build:renderer
+
+      - name: Build and publish installer
         working-directory: desktop
         env:
-          # No Apple Developer certificate in CI — produces an unsigned build.
+          # Publishing target lives in package.json → build.publish
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          # No Apple Developer certificate — produces an unsigned macOS build.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npm run ${{ matrix.target }}
+        run: npx electron-builder ${{ matrix.target }} --publish always
 
+      # Also attach the installers to this workflow run, so they can be grabbed
+      # without going to the releases repository.
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

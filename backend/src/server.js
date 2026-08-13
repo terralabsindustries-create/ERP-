@@ -299,9 +299,20 @@ app.use('/api/*', (req, res) => {
 
 const PORT = process.env.PORT || 4001;
 
+// Secrets are shown as a length plus their last 4 characters — enough to tell at
+// a glance that the right value loaded, without putting the credential itself in
+// a log file, a screenshot, or a support thread.
+const maskSecret = (value) =>
+  !value ? '❌ MISSING' : `✅ set (${value.length} chars, ends ${value.slice(-4)})`;
+
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log('🔧 Integration config loaded from .env:');
+  console.log(`   FACEBOOK_APP_ID     ${process.env.FACEBOOK_APP_ID || '❌ MISSING'}`);
+  console.log(`   FACEBOOK_APP_SECRET ${maskSecret(process.env.FACEBOOK_APP_SECRET)}`);
+  console.log(`   EMAIL_USER          ${process.env.EMAIL_USER || '❌ MISSING'}`);
+  console.log(`   MONGODB_URI         ${process.env.MONGODB_URI ? '✅ set' : '❌ MISSING'}`);
 });
 
 module.exports = app;

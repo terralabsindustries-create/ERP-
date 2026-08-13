@@ -103,6 +103,29 @@ Atlas user in every installation means every shop holds credentials to the whole
 database. Give each installation its own Atlas user with least privilege, and
 restrict Atlas network access — or put an API in front of Atlas instead.
 
+## Updates
+
+Every push to `main` builds a new version (`1.0.<run number>`) and publishes the
+installers to the public `serpy-releases` repository. Installed copies check that
+feed on launch and once a day, and offer the update — nothing installs itself
+behind the user's back, so the app never restarts mid-invoice. There is also
+**Help → Check for Updates…** for an on-demand check.
+
+Setup, once:
+
+1. Create a public repo `Akbarhaleel1/serpy-releases` (empty; binaries only —
+   your source stays private).
+2. Create a personal access token with `contents: write` on that repo.
+3. Add it to this repo as the secret `RELEASES_TOKEN`.
+
+**macOS updates need code signing.** Squirrel.Mac will not apply an update to an
+unsigned app, so unsigned Mac builds show "a new version is available" and open
+the download page instead. Windows applies updates in place without signing.
+
+Because the backend ships inside the app, a backend fix is also an app release —
+every machine needs the new version, unlike the website where a deploy reaches
+everyone at once.
+
 ## Behaviour that differs from the browser
 
 | Concern | What the shell does |

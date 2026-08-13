@@ -18,6 +18,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Table,
   TableBody,
   TableCell,
@@ -59,6 +69,7 @@ export default function WhatsApp() {
     connectionStatus: "disconnected"
   });
   const [savingSettings, setSavingSettings] = useState(false);
+  const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
 
   // Embedded Signup state
   const [isProcessing, setIsProcessing] = useState(false);
@@ -115,7 +126,13 @@ export default function WhatsApp() {
         data.waba_id,
         data.phone_number_id
       );
-      if (result && result.status === 'success') {
+      // apiClient unwraps the envelope and hands back `data.data`, so the
+      // `status: 'success'` field never reaches here — a completed exchange is
+      // identified by the account details it returns. The status check is kept
+      // for the case where the envelope survives.
+      const connected = !!result && (result.wabaId || result.phoneNumberId || result.status === 'success');
+
+      if (connected) {
         setCurrentStep(4);
         toast({ title: "Connected!", description: "WhatsApp Business Account connected successfully." });
         loadSettings();
@@ -271,9 +288,6 @@ export default function WhatsApp() {
   };
 
   const handleResetSettings = async () => {
-    if (!confirm("Are you sure you want to disconnect WhatsApp integration? This will remove all connection tokens and configuration details.")) {
-      return;
-    }
     setSavingSettings(true);
     try {
       await apiClient.resetEmbeddedSignupConfiguration();
@@ -294,6 +308,7 @@ export default function WhatsApp() {
       toast({ title: "Error", description: error.message || "Failed to disconnect.", variant: "destructive" });
     } finally {
       setSavingSettings(false);
+      setShowDisconnectDialog(false);
     }
   };
 
@@ -586,15 +601,69 @@ export default function WhatsApp() {
                   </div>
                 </div>
 
-                <Button 
-                  variant="destructive" 
-                  onClick={handleResetSettings} 
-                  disabled={savingSettings} 
+                <Button
+                  variant="destructive"
+                  onClick={() => setShowDisconnectDialog(true)}
+                  disabled={savingSettings}
                   className="w-full flex items-center justify-center gap-2"
                 >
                   {savingSettings ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
                   Disconnect WhatsApp Business
                 </Button>
+
+                <AlertDialog
+                  open={showDisconnectDialog}
+                  onOpenChange={(open) => !open && !savingSettings && setShowDisconnectDialog(false)}
+                >
+                  <AlertDialogContent>
+                    <AlertDialogHeader className="space-y-3">
+                      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10">
+                        <AlertCircle className="h-6 w-6 text-destructive" />
+                      </div>
+                      <AlertDialogTitle className="text-center text-xl">
+                        Disconnect WhatsApp Business?
+                      </AlertDialogTitle>
+                      <AlertDialogDescription className="text-center">
+                        Your access token and connection details will be deleted from SerpY.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+
+                    <div className="rounded-lg border border-input bg-muted/50 p-4 text-sm">
+                      <p className="mb-2 font-medium text-foreground">After disconnecting:</p>
+                      <ul className="space-y-1.5 text-muted-foreground">
+                        <li>• Automatic payment reminders stop going out</li>
+                        <li>• Invoices and quotations can no longer be sent over WhatsApp</li>
+                        <li>• Your message templates stay safe in your Meta account</li>
+                      </ul>
+                      <p className="mt-3 text-xs text-muted-foreground">
+                        You can reconnect any time by running the setup again — it takes about a
+                        minute.
+                      </p>
+                    </div>
+
+                    <AlertDialogFooter className="gap-2">
+                      <AlertDialogCancel disabled={savingSettings}>Keep connected</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={(e) => {
+                          // Hold the dialog open while the request is in flight.
+                          e.preventDefault();
+                          handleResetSettings();
+                        }}
+                        disabled={savingSettings}
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      >
+                        {savingSettings ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Disconnecting...
+                          </>
+                        ) : (
+                          "Disconnect"
+                        )}
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
               </CardContent>
             </Card>
           ) : (
@@ -734,7 +803,6 @@ export default function WhatsApp() {
                   <SelectContent>
                     <SelectItem value="UTILITY">Utility (Updates, Reminders)</SelectItem>
                     <SelectItem value="MARKETING">Marketing (Offers, Promos)</SelectItem>
-                    <SelectItem value="AUTHENTICATION">Authentication (OTPs)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

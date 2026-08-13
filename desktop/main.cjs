@@ -20,6 +20,7 @@ const fs = require('fs');
 const { pathToFileURL } = require('url');
 const { resolveRequestPath } = require('./resolve-request-path.cjs');
 const { startBackend } = require('./backend-runner.cjs');
+const { checkForUpdates } = require('./updater.cjs');
 
 const APP_SCHEME = 'app';
 const APP_HOST = 'serpy';
@@ -180,7 +181,14 @@ if (!app.requestSingleInstanceLock()) {
       return;
     }
 
-    createWindow();
+    const mainWindow = createWindow();
+
+    // Check once the window is up, and again daily for machines left running.
+    if (app.isPackaged) {
+      checkForUpdates({ parentWindow: mainWindow, silent: true });
+      setInterval(() => checkForUpdates({ parentWindow: mainWindow, silent: true }),
+        24 * 60 * 60 * 1000);
+    }
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -219,6 +227,14 @@ function buildMenu() {
     {
       role: 'help',
       submenu: [
+        {
+          label: 'Check for Updates…',
+          click: () => checkForUpdates({
+            parentWindow: BrowserWindow.getAllWindows()[0],
+            silent: false
+          })
+        },
+        { type: 'separator' },
         {
           label: 'Open SerpY on the web',
           click: () => shell.openExternal('https://app.serpy.in')
