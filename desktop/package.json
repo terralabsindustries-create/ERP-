@@ -5,6 +5,7 @@
   "//productName": "Electron prefers this over `name` for app.getName(), which decides app.getPath('userData'). Without it the config file lands in serpy-desktop/ while the docs say SerpY/.",
   "productName": "SerpY",
   "description": "SerpY ERP desktop shell \u2014 wraps the web client, does not fork it",
+  "author": "SerpY",
   "main": "main.cjs",
   "scripts": {
     "build:renderer": "npm --prefix ../client run build:desktop",
