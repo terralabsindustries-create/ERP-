@@ -4,6 +4,9 @@ import path from "path";
 import { componentTagger } from "lovable-tagger";
 
 // https://vitejs.dev/config/
+// `--mode desktop` builds the bundle that Electron ships. It writes to its own
+// folder so a desktop build can never overwrite the web build in dist/, and the
+// web build is byte-for-byte unchanged by any of this.
 export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
@@ -20,6 +23,7 @@ export default defineConfig(({ mode }) => ({
     },
   },
   build: {
+    outDir: mode === 'desktop' ? 'dist-desktop' : 'dist',
     assetsDir: 'assets',
     rollupOptions: {
       output: {

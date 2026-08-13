@@ -1,0 +1,68 @@
+# Builds the SerpY desktop installers for macOS and Windows.
+#
+# Windows installers cannot be produced reliably on a Mac, so each platform is
+# built on its own runner. Download the results from the run's Artifacts section,
+# or from the Release page when the run was triggered by a tag.
+name: Desktop build
+
+on:
+  push:
+    tags:
+      - 'v*'            # e.g. git tag v1.0.1 && git push --tags
+  workflow_dispatch: {}  # or run it by hand from the Actions tab
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: dist:mac
+            artifact: SerpY-macOS
+          - os: windows-latest
+            target: dist:win
+            artifact: SerpY-Windows
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # The installer carries the backend and its dependencies, so they must be
+      # installed before packaging. Puppeteer's Chromium is skipped: the app uses
+      # whatever Chrome/Edge is on the user's machine.
+      - name: Install backend dependencies
+        working-directory: backend
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
+        run: npm ci --omit=dev || npm install --omit=dev
+
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci || npm install
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm install
+
+      - name: Build installer
+        working-directory: desktop
+        env:
+          # No Apple Developer certificate in CI — produces an unsigned build.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run ${{ matrix.target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            desktop/release/*.dmg
+            desktop/release/*.exe
+            desktop/release/*.zip
+          if-no-files-found: error
+          retention-days: 30

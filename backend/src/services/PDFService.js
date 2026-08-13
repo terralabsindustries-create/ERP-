@@ -1,6 +1,17 @@
 const PDFDocument = require('pdfkit');
 const { createTransporter } = require('../utils/mailer');
-const puppeteer = require('puppeteer');
+
+// Puppeteer ships as ES-module only. require() of ESM is unsupported on Node 20
+// (which is what Electron bundles), so it is imported on demand instead. That
+// keeps this file loadable on every runtime, and Chromium is only touched when
+// a PDF is actually rendered.
+let puppeteerPromise = null;
+const getPuppeteer = () => {
+  if (!puppeteerPromise) {
+    puppeteerPromise = import('puppeteer').then((m) => m.default || m);
+  }
+  return puppeteerPromise;
+};
 
 class PDFService {
   // Invoices and quotations both render through the shared PDFKit layout
@@ -18,6 +29,7 @@ class PDFService {
 
       let browser;
       try {
+        const puppeteer = await getPuppeteer();
         browser = await puppeteer.launch({
           headless: true,
           args: ['--no-sandbox', '--disable-setuid-sandbox']

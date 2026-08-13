@@ -36,3 +36,4 @@ backend/node_modules/
 # OS junk
 .DS_Store
 Thumbs.db
+dist-desktop

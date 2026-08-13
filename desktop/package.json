@@ -1,0 +1,82 @@
+{
+  "name": "serpy-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SerpY ERP desktop shell \u2014 wraps the web client, does not fork it",
+  "main": "main.cjs",
+  "scripts": {
+    "build:renderer": "npm --prefix ../client run build:desktop",
+    "start": "npm run build:renderer && electron .",
+    "dev": "cross-env VITE_DEV_SERVER_URL=http://localhost:8080 electron .",
+    "dist": "npm run build:renderer && electron-builder",
+    "dist:mac": "npm run build:renderer && electron-builder --mac",
+    "dist:win": "npm run build:renderer && electron-builder --win",
+    "pack": "npm run build:renderer && electron-builder --dir"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "in.serpy.erp",
+    "productName": "SerpY",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "backend-runner.cjs",
+      "resolve-request-path.cjs"
+    ],
+    "extraResources": [
+      {
+        "from": "../client/dist-desktop",
+        "to": "app-dist"
+      },
+      {
+        "from": "../backend/src",
+        "to": "backend/src"
+      },
+      {
+        "from": "../backend/package.json",
+        "to": "backend/package.json"
+      },
+      {
+        "from": "../backend/node_modules",
+        "to": "backend/node_modules",
+        "filter": [
+          "**/*",
+          "!puppeteer/.local-chromium/**",
+          "!**/*.map",
+          "!**/test/**",
+          "!**/tests/**"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.business",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Office"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

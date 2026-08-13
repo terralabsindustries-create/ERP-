@@ -1,4 +1,10 @@
-export const BASE_URL = import.meta.env.VITE_API_URL || 'https://serpy.synxautomate.com/api';
+// In the Electron app the backend runs on this machine on a port picked at
+// startup, so the preload hands us the address. In a browser `serpyDesktop` does
+// not exist and this falls straight through to the build-time value.
+const desktopApiBase = (globalThis as any).serpyDesktop?.apiBaseUrl;
+
+export const BASE_URL =
+  desktopApiBase || import.meta.env.VITE_API_URL || 'https://serpy.synxautomate.com/api';
 
 interface ApiResponse<T = any> {
   status: 'success' | 'error';
