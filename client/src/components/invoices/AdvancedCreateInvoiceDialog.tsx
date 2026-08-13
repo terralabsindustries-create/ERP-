@@ -11,7 +11,9 @@ import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
-import { Plus, Trash2, Calculator } from "lucide-react";
+import { Plus, Trash2, Calculator, UserPlus } from "lucide-react";
+import { CreateCustomerDialog } from "@/components/customers/CreateCustomerDialog";
+import { QuickCreateJobDialog } from "@/components/jobs/QuickCreateJobDialog";
 
 interface InvoiceItem {
   itemName: string;
@@ -51,6 +53,8 @@ export function AdvancedCreateInvoiceDialog({
   const [inventoryItems, setInventoryItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState<{ [key: number]: boolean }>({});
+  const [showCreateCustomer, setShowCreateCustomer] = useState(false);
+  const [showCreateJob, setShowCreateJob] = useState(false);
   const { toast } = useToast();
 
   // Hide suggestions when clicking outside
@@ -158,6 +162,27 @@ export function AdvancedCreateInvoiceDialog({
     } catch (error) {
       console.error('Error fetching customers:', error);
     }
+  };
+
+  // The dialog just created a customer inline — add it to the list without a
+  // refetch and select it, so the person invoicing never loses their place.
+  const handleCustomerCreated = (customer?: any) => {
+    if (customer) {
+      setCustomers((prev) => [...prev, customer]);
+      setFormData((prev) => ({ ...prev, customerId: customer._id || customer.id }));
+    }
+    setShowCreateCustomer(false);
+  };
+
+  // Mirrors handleCustomerCreated: add the new job locally and select it,
+  // guarding against Radix resetting the value (see the onValueChange comment
+  // on the Job Select below).
+  const handleJobCreated = (job?: any) => {
+    if (job) {
+      setJobs((prev) => [...prev, job]);
+      setFormData((prev) => ({ ...prev, jobId: job._id || job.id }));
+    }
+    setShowCreateJob(false);
   };
 
   const fetchJobs = async () => {
@@ -372,6 +397,7 @@ export function AdvancedCreateInvoiceDialog({
   const totals = calculateTotals();
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
@@ -385,7 +411,15 @@ export function AdvancedCreateInvoiceDialog({
           {/* Customer and Job Selection */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="customerId">Customer *</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="customerId">Customer *</Label>
+                {!preselectedJob && (
+                  <Button type="button" variant="ghost" size="sm" className="gap-1 h-auto py-1" onClick={() => setShowCreateCustomer(true)}>
+                    <UserPlus className="w-3.5 h-3.5" />
+                    New Customer
+                  </Button>
+                )}
+              </div>
               {preselectedJob ? (
                 // Fixed customer display when job is preselected
                 <div className="p-3 bg-gray-50 border rounded-md">
@@ -403,10 +437,29 @@ export function AdvancedCreateInvoiceDialog({
                 // Editable customer selection when no job is preselected
                 <Select
                   value={formData.customerId}
-                  onValueChange={(value) => setFormData(prev => ({ ...prev, customerId: value }))}
+                  onValueChange={(value) => {
+                    // Radix calls this with "" to self-correct a controlled value
+                    // it doesn't recognize — which is exactly the state right
+                    // after we set customerId to a customer just created inline,
+                    // since its SelectItem has never been mounted (that only
+                    // happens once the dropdown has been opened). This is a
+                    // fully controlled Select, so as long as we don't act on
+                    // that spurious "", the value we set simply stays put.
+                    if (value) setFormData(prev => ({ ...prev, customerId: value }));
+                  }}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Select customer" />
+                    {/* Radix only resolves a label from a SelectItem that has been
+                        mounted at least once (i.e. the dropdown was opened while
+                        it was selected). Selecting a customer programmatically —
+                        right after creating one inline — skips that, so the
+                        display text is set explicitly here instead. */}
+                    <SelectValue placeholder="Select customer">
+                      {(() => {
+                        const c = customers.find((cust) => (cust._id || cust.id) === formData.customerId);
+                        return c ? `${c.name} - ${c.email}` : "";
+                      })()}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {customers.map((customer) => (
@@ -420,7 +473,15 @@ export function AdvancedCreateInvoiceDialog({
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="jobId">Job</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="jobId">Job</Label>
+                {!preselectedJob && (
+                  <Button type="button" variant="ghost" size="sm" className="gap-1 h-auto py-1" onClick={() => setShowCreateJob(true)}>
+                    <Plus className="w-3.5 h-3.5" />
+                    New Job
+                  </Button>
+                )}
+              </div>
               {preselectedJob ? (
                 // Fixed job display when job is preselected
                 <div className="p-3 bg-gray-50 border rounded-md">
@@ -438,10 +499,21 @@ export function AdvancedCreateInvoiceDialog({
                 // Editable job selection when no job is preselected
                 <Select
                   value={formData.jobId}
-                  onValueChange={(value) => setFormData(prev => ({ ...prev, jobId: value }))}
+                  onValueChange={(value) => {
+                    // See the identical guard on the Customer Select above —
+                    // Radix self-corrects an unrecognized controlled value by
+                    // calling this with "", which happens for a job just
+                    // created inline since its SelectItem was never mounted.
+                    if (value) setFormData(prev => ({ ...prev, jobId: value }));
+                  }}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Select job (optional)" />
+                    <SelectValue placeholder="Select job (optional)">
+                      {(() => {
+                        const j = jobs.find((job) => (job._id || job.id) === formData.jobId);
+                        return j ? `${j.title} - ${j.customer || 'Unknown Customer'}` : "";
+                      })()}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {jobs.map((job) => (
@@ -496,79 +568,90 @@ export function AdvancedCreateInvoiceDialog({
               {formData.items.map((item, index) => (
                 <div key={index} className="space-y-4 p-4 border rounded-lg">
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                    <div className="space-y-1">
+                    <div className="space-y-1 relative autocomplete-container">
                       <Label className="text-xs">Item Name *</Label>
-                      <Select
+                      <Input
                         value={item.itemName}
-                        onValueChange={(value) => {
-                          const selectedItem = inventoryItems.find(inv => inv.name === value);
-                          if (selectedItem) {
-                            const invUnit = selectedItem.unit || 'pieces';
-                            const isAreaUnit = ['sqft', 'sqm'].includes(invUnit);
-                            setFormData(prev => {
-                              const newItems = [...prev.items];
-                              newItems[index] = {
-                                ...newItems[index],
-                                itemName: selectedItem.name,
-                                unitPrice: selectedItem.unitCost || 0,
-                                hsnCode: selectedItem.hsnCode || '',
-                                gstRate: selectedItem.gstRate || 18,
-                                description: selectedItem.description || '',
-                                unit: invUnit,
-                                itemType: isAreaUnit ? 'Square Feet' : 'Numbers',
-                                length: isAreaUnit ? newItems[index].length : undefined,
-                                width: isAreaUnit ? newItems[index].width : undefined,
-                                totalSquareFeet: isAreaUnit ? (newItems[index].totalSquareFeet || 0) : 0,
-                              };
-                              if (isAreaUnit) {
-                                const l = newItems[index].length || 0;
-                                const w = newItems[index].width || 0;
-                                if (l && w) {
-                                  newItems[index].totalSquareFeet = l * w;
-                                  const subtotal = newItems[index].totalSquareFeet! * (selectedItem.unitCost || 0);
-                                  const gstAmount = subtotal * ((selectedItem.gstRate || 18) / 100);
-                                  newItems[index].totalAmount = subtotal;
-                                  newItems[index].gstAmount = gstAmount;
-                                  newItems[index].itemTotal = subtotal + gstAmount;
-                                } else {
-                                  newItems[index].totalAmount = 0;
-                                  newItems[index].gstAmount = 0;
-                                  newItems[index].itemTotal = 0;
-                                }
-                              } else {
-                                const subtotal = (newItems[index].quantity || 1) * (selectedItem.unitCost || 0);
-                                const gstAmount = subtotal * ((selectedItem.gstRate || 18) / 100);
-                                newItems[index].totalAmount = subtotal;
-                                newItems[index].gstAmount = gstAmount;
-                                newItems[index].itemTotal = subtotal + gstAmount;
-                              }
-                              return { ...prev, items: newItems };
-                            });
-                          }
+                        onChange={(e) => {
+                          updateItem(index, 'itemName', e.target.value);
+                          setShowSuggestions(prev => ({ ...prev, [index]: true }));
                         }}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select item from inventory" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {inventoryItems.length === 0 ? (
-                            <div className="p-2 text-sm text-muted-foreground">
-                              No inventory items available
-                            </div>
-                          ) : (
-                            inventoryItems.map((invItem) => (
-                              <SelectItem key={invItem._id || invItem.id} value={invItem.name}>
-                                <div className="flex flex-col">
-                                  <span className="font-medium">{invItem.name}</span>
+                        onFocus={() => setShowSuggestions(prev => ({ ...prev, [index]: true }))}
+                        placeholder="Type or pick an inventory item"
+                        autoComplete="off"
+                      />
+                      {showSuggestions[index] && (() => {
+                        const query = item.itemName.trim().toLowerCase();
+                        const matches = query
+                          ? inventoryItems.filter((inv) => inv.name.toLowerCase().includes(query)).slice(0, 8)
+                          : inventoryItems.slice(0, 8);
+                        return (
+                          <div className="absolute z-50 mt-1 w-full max-h-56 overflow-y-auto rounded-md border bg-popover text-popover-foreground shadow-md">
+                            {matches.length === 0 ? (
+                              <div className="p-2 text-sm text-muted-foreground">
+                                No matching inventory item — will be added as a custom item
+                              </div>
+                            ) : (
+                              matches.map((selectedItem) => (
+                                <button
+                                  type="button"
+                                  key={selectedItem._id || selectedItem.id}
+                                  className="flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+                                  onClick={() => {
+                                    const invUnit = selectedItem.unit || 'pieces';
+                                    const isAreaUnit = ['sqft', 'sqm'].includes(invUnit);
+                                    setFormData(prev => {
+                                      const newItems = [...prev.items];
+                                      newItems[index] = {
+                                        ...newItems[index],
+                                        itemName: selectedItem.name,
+                                        unitPrice: selectedItem.unitCost || 0,
+                                        hsnCode: selectedItem.hsnCode || '',
+                                        gstRate: selectedItem.gstRate || 18,
+                                        description: selectedItem.description || '',
+                                        unit: invUnit,
+                                        itemType: isAreaUnit ? 'Square Feet' : 'Numbers',
+                                        length: isAreaUnit ? newItems[index].length : undefined,
+                                        width: isAreaUnit ? newItems[index].width : undefined,
+                                        totalSquareFeet: isAreaUnit ? (newItems[index].totalSquareFeet || 0) : 0,
+                                      };
+                                      if (isAreaUnit) {
+                                        const l = newItems[index].length || 0;
+                                        const w = newItems[index].width || 0;
+                                        if (l && w) {
+                                          newItems[index].totalSquareFeet = l * w;
+                                          const subtotal = newItems[index].totalSquareFeet! * (selectedItem.unitCost || 0);
+                                          const gstAmount = subtotal * ((selectedItem.gstRate || 18) / 100);
+                                          newItems[index].totalAmount = subtotal;
+                                          newItems[index].gstAmount = gstAmount;
+                                          newItems[index].itemTotal = subtotal + gstAmount;
+                                        } else {
+                                          newItems[index].totalAmount = 0;
+                                          newItems[index].gstAmount = 0;
+                                          newItems[index].itemTotal = 0;
+                                        }
+                                      } else {
+                                        const subtotal = (newItems[index].quantity || 1) * (selectedItem.unitCost || 0);
+                                        const gstAmount = subtotal * ((selectedItem.gstRate || 18) / 100);
+                                        newItems[index].totalAmount = subtotal;
+                                        newItems[index].gstAmount = gstAmount;
+                                        newItems[index].itemTotal = subtotal + gstAmount;
+                                      }
+                                      return { ...prev, items: newItems };
+                                    });
+                                    setShowSuggestions(prev => ({ ...prev, [index]: false }));
+                                  }}
+                                >
+                                  <span className="font-medium">{selectedItem.name}</span>
                                   <span className="text-xs text-muted-foreground">
-                                    Stock: {invItem.quantity || 0} | ₹{invItem.unitCost || 0}
+                                    Stock: {selectedItem.quantity || 0} | ₹{selectedItem.unitCost || 0}
                                   </span>
-                                </div>
-                              </SelectItem>
-                            ))
-                          )}
-                        </SelectContent>
-                      </Select>
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     {item.itemType === 'Square Feet' ? (
@@ -781,5 +864,17 @@ export function AdvancedCreateInvoiceDialog({
         </form>
       </DialogContent>
     </Dialog>
+    <CreateCustomerDialog
+      open={showCreateCustomer}
+      onOpenChange={setShowCreateCustomer}
+      onCustomerCreated={handleCustomerCreated}
+    />
+    <QuickCreateJobDialog
+      open={showCreateJob}
+      onOpenChange={setShowCreateJob}
+      customers={customers}
+      onJobCreated={handleJobCreated}
+    />
+    </>
   );
 }

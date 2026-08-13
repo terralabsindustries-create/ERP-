@@ -11,7 +11,8 @@ import apiClient from "@/lib/apiClient";
 interface CreateCustomerDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCustomerCreated: () => void;
+  /** Receives the newly created customer, so a caller opening this inline can auto-select it. */
+  onCustomerCreated: (customer?: any) => void;
 }
 
 export function CreateCustomerDialog({ open, onOpenChange, onCustomerCreated }: CreateCustomerDialogProps) {
@@ -44,7 +45,7 @@ export function CreateCustomerDialog({ open, onOpenChange, onCustomerCreated }: 
     try {
       console.log('📋 Creating customer:', formData);
 
-      const response = await apiClient.createCustomer(formData);
+      const response: any = await apiClient.createCustomer(formData);
       console.log('📋 Customer created successfully:', response);
 
       toast({
@@ -52,7 +53,7 @@ export function CreateCustomerDialog({ open, onOpenChange, onCustomerCreated }: 
         description: "Customer has been created successfully",
       });
 
-      onCustomerCreated();
+      onCustomerCreated(response?.customer || response);
       onOpenChange(false);
 
       // Reset form

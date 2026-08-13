@@ -236,16 +236,18 @@ class InventoryService {
         name: item.itemName,
         status: 'active'
       });
-      
+
       if (!inventoryItem) {
-        stockCheck.available = false;
-        stockCheck.errors.push(`Inventory item "${item.itemName}" not found`);
+        // Not every line item is stock — a one-off or custom item typed
+        // directly on the invoice has nothing to check against, and that's
+        // fine: it just isn't stock-tracked. deductInventoryForInvoice()
+        // makes the same call for the same reason at deduction time.
         stockCheck.items.push({
           itemName: item.itemName,
-          available: false,
-          availableQuantity: 0,
+          available: true,
+          availableQuantity: null,
           requiredQuantity: item.quantity,
-          error: 'Item not found in inventory'
+          custom: true
         });
         continue;
       }

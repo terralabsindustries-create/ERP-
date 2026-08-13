@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,9 +9,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Trash2, FileText, Send, Link } from "lucide-react";
+import { Plus, Trash2, FileText, Send, Link, UserPlus } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
+import { CreateCustomerDialog } from "@/components/customers/CreateCustomerDialog";
 
 interface QuotationItem {
   item_name: string;
@@ -33,6 +34,11 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [customers, setCustomers] = useState<any[]>([]);
+  const [showCreateCustomer, setShowCreateCustomer] = useState(false);
+  // Which item row's inventory suggestion list is open, if any. A typed name
+  // that matches nothing is kept as-is — the backend only requires a
+  // non-empty item_name, not an inventory match.
+  const [openItemSuggestion, setOpenItemSuggestion] = useState<number | null>(null);
   const [inventoryItems, setInventoryItems] = useState<any[]>([]);
   const [formData, setFormData] = useState({
     customer_id: "",
@@ -48,6 +54,16 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
   ]);
 
   const { toast } = useToast();
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!(event.target as HTMLElement)?.closest('.item-name-autocomplete')) {
+        setOpenItemSuggestion(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const fetchCustomers = async () => {
     try {
@@ -96,6 +112,16 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
       unit: inv.unit || 'pieces',
     };
     setItems(updated);
+  };
+
+  // The dialog just created a customer inline — add it to the list without a
+  // refetch and select it, so the person quoting never loses their place.
+  const handleCustomerCreated = (customer?: any) => {
+    if (customer) {
+      setCustomers((prev) => [...prev, customer]);
+      setFormData((prev) => ({ ...prev, customer_id: customer._id || customer.id }));
+    }
+    setShowCreateCustomer(false);
   };
 
   const addItem = () => {
@@ -165,6 +191,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
   const { subtotal, taxAmount, total } = calculateTotals();
 
   return (
+    <>
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild onClick={() => { fetchCustomers(); fetchInventoryItems(); }}>
         {children}
@@ -180,12 +207,41 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
         <form onSubmit={handleSubmit} className="space-y-6">
           {/* Customer Selection */}
           <div className="space-y-2">
-            <Label htmlFor="customer">Customer</Label>
-            <Select value={formData.customer_id} onValueChange={(value) => 
-              setFormData(prev => ({ ...prev, customer_id: value }))
-            }>
+            <div className="flex items-center justify-between">
+              <Label htmlFor="customer">Customer</Label>
+              <Button type="button" variant="ghost" size="sm" className="gap-1 h-auto py-1" onClick={() => setShowCreateCustomer(true)}>
+                <UserPlus className="w-3.5 h-3.5" />
+                New Customer
+              </Button>
+            </div>
+            <Select value={formData.customer_id} onValueChange={(value) => {
+              // Radix calls this with "" to self-correct a controlled value it
+              // doesn't recognize — which is exactly the state right after we
+              // set customer_id to a customer just created inline, since its
+              // SelectItem has never been mounted (that only happens once the
+              // dropdown has been opened). Since this is a fully controlled
+              // Select, Radix has no state of its own to fall back on — as
+              // long as we don't act on that spurious "", the value we set
+              // simply stays put. No real selection ever needs to be "".
+              if (value) setFormData(prev => ({ ...prev, customer_id: value }));
+            }}>
               <SelectTrigger>
-                <SelectValue placeholder="Select customer" />
+                {/* Radix only resolves a label from a SelectItem that has been
+                    mounted at least once (i.e. the dropdown was opened while
+                    it was selected). Selecting a customer programmatically —
+                    right after creating one inline — skips that, so the
+                    display text is set explicitly here instead.
+                    The `?? ""` matters: Radix already shows `placeholder`
+                    instead of `children` whenever nothing is selected, but
+                    only if `children` is *some* defined value on every
+                    render. Letting it flip between undefined and a string
+                    toggles an unrelated internal flag (whether the selected
+                    SelectItem is allowed to portal its own text into this
+                    node) and reliably crashes Radix's Portal cleanup here,
+                    inside a dialog nested in another dialog. */}
+                <SelectValue placeholder="Select customer">
+                  {customers.find((c) => c._id === formData.customer_id)?.name ?? ""}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {customers.map((customer) => (
@@ -272,32 +328,51 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
               <Card key={index}>
                 <CardContent className="p-4">
                   <div className="grid grid-cols-6 gap-4 items-end">
-                    <div className="space-y-2">
+                    <div className="space-y-2 relative item-name-autocomplete">
                       <Label>Item Name</Label>
-                      <Select value={item.item_name} onValueChange={(v) => selectInventoryItem(index, v)}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select item from inventory" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {inventoryItems.length === 0 ? (
-                            <div className="p-2 text-sm text-muted-foreground">
-                              No inventory items available
-                            </div>
-                          ) : (
-                            inventoryItems.map((invItem) => (
-                              <SelectItem key={invItem._id || invItem.id} value={invItem.name}>
-                                <div className="flex flex-col">
+                      <Input
+                        value={item.item_name}
+                        onChange={(e) => {
+                          updateItem(index, 'item_name', e.target.value);
+                          setOpenItemSuggestion(index);
+                        }}
+                        onFocus={() => setOpenItemSuggestion(index)}
+                        placeholder="Type or pick an inventory item"
+                        autoComplete="off"
+                      />
+                      {openItemSuggestion === index && (() => {
+                        const query = item.item_name.trim().toLowerCase();
+                        const matches = query
+                          ? inventoryItems.filter((inv) => inv.name.toLowerCase().includes(query)).slice(0, 8)
+                          : inventoryItems.slice(0, 8);
+                        return (
+                          <div className="absolute z-50 mt-1 w-full max-h-56 overflow-y-auto rounded-md border bg-popover text-popover-foreground shadow-md">
+                            {matches.length === 0 ? (
+                              <div className="p-2 text-sm text-muted-foreground">
+                                No matching inventory item — will be added as a custom item
+                              </div>
+                            ) : (
+                              matches.map((invItem) => (
+                                <button
+                                  type="button"
+                                  key={invItem._id || invItem.id}
+                                  className="flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+                                  onClick={() => {
+                                    selectInventoryItem(index, invItem.name);
+                                    setOpenItemSuggestion(null);
+                                  }}
+                                >
                                   <span className="font-medium">{invItem.name}</span>
                                   <span className="text-xs text-muted-foreground">
                                     Stock: {invItem.quantity ?? 0}{invItem.unit ? ` ${invItem.unit}` : ''} | ₹{invItem.unitCost ?? 0}
                                     {invItem.gstRate != null ? ` | GST ${invItem.gstRate}%` : ''}
                                   </span>
-                                </div>
-                              </SelectItem>
-                            ))
-                          )}
-                        </SelectContent>
-                      </Select>
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     <div className="space-y-2">
@@ -442,5 +517,11 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
         </form>
       </DialogContent>
     </Dialog>
+    <CreateCustomerDialog
+      open={showCreateCustomer}
+      onOpenChange={setShowCreateCustomer}
+      onCustomerCreated={handleCustomerCreated}
+    />
+    </>
   );
 };

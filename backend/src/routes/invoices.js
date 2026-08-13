@@ -421,6 +421,13 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
       userId: req.user._id
     };
 
+    // Job is optional — the client sends "" rather than omitting the field
+    // when none is picked, which fails Mongoose's ObjectId cast on create.
+    // The update route already guards against this; create never did.
+    if (!invoiceData.jobId) {
+      delete invoiceData.jobId;
+    }
+
     // Add dataScope if available
     if (req.user.dataScope) {
       invoiceData.dataScope = req.user.dataScope;

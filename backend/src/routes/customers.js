@@ -10,7 +10,12 @@ const router = express.Router();
 // Validation rules
 const customerValidation = [
   body('name').notEmpty().withMessage('Customer name is required').trim(),
-  body('email').optional().isEmail().normalizeEmail(),
+  // checkFalsy: express-validator's bare .optional() only skips undefined, not
+  // "" — and .normalizeEmail() runs even after .isEmail() fails (no .bail()),
+  // turning an empty string into the literal string "@". That corrupted value
+  // then collides with the very next customer created without an email, since
+  // the create route treats any truthy email as one to de-duplicate on.
+  body('email').optional({ checkFalsy: true }).isEmail().normalizeEmail(),
   body('phone').optional().isMobilePhone(),
   body('customerType').optional().isIn(['Individual', 'Business', 'Corporate', 'Walk-in']),
 ];
