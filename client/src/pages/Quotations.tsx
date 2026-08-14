@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Search, FileText, Trash2, Clock, CheckCircle, XCircle, Send, Mail, Download, Receipt, Ban, TimerOff, Lock } from "lucide-react";
+import { Plus, Search, FileText, Trash2, Clock, CheckCircle, XCircle, Send, Mail, MessageSquare, Download, Receipt, Ban, TimerOff, Lock } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { CreateQuotationDialog } from "@/components/quotations/CreateQuotationDialog";
 import apiClient from "@/lib/apiClient";
+import { getTemplateBodyText, getTemplateVariableNumbers } from "@/lib/whatsappTemplates";
 import { useToast } from "@/hooks/use-toast";
 
 interface Quotation {
@@ -61,8 +62,48 @@ export default function Quotations() {
   const [sendingEmail, setSendingEmail] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [convertDialog, setConvertDialog] = useState<{ open: boolean; quotation: Quotation | null }>({ open: false, quotation: null });
+  const [whatsappDialog, setWhatsappDialog] = useState<{ open: boolean; quotation: Quotation | null }>({ open: false, quotation: null });
+  const [whatsappPhone, setWhatsappPhone] = useState("");
+  const [sendingWhatsapp, setSendingWhatsapp] = useState(false);
+  const [metaIntegrationEnabled, setMetaIntegrationEnabled] = useState(false);
+  const [metaTemplates, setMetaTemplates] = useState<any[]>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [selectedTemplate, setSelectedTemplate] = useState("");
+  const [templateMapping, setTemplateMapping] = useState<Record<string, string>>({});
   const { toast } = useToast();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!whatsappDialog.open) return;
+    let cancelled = false;
+    (async () => {
+      setLoadingTemplates(true);
+      try {
+        const waSettings: any = await apiClient.getWhatsAppSettings();
+        const enabled = !!waSettings?.settings?.enabled;
+        if (cancelled) return;
+        setMetaIntegrationEnabled(enabled);
+        if (enabled) {
+          const tmplResponse: any = await apiClient.getMetaTemplates();
+          if (cancelled) return;
+          setMetaTemplates((tmplResponse?.templates || []).filter((t: any) => t.status === "APPROVED"));
+        } else {
+          setMetaTemplates([]);
+        }
+      } catch (err) {
+        console.error("Error loading WhatsApp templates:", err);
+        if (!cancelled) {
+          setMetaIntegrationEnabled(false);
+          setMetaTemplates([]);
+        }
+      } finally {
+        if (!cancelled) setLoadingTemplates(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [whatsappDialog.open]);
 
   const fetchQuotations = async () => {
     setLoading(true);
@@ -112,6 +153,54 @@ export default function Quotations() {
       toast({ title: "Error", description: "Failed to send email", variant: "destructive" });
     } finally {
       setSendingEmail(false);
+    }
+  };
+
+  const openWhatsAppDialog = (q: Quotation) => {
+    setWhatsappPhone(q.customer_id?.phone || "");
+    setSelectedTemplate("");
+    setTemplateMapping({});
+    setWhatsappDialog({ open: true, quotation: q });
+  };
+
+  const handleSendWhatsApp = async () => {
+    const quotation = whatsappDialog.quotation;
+    if (!quotation) return;
+
+    if (!whatsappPhone) {
+      toast({ title: "Error", description: "Please enter a phone number", variant: "destructive" });
+      return;
+    }
+    if (!metaIntegrationEnabled) {
+      toast({
+        title: "Error",
+        description: "WhatsApp Business API is not connected. Set it up in Settings > WhatsApp first.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!selectedTemplate) {
+      toast({ title: "Error", description: "Please choose an approved WhatsApp template", variant: "destructive" });
+      return;
+    }
+
+    setSendingWhatsapp(true);
+    try {
+      await apiClient.sendQuotationWhatsApp(quotation._id, whatsappPhone, selectedTemplate, templateMapping);
+      toast({ title: "Success", description: `Quotation sent to ${whatsappPhone} via WhatsApp` });
+      setWhatsappDialog({ open: false, quotation: null });
+      setWhatsappPhone("");
+      setSelectedTemplate("");
+      setTemplateMapping({});
+      fetchQuotations();
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to send quotation via WhatsApp",
+        variant: "destructive",
+      });
+    } finally {
+      setSendingWhatsapp(false);
     }
   };
 
@@ -376,6 +465,16 @@ export default function Quotations() {
                               <Mail className="w-3 h-3" />
                               Send
                             </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="gap-1 h-7 px-2 text-xs"
+                              onClick={() => openWhatsAppDialog(q)}
+                              title="Send via WhatsApp"
+                            >
+                              <MessageSquare className="w-3 h-3" />
+                              WhatsApp
+                            </Button>
                             {q.status === "converted" ? (
                               <Button
                                 size="sm"
@@ -524,6 +623,139 @@ export default function Quotations() {
             >
               <Send className="w-4 h-4" />
               {sendingEmail ? "Sending..." : "Send Email"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Send WhatsApp Dialog */}
+      <Dialog open={whatsappDialog.open} onOpenChange={(open) => !open && setWhatsappDialog({ open: false, quotation: null })}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <MessageSquare className="w-5 h-5" />
+              Send Quotation via WhatsApp
+            </DialogTitle>
+          </DialogHeader>
+
+          {whatsappDialog.quotation && (
+            <div className="space-y-4 py-2">
+              <div className="rounded-md bg-muted px-3 py-2 text-sm">
+                <span className="text-muted-foreground">Quotation: </span>
+                <span className="font-mono font-medium">{whatsappDialog.quotation.quotationNumber}</span>
+                <span className="text-muted-foreground ml-3">Customer: </span>
+                <span className="font-medium">{whatsappDialog.quotation.customer_id?.name}</span>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="whatsapp-phone">Phone Number</Label>
+                <Input
+                  id="whatsapp-phone"
+                  type="tel"
+                  value={whatsappPhone}
+                  onChange={(e) => setWhatsappPhone(e.target.value)}
+                  placeholder="+1234567890"
+                />
+              </div>
+
+              {!loadingTemplates && !metaIntegrationEnabled && (
+                <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-3">
+                  WhatsApp Business API isn't connected yet. Go to Settings → WhatsApp to connect it before sending quotations.
+                </div>
+              )}
+
+              {metaIntegrationEnabled && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="whatsapp-template">WhatsApp Template</Label>
+                  <Select
+                    value={selectedTemplate}
+                    onValueChange={(value) => {
+                      setSelectedTemplate(value);
+                      setTemplateMapping({});
+                    }}
+                  >
+                    <SelectTrigger id="whatsapp-template">
+                      <SelectValue placeholder={metaTemplates.length ? "Choose an approved template" : "No approved templates found"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {metaTemplates.map((t: any) => (
+                        <SelectItem key={t.name} value={t.name}>
+                          {t.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {metaTemplates.length === 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      No approved templates yet. Create one in Settings → WhatsApp.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {selectedTemplate && (() => {
+                const chosenTemplate = metaTemplates.find((t: any) => t.name === selectedTemplate);
+                const bodyText = getTemplateBodyText(chosenTemplate);
+                const varNumbers = getTemplateVariableNumbers(chosenTemplate);
+
+                return (
+                  <div className="space-y-3 border-t pt-4">
+                    <Label>Variable Mapping</Label>
+                    {bodyText && (
+                      <p className="text-xs bg-muted rounded p-2 font-mono whitespace-pre-wrap">{bodyText}</p>
+                    )}
+                    {varNumbers.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">This template has no variables — nothing to map.</p>
+                    ) : (
+                      <>
+                        <p className="text-xs text-muted-foreground">
+                          Meta rejects the message if the variable count doesn't match exactly — fill every slot below.
+                        </p>
+                        {varNumbers.map((num) => (
+                          <div key={num} className="flex items-center gap-4">
+                            <span className="text-sm font-mono bg-muted px-2 py-1 rounded w-16 text-center">{`{{${num}}}`}</span>
+                            <Select
+                              value={templateMapping[num.toString()] || ""}
+                              onValueChange={(val) =>
+                                setTemplateMapping((prev) => ({
+                                  ...prev,
+                                  [num.toString()]: val,
+                                }))
+                              }
+                            >
+                              <SelectTrigger className="flex-1">
+                                <SelectValue placeholder={`Select data for {{${num}}}`} />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="customerName">Customer Name</SelectItem>
+                                <SelectItem value="quotationNumber">Quotation Number</SelectItem>
+                                <SelectItem value="totalAmount">Total Amount</SelectItem>
+                                <SelectItem value="validUntil">Valid Until</SelectItem>
+                                <SelectItem value="businessName">Business Name</SelectItem>
+                                <SelectItem value="quotationLink">Quotation Link (PDF)</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setWhatsappDialog({ open: false, quotation: null })}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSendWhatsApp}
+              disabled={sendingWhatsapp}
+              className="gap-2"
+            >
+              <Send className="w-4 h-4" />
+              {sendingWhatsapp ? "Sending..." : "Send WhatsApp"}
             </Button>
           </DialogFooter>
         </DialogContent>

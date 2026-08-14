@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,6 +13,13 @@ import {
 } from "@/components/ui/dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Download,
   Mail,
@@ -32,6 +39,7 @@ import {
   AlertTriangle
 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
+import { getTemplateBodyText, getTemplateVariableNumbers } from "@/lib/whatsappTemplates";
 import { useToast } from "@/hooks/use-toast";
 import { EditInvoiceDialog } from "./EditInvoiceDialog";
 import { useNavigate } from "react-router-dom";
@@ -100,8 +108,45 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [message, setMessage] = useState("");
+  const [metaIntegrationEnabled, setMetaIntegrationEnabled] = useState(false);
+  const [metaTemplates, setMetaTemplates] = useState<any[]>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [selectedTemplate, setSelectedTemplate] = useState("");
+  const [templateMapping, setTemplateMapping] = useState<Record<string, string>>({});
   const { toast } = useToast();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!showWhatsAppDialog) return;
+    let cancelled = false;
+    (async () => {
+      setLoadingTemplates(true);
+      try {
+        const waSettings: any = await apiClient.getWhatsAppSettings();
+        const enabled = !!waSettings?.settings?.enabled;
+        if (cancelled) return;
+        setMetaIntegrationEnabled(enabled);
+        if (enabled) {
+          const tmplResponse: any = await apiClient.getMetaTemplates();
+          if (cancelled) return;
+          setMetaTemplates((tmplResponse?.templates || []).filter((t: any) => t.status === "APPROVED"));
+        } else {
+          setMetaTemplates([]);
+        }
+      } catch (err) {
+        console.error("Error loading WhatsApp templates:", err);
+        if (!cancelled) {
+          setMetaIntegrationEnabled(false);
+          setMetaTemplates([]);
+        }
+      } finally {
+        if (!cancelled) setLoadingTemplates(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showWhatsAppDialog]);
 
   if (!invoice) return null;
 
@@ -179,22 +224,47 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
       return;
     }
 
+    if (!metaIntegrationEnabled) {
+      toast({
+        title: "Error",
+        description: "WhatsApp Business API is not connected. Set it up in Settings > WhatsApp first.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!selectedTemplate) {
+      toast({
+        title: "Error",
+        description: "Please choose an approved WhatsApp template",
+        variant: "destructive",
+      });
+      return;
+    }
+
     try {
       setLoading(true);
       const invoiceId = invoice._id || invoice.id;
-      await apiClient.sendInvoiceWhatsApp(invoiceId, phone, message);
+      await apiClient.sendInvoiceWhatsApp(invoiceId, phone, selectedTemplate, templateMapping);
       toast({
         title: "Success",
         description: "Invoice sent via WhatsApp successfully",
       });
       setShowWhatsAppDialog(false);
       setPhone("");
-      setMessage("");
+      setSelectedTemplate("");
+      setTemplateMapping({});
     } catch (error: any) {
       console.error('Error sending WhatsApp:', error);
-      // Check if error is about company settings not configured
       if (error.message?.includes('Company details not configured')) {
         setShowCompanySettingsDialog(true);
+      } else if (error.code === 'WHATSAPP_NOT_CONFIGURED') {
+        setMetaIntegrationEnabled(false);
+        toast({
+          title: "Error",
+          description: error.message || "WhatsApp Business API is not configured",
+          variant: "destructive",
+        });
       } else {
         toast({
           title: "Error",
@@ -476,6 +546,8 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
                 variant="outline"
                 onClick={() => {
                   setPhone(invoice.customerId.phone || "");
+                  setSelectedTemplate("");
+                  setTemplateMapping({});
                   setShowWhatsAppDialog(true);
                 }}
                 disabled={loading}
@@ -561,16 +633,92 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
                 placeholder="+1234567890"
               />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="whatsappMessage">Message (Optional)</Label>
-              <Textarea
-                id="whatsappMessage"
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                placeholder="Add a personal message..."
-                rows={3}
-              />
-            </div>
+            {!loadingTemplates && !metaIntegrationEnabled && (
+              <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-3">
+                WhatsApp Business API isn't connected yet. Go to Settings → WhatsApp to connect it before sending invoices.
+              </div>
+            )}
+
+            {metaIntegrationEnabled && (
+              <div className="space-y-2">
+                <Label htmlFor="whatsappTemplate">WhatsApp Template</Label>
+                <Select
+                  value={selectedTemplate}
+                  onValueChange={(value) => {
+                    setSelectedTemplate(value);
+                    setTemplateMapping({});
+                  }}
+                >
+                  <SelectTrigger id="whatsappTemplate">
+                    <SelectValue placeholder={metaTemplates.length ? "Choose an approved template" : "No approved templates found"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {metaTemplates.map((t: any) => (
+                      <SelectItem key={t.name} value={t.name}>
+                        {t.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {metaTemplates.length === 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    No approved templates yet. Create one in Settings → WhatsApp.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {selectedTemplate && (() => {
+              const chosenTemplate = metaTemplates.find((t: any) => t.name === selectedTemplate);
+              const bodyText = getTemplateBodyText(chosenTemplate);
+              const varNumbers = getTemplateVariableNumbers(chosenTemplate);
+
+              return (
+                <div className="space-y-3 border-t pt-4">
+                  <Label>Variable Mapping</Label>
+                  {bodyText && (
+                    <p className="text-xs bg-muted rounded p-2 font-mono whitespace-pre-wrap">{bodyText}</p>
+                  )}
+                  {varNumbers.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">This template has no variables — nothing to map.</p>
+                  ) : (
+                    <>
+                      <p className="text-xs text-muted-foreground">
+                        Meta rejects the message if the variable count doesn't match exactly — fill every slot below.
+                      </p>
+                      {varNumbers.map((num) => (
+                        <div key={num} className="flex items-center gap-4">
+                          <span className="text-sm font-mono bg-muted px-2 py-1 rounded w-16 text-center">{`{{${num}}}`}</span>
+                          <Select
+                            value={templateMapping[num.toString()] || ""}
+                            onValueChange={(val) =>
+                              setTemplateMapping((prev) => ({
+                                ...prev,
+                                [num.toString()]: val,
+                              }))
+                            }
+                          >
+                            <SelectTrigger className="flex-1">
+                              <SelectValue placeholder={`Select data for {{${num}}}`} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="customerName">Customer Name</SelectItem>
+                              <SelectItem value="invoiceNumber">Invoice Number</SelectItem>
+                              <SelectItem value="totalAmount">Total Amount</SelectItem>
+                              <SelectItem value="balanceDue">Balance Due</SelectItem>
+                              <SelectItem value="invoiceDate">Invoice Date</SelectItem>
+                              <SelectItem value="dueDate">Due Date</SelectItem>
+                              <SelectItem value="businessName">Business Name</SelectItem>
+                              <SelectItem value="invoiceLink">Invoice Link (PDF)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              );
+            })()}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowWhatsAppDialog(false)}>

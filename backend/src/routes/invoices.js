@@ -9,6 +9,7 @@ const PDFService = require('../services/PDFService');
 const InventoryService = require('../services/InventoryService');
 const { protect } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/requirePermission');
+const { sendWhatsAppMessage, buildTemplateVariables } = require('../utils/metaWhatsApp');
 
 const router = express.Router();
 
@@ -1013,15 +1014,17 @@ router.post('/:id/send-email', protect, requirePermission('Invoicing: Send Email
 });
 
 // @route   POST /api/invoices/:id/send-whatsapp
-// @desc    Send invoice via WhatsApp
+// @desc    Send invoice via WhatsApp using the Meta WhatsApp Business Cloud API
 // @access  Private
-router.post('/:id/send-whatsapp', protect, [
+router.post('/:id/send-whatsapp', protect, requirePermission('WhatsApp: Send Messages'), [
   body('phone').notEmpty().withMessage('Phone number is required'),
-  body('message').optional().isString().trim()
+  body('metaTemplateName').notEmpty().withMessage('A WhatsApp template is required'),
+  body('metaTemplateLanguage').optional({ nullable: true }).isString(),
+  body('templateVariableMapping').optional({ nullable: true }).isObject()
 ], async (req, res) => {
   try {
     const invoiceId = req.params.id;
-    const { phone, message } = req.body;
+    const { phone, metaTemplateName, metaTemplateLanguage, templateVariableMapping } = req.body;
 
     // Build query - filter by dataScope or userId (fallback for migration)
     const query = { _id: invoiceId };
@@ -1044,7 +1047,7 @@ router.post('/:id/send-whatsapp', protect, [
 
     // Get company information from settings
     const companyInfoResult = await getCompanyInfo(req.user._id);
-    
+
     if (!companyInfoResult.isConfigured) {
       return res.status(400).json({
         status: 'error',
@@ -1053,41 +1056,36 @@ router.post('/:id/send-whatsapp', protect, [
       });
     }
 
-    // Generate PDF
+    const settings = await Settings.getOrCreateSettings(req.user._id);
+    const waIntegration = settings.whatsappIntegration;
+
+    if (!waIntegration?.enabled || !waIntegration?.phoneNumberId || !waIntegration?.accessToken) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'WhatsApp Business API is not configured. Connect it in Settings > WhatsApp before sending invoices.',
+        code: 'WHATSAPP_NOT_CONFIGURED'
+      });
+    }
+
+    // Generate PDF and save to a temporary public URL so it can be offered as a linked variable
     console.log('📱 Generating PDF for WhatsApp...');
     const pdfBuffer = await PDFService.generateInvoicePDFFromHTML(invoice, companyInfoResult);
 
-    // Save PDF to temporary public folder
     const fs = require('fs');
     const path = require('path');
     const publicDir = path.join(__dirname, '../../public/temp');
 
-    // Create directory if it doesn't exist
     if (!fs.existsSync(publicDir)) {
       fs.mkdirSync(publicDir, { recursive: true });
     }
 
     const fileName = `Invoice_${invoice.invoiceNumber}_${Date.now()}.pdf`;
     const filePath = path.join(publicDir, fileName);
-
-    // Save the PDF
     fs.writeFileSync(filePath, pdfBuffer);
     console.log('📱 PDF saved to:', filePath);
 
-    // Create public URL for the PDF
     const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
     const pdfUrl = `${baseUrl}/temp/${fileName}`;
-
-    // Create WhatsApp message with PDF link
-    const whatsappMessage = message
-      ? `${message}\n\nDownload Invoice: ${pdfUrl}`
-      : `Invoice ${invoice.invoiceNumber} - Amount: ₹${invoice.totalAmount.toFixed(2)}\n\nDownload PDF: ${pdfUrl}`;
-
-    const encodedMessage = encodeURIComponent(whatsappMessage);
-    const cleanPhone = phone.replace(/\D/g, '');
-    const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodedMessage}`;
-
-    console.log('📱 WhatsApp URL generated:', whatsappUrl);
 
     // Schedule file deletion after 1 hour
     setTimeout(() => {
@@ -1101,14 +1099,41 @@ router.post('/:id/send-whatsapp', protect, [
       }
     }, 60 * 60 * 1000); // 1 hour
 
+    const contextData = {
+      customerName: invoice.customerId?.name || invoice.customerName || '',
+      invoiceNumber: invoice.invoiceNumber,
+      totalAmount: invoice.totalAmount.toLocaleString('en-IN'),
+      balanceDue: invoice.balanceDue.toLocaleString('en-IN'),
+      dueDate: new Date(invoice.dueDate).toLocaleDateString('en-IN'),
+      invoiceDate: new Date(invoice.invoiceDate).toLocaleDateString('en-IN'),
+      businessName: companyInfoResult.name || 'Our Company',
+      invoiceLink: pdfUrl
+    };
+
+    const variablesArray = buildTemplateVariables(templateVariableMapping, contextData);
+
+    const whatsappResult = await sendWhatsAppMessage(
+      phone,
+      `[Meta Template: ${metaTemplateName}]`,
+      { templateName: metaTemplateName, languageCode: metaTemplateLanguage, variables: variablesArray },
+      waIntegration,
+      { invoiceNumber: invoice.invoiceNumber }
+    );
+
+    if (!whatsappResult.success) {
+      return res.status(400).json({
+        status: 'error',
+        message: whatsappResult.error || 'Failed to send invoice via WhatsApp'
+      });
+    }
+
     res.status(200).json({
       status: 'success',
-      message: `Invoice ${invoice.invoiceNumber} prepared for WhatsApp`,
+      message: `Invoice ${invoice.invoiceNumber} sent via WhatsApp`,
       data: {
         invoiceNumber: invoice.invoiceNumber,
         recipientPhone: phone,
-        whatsappUrl: whatsappUrl,
-        pdfUrl: pdfUrl,
+        messageId: whatsappResult.messageId,
         sentAt: new Date()
       }
     });
@@ -1192,3 +1217,6 @@ router.delete('/clear-duplicate', protect, async (req, res) => {
 });
 
 module.exports = router;
+// Exposed so other routes (e.g. payment reminders, for PDF attachments) can build the same
+// company-info shape PDFService.generateInvoicePDFFromHTML expects, without duplicating it.
+module.exports.getCompanyInfo = getCompanyInfo;

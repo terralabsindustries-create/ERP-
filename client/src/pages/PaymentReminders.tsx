@@ -64,6 +64,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import apiClient from "@/lib/apiClient";
+import { getTemplateBodyText, getTemplateVariableNumbers } from "@/lib/whatsappTemplates";
 import { useToast } from "@/hooks/use-toast";
 
 interface OverdueInvoice {
@@ -100,6 +101,7 @@ interface Reminder {
   sentAt: string;
   reminderCount: number;
   createdAt: string;
+  failureReason?: string;
 }
 
 interface ReminderSettings {
@@ -119,18 +121,6 @@ interface Stats {
   customersNeedingReminder: number;
   sentToday: number;
   totalSent: number;
-}
-
-// Meta only accepts exactly as many variables as the approved template's body actually declares
-function getTemplateBodyText(template: any): string {
-  const bodyComponent = template?.components?.find((c: any) => c.type === "BODY");
-  return bodyComponent?.text || "";
-}
-
-function getTemplateVariableNumbers(template: any): number[] {
-  const text = getTemplateBodyText(template);
-  const matches = Array.from(text.matchAll(/\{\{(\d+)\}\}/g)).map((m: any) => Number(m[1]));
-  return Array.from(new Set(matches)).sort((a, b) => a - b);
 }
 
 export default function PaymentReminders() {
@@ -395,14 +385,21 @@ export default function PaymentReminders() {
     });
   };
 
-  const getStatusBadge = (status: string) => {
+  const getStatusBadge = (status: string, failureReason?: string) => {
     switch (status) {
       case "sent":
         return <Badge className="bg-blue-500/10 text-blue-600 border-blue-500/20 hover:bg-blue-500/20"><Send className="h-3 w-3 mr-1" />Sent</Badge>;
       case "delivered":
         return <Badge className="bg-green-500/10 text-green-600 border-green-500/20 hover:bg-green-500/20"><CheckCircle2 className="h-3 w-3 mr-1" />Delivered</Badge>;
       case "failed":
-        return <Badge className="bg-red-500/10 text-red-600 border-red-500/20 hover:bg-red-500/20"><XCircle className="h-3 w-3 mr-1" />Failed</Badge>;
+        return (
+          <Badge
+            className="bg-red-500/10 text-red-600 border-red-500/20 hover:bg-red-500/20 cursor-help"
+            title={failureReason || "WhatsApp API error"}
+          >
+            <XCircle className="h-3 w-3 mr-1" />Failed
+          </Badge>
+        );
       case "pending":
         return <Badge className="bg-yellow-500/10 text-yellow-600 border-yellow-500/20 hover:bg-yellow-500/20"><Clock className="h-3 w-3 mr-1" />Pending</Badge>;
       default:
@@ -783,7 +780,12 @@ export default function PaymentReminders() {
                             <TableCell className="text-center">
                               <span className="text-sm font-medium">#{reminder.reminderCount}</span>
                             </TableCell>
-                            <TableCell>{getStatusBadge(reminder.status)}</TableCell>
+                            <TableCell>
+                              {getStatusBadge(reminder.status, reminder.failureReason)}
+                              {reminder.status === "failed" && reminder.failureReason && (
+                                <p className="text-xs text-red-500 mt-1 max-w-[220px]">{reminder.failureReason}</p>
+                              )}
+                            </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>

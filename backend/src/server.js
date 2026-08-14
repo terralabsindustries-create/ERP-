@@ -115,20 +115,21 @@ const Invoice = require('./models/Invoice');
 const Customer = require('./models/Customer');
 const Settings = require('./models/Settings');
 const User = require('./models/User');
+const { buildAndSendReminder } = require('./routes/paymentReminders');
 
 async function autoCheckPaymentReminders() {
   try {
     console.log('⏰ Running automatic payment reminder check...');
-    
+
     // Find all users with autoSend enabled
     const allSettings = await Settings.find({ 'paymentReminders.autoSend': true, 'paymentReminders.enabled': true });
-    
+
     for (const settings of allSettings) {
       try {
         const userId = settings.userId;
         const user = await User.findById(userId);
         if (!user || !user.isActive) continue;
-        
+
         const dataScope = user.dataScope;
         const config = settings.paymentReminders;
         const now = new Date();
@@ -160,43 +161,8 @@ async function autoCheckPaymentReminders() {
               if (daysSince < (config.reminderInterval || 3)) continue;
             }
 
-            // Build and send
-            let msg = config.messageTemplate || 'Hi {{customerName}}, payment reminder for invoice {{invoiceNumber}}. Balance: ₹{{balanceAmount}}.';
-            msg = msg.replace(/\{\{customerName\}\}/g, invoice.customerName)
-                     .replace(/\{\{invoiceNumber\}\}/g, invoice.invoiceNumber)
-                     .replace(/\{\{totalAmount\}\}/g, invoice.totalAmount.toLocaleString('en-IN'))
-                     .replace(/\{\{balanceAmount\}\}/g, invoice.balanceAmount.toLocaleString('en-IN'))
-                     .replace(/\{\{dueDate\}\}/g, new Date(invoice.dueDate).toLocaleDateString('en-IN'))
-                     .replace(/\{\{businessName\}\}/g, settings.companyName || 'Our Company');
-
-            const msgId = `auto_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-            console.log(`📱 Auto-reminder to ${customer.phone}: ${msg.substring(0, 60)}...`);
-
-            await PaymentReminder.create({
-              invoiceId: invoice._id,
-              customerId: customer._id,
-              customerName: invoice.customerName,
-              customerPhone: customer.phone,
-              invoiceNumber: invoice.invoiceNumber,
-              totalAmount: invoice.totalAmount,
-              balanceAmount: invoice.balanceAmount,
-              dueDate: invoice.dueDate,
-              daysOverdue,
-              reminderType: invoice.paymentStatus === 'partial' ? 'partial' : 'overdue',
-              messageContent: msg,
-              status: 'sent',
-              sentAt: new Date(),
-              reminderCount: reminderCount + 1,
-              whatsappMessageId: msgId,
-              userId,
-              dataScope
-            });
-
-            if (invoice.paymentStatus !== 'overdue') {
-              invoice.paymentStatus = 'overdue';
-              await invoice.save();
-            }
-            sentCount++;
+            const { whatsappResult } = await buildAndSendReminder({ invoice, customer, settings, userId, dataScope, reminderCount });
+            if (whatsappResult.success) sentCount++;
           } catch (err) {
             console.error(`Auto-reminder error for invoice ${invoice.invoiceNumber}:`, err.message);
           }

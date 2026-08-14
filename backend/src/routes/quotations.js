@@ -49,6 +49,7 @@ async function getCompanyInfo(userId) {
 }
 
 const { createTransporter, getFromAddress, sendMailErrorResponse } = require('../utils/mailer');
+const { sendWhatsAppMessage, buildTemplateVariables } = require('../utils/metaWhatsApp');
 
 const router = express.Router();
 
@@ -445,6 +446,102 @@ router.post('/:id/send-email', protect, requirePermission('Quotations: Send Emai
   } catch (err) {
     console.error('POST /quotations/:id/send-email error:', err);
     res.status(500).json({ status: 'error', message: 'Failed to send quotation email' });
+  }
+});
+
+// POST /api/quotations/:id/send-whatsapp
+router.post('/:id/send-whatsapp', protect, requirePermission('WhatsApp: Send Messages'), [
+  body('phone').notEmpty().withMessage('Phone number is required'),
+  body('metaTemplateName').notEmpty().withMessage('A WhatsApp template is required'),
+  body('metaTemplateLanguage').optional({ nullable: true }).isString(),
+  body('templateVariableMapping').optional({ nullable: true }).isObject()
+], async (req, res) => {
+  try {
+    const { phone, metaTemplateName, metaTemplateLanguage, templateVariableMapping } = req.body;
+
+    const filter = req.user.dataScope
+      ? { _id: req.params.id, dataScope: req.user.dataScope }
+      : { _id: req.params.id, userId: req.user._id };
+
+    const quotation = await Quotation.findOne(filter).populate('customer_id', 'name email phone address gstNumber');
+    if (!quotation) return res.status(404).json({ status: 'error', message: 'Quotation not found' });
+
+    const settings = await Settings.getOrCreateSettings(req.user._id);
+    const waIntegration = settings.whatsappIntegration;
+    if (!waIntegration?.enabled || !waIntegration?.phoneNumberId || !waIntegration?.accessToken) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'WhatsApp Business API is not configured. Connect it in Settings > WhatsApp before sending quotations.',
+        code: 'WHATSAPP_NOT_CONFIGURED'
+      });
+    }
+
+    // Generate the PDF and save it to a temporary public URL so it can be offered as a linked variable
+    const companyInfo = await getCompanyInfo(req.user._id);
+    let quotationLink = '';
+    try {
+      const pdfBuffer = await PDFService.generateQuotationPDFFromHTML(quotation, companyInfo);
+      const fs = require('fs');
+      const path = require('path');
+      const publicDir = path.join(__dirname, '../../public/temp');
+      if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir, { recursive: true });
+      const fileName = `Quotation_${quotation.quotationNumber}_${Date.now()}.pdf`;
+      const filePath = path.join(publicDir, fileName);
+      fs.writeFileSync(filePath, pdfBuffer);
+      const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
+      quotationLink = `${baseUrl}/temp/${fileName}`;
+      setTimeout(() => {
+        try {
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        } catch (err) {
+          console.error('Error deleting temporary PDF:', err);
+        }
+      }, 60 * 60 * 1000); // 1 hour
+    } catch (pdfErr) {
+      console.warn('⚠️ Quotation PDF generation for WhatsApp failed:', pdfErr.message);
+    }
+
+    const contextData = {
+      customerName: quotation.customer_id?.name || '',
+      quotationNumber: quotation.quotationNumber,
+      totalAmount: quotation.total_amount.toLocaleString('en-IN'),
+      validUntil: quotation.valid_until ? new Date(quotation.valid_until).toLocaleDateString('en-IN') : 'N/A',
+      businessName: companyInfo.name || 'Our Company',
+      quotationLink
+    };
+
+    const variablesArray = buildTemplateVariables(templateVariableMapping, contextData);
+
+    const whatsappResult = await sendWhatsAppMessage(
+      phone,
+      `[Meta Template: ${metaTemplateName}]`,
+      { templateName: metaTemplateName, languageCode: metaTemplateLanguage, variables: variablesArray },
+      waIntegration,
+      { invoiceNumber: quotation.quotationNumber }
+    );
+
+    if (!whatsappResult.success) {
+      return res.status(400).json({
+        status: 'error',
+        message: whatsappResult.error || 'Failed to send quotation via WhatsApp'
+      });
+    }
+
+    await Quotation.findOneAndUpdate(filter, { status: 'sent' });
+
+    res.json({
+      status: 'success',
+      message: `Quotation ${quotation.quotationNumber} sent via WhatsApp`,
+      data: {
+        quotationNumber: quotation.quotationNumber,
+        recipientPhone: phone,
+        messageId: whatsappResult.messageId,
+        sentAt: new Date()
+      }
+    });
+  } catch (err) {
+    console.error('POST /quotations/:id/send-whatsapp error:', err);
+    res.status(500).json({ status: 'error', message: err.message || 'Failed to send quotation via WhatsApp' });
   }
 });
 

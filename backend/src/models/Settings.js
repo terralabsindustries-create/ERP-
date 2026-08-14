@@ -256,8 +256,11 @@ const settingsSchema = new mongoose.Schema({
   }
 }, {
   timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
+  // flattenMaps: without this, Map fields (like paymentReminders.templateVariableMapping)
+  // serialize to "{}" in every JSON response — the data is fine in the DB, but API responses
+  // (and therefore the Settings UI) would show it as empty.
+  toJSON: { virtuals: true, flattenMaps: true },
+  toObject: { virtuals: true, flattenMaps: true }
 });
 
 // Index for efficient querying

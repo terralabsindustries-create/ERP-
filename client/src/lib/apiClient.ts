@@ -61,6 +61,7 @@ class ApiClient {
         const err = new Error(data.message || 'API request failed') as any;
         err.details = (data as any).details;
         err.stockCheck = (data as any).stockCheck;
+        err.code = (data as any).code;
         throw err;
       }
 
@@ -695,6 +696,21 @@ class ApiClient {
     return this.post(`/quotations/${id}/send-email`, { recipientEmail, message });
   }
 
+  async sendQuotationWhatsApp(
+    id: string,
+    phone: string,
+    metaTemplateName: string,
+    templateVariableMapping?: Record<string, string>,
+    metaTemplateLanguage?: string
+  ) {
+    return this.post(`/quotations/${id}/send-whatsapp`, {
+      phone,
+      metaTemplateName,
+      metaTemplateLanguage,
+      templateVariableMapping
+    });
+  }
+
   // Invoice Management
   async getInvoices(params?: any) {
     const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
@@ -877,8 +893,19 @@ class ApiClient {
     return this.post(`/invoices/${invoiceId}/send-email`, { email, message });
   }
 
-  async sendInvoiceWhatsApp(invoiceId: string, phone: string, message?: string) {
-    return this.post(`/invoices/${invoiceId}/send-whatsapp`, { phone, message });
+  async sendInvoiceWhatsApp(
+    invoiceId: string,
+    phone: string,
+    metaTemplateName: string,
+    templateVariableMapping?: Record<string, string>,
+    metaTemplateLanguage?: string
+  ) {
+    return this.post(`/invoices/${invoiceId}/send-whatsapp`, {
+      phone,
+      metaTemplateName,
+      metaTemplateLanguage,
+      templateVariableMapping
+    });
   }
 
   async getInvoicePrintData(invoiceId: string) {

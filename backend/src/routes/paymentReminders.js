@@ -5,6 +5,7 @@ const PaymentReminder = require('../models/PaymentReminder');
 const Invoice = require('../models/Invoice');
 const Customer = require('../models/Customer');
 const Settings = require('../models/Settings');
+const { sendWhatsAppMessage, buildTemplateVariables } = require('../utils/metaWhatsApp');
 
 const router = express.Router();
 
@@ -34,78 +35,81 @@ function calculateDaysOverdue(dueDate) {
   return Math.max(0, diffDays);
 }
 
-// Helper: Send WhatsApp message via Meta Cloud API
-async function sendWhatsAppMessage(phoneNumber, message, metaPayload, waIntegration) {
-  const cleanPhone = String(phoneNumber || '').replace(/[^0-9]/g, '');
-  if (!cleanPhone) {
-    return { success: false, status: 'failed', error: 'Customer phone number is invalid' };
+// Shared: build the message for one invoice+customer using this user's settings (with an optional
+// per-send template override), send it, persist a PaymentReminder record, and flip the invoice to
+// overdue if needed. Used by both routes below AND by the auto-send cron in server.js, so there is
+// exactly one real send implementation instead of separate (and previously fake) copies.
+async function buildAndSendReminder({ invoice, customer, settings, userId, dataScope, reminderCount, templateOverride = {} }) {
+  const daysOverdue = calculateDaysOverdue(invoice.dueDate);
+  const reminderConfig = settings.paymentReminders || {};
+  const contextData = {
+    customerName: invoice.customerName,
+    invoiceNumber: invoice.invoiceNumber,
+    totalAmount: invoice.totalAmount.toLocaleString('en-IN'),
+    balanceAmount: invoice.balanceAmount.toLocaleString('en-IN'),
+    dueDate: formatDate(invoice.dueDate),
+    daysOverdue: daysOverdue.toString(),
+    businessName: settings.companyName || 'Our Company'
+  };
+
+  // Template selected at send time takes priority over the saved default.
+  // templateOverride.metaTemplateName === '' means the caller explicitly chose free text.
+  const effectiveTemplateName = templateOverride.metaTemplateName !== undefined ? templateOverride.metaTemplateName : reminderConfig.metaTemplateName;
+  const effectiveMapping = templateOverride.templateVariableMapping !== undefined ? templateOverride.templateVariableMapping : reminderConfig.templateVariableMapping;
+
+  let messageContent = '';
+  let metaPayload = null;
+
+  if (effectiveTemplateName && settings.whatsappIntegration?.enabled) {
+    const variablesArray = buildTemplateVariables(effectiveMapping, contextData);
+    messageContent = `[Meta Template: ${effectiveTemplateName}]`;
+    metaPayload = {
+      templateName: effectiveTemplateName,
+      languageCode: templateOverride.metaTemplateLanguage,
+      variables: variablesArray
+    };
+  } else {
+    const template = reminderConfig.messageTemplate ||
+      'Hi {{customerName}}, this is a friendly reminder that your invoice {{invoiceNumber}} of ₹{{totalAmount}} has a pending balance of ₹{{balanceAmount}}. The payment was due on {{dueDate}}. Please make the payment at your earliest convenience. - {{businessName}}';
+    messageContent = buildMessage(template, contextData);
   }
 
-  if (!waIntegration?.phoneNumberId || !waIntegration?.accessToken) {
-    return { success: false, status: 'failed', error: 'WhatsApp Business API is not configured (missing phone number ID or access token)' };
+  let reminderType = 'manual';
+  if (invoice.paymentStatus === 'overdue' || daysOverdue > 0) {
+    reminderType = 'overdue';
+  } else if (invoice.paymentStatus === 'partial') {
+    reminderType = 'partial';
   }
 
-  const body = metaPayload
-    ? {
-        messaging_product: 'whatsapp',
-        to: cleanPhone,
-        type: 'template',
-        template: {
-          name: metaPayload.templateName,
-          language: { code: metaPayload.languageCode || 'en_US' },
-          ...(metaPayload.variables?.length ? { components: [{ type: 'body', parameters: metaPayload.variables }] } : {})
-        }
-      }
-    : {
-        messaging_product: 'whatsapp',
-        to: cleanPhone,
-        type: 'text',
-        text: { body: message }
-      };
+  const whatsappResult = await sendWhatsAppMessage(customer.phone, messageContent, metaPayload, settings.whatsappIntegration, { invoiceNumber: invoice.invoiceNumber });
 
-  try {
-    const response = await fetch(`https://graph.facebook.com/v19.0/${waIntegration.phoneNumberId}/messages`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${waIntegration.accessToken}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(body)
-    });
+  const reminder = await PaymentReminder.create({
+    invoiceId: invoice._id,
+    customerId: customer._id,
+    customerName: invoice.customerName,
+    customerPhone: customer.phone,
+    invoiceNumber: invoice.invoiceNumber,
+    totalAmount: invoice.totalAmount,
+    balanceAmount: invoice.balanceAmount,
+    dueDate: invoice.dueDate,
+    daysOverdue,
+    reminderType,
+    messageContent,
+    status: whatsappResult.success ? 'sent' : 'failed',
+    sentAt: whatsappResult.success ? new Date() : undefined,
+    failureReason: whatsappResult.success ? undefined : (whatsappResult.error || 'WhatsApp API error'),
+    reminderCount: reminderCount + 1,
+    whatsappMessageId: whatsappResult.messageId,
+    userId,
+    dataScope
+  });
 
-    const data = await response.json();
-
-    if (!response.ok) {
-      console.error('Meta API Send Error:', data);
-      return { success: false, status: 'failed', error: data.error?.message || 'Failed to send WhatsApp message via Meta' };
-    }
-
-    return { success: true, status: 'sent', messageId: data.messages?.[0]?.id };
-  } catch (error) {
-    console.error('WhatsApp send error:', error);
-    return { success: false, status: 'failed', error: error.message };
+  if (daysOverdue > 0 && invoice.paymentStatus !== 'overdue') {
+    invoice.paymentStatus = 'overdue';
+    await invoice.save();
   }
-}
 
-// Helper: Build Meta template variable components from a mapping (Map or plain object) + context data.
-// Meta's {{n}} placeholders are positional (no explicit index sent per param), so a gap must be
-// filled with an empty string rather than skipped — skipping would shift every later variable
-// into the wrong slot.
-function buildTemplateVariables(mapping, contextData) {
-  if (!mapping) return [];
-  const entries = mapping instanceof Map ? Array.from(mapping.entries()) : Object.entries(mapping);
-  const numericKeys = entries.map(([key]) => Number(key)).filter(Number.isFinite);
-  if (numericKeys.length === 0) return [];
-
-  const maxKey = Math.max(...numericKeys);
-  const valueByKey = new Map(entries.map(([key, contextKey]) => [Number(key), contextKey]));
-
-  const variablesArray = [];
-  for (let position = 1; position <= maxKey; position++) {
-    const contextKey = valueByKey.get(position);
-    variablesArray.push({ type: 'text', text: contextData[contextKey] || '' });
-  }
-  return variablesArray;
+  return { reminder, whatsappResult };
 }
 
 // @route   GET /api/payment-reminders/stats
@@ -392,80 +396,19 @@ router.post('/send/:invoiceId', protect, [
       });
     }
 
-    // Build message
-    const daysOverdue = calculateDaysOverdue(invoice.dueDate);
-    const contextData = {
-      customerName: invoice.customerName,
-      invoiceNumber: invoice.invoiceNumber,
-      totalAmount: invoice.totalAmount.toLocaleString('en-IN'),
-      balanceAmount: invoice.balanceAmount.toLocaleString('en-IN'),
-      dueDate: formatDate(invoice.dueDate),
-      daysOverdue: daysOverdue.toString(),
-      businessName: settings.companyName || 'Our Company'
-    };
-
-    let messageContent = '';
-    let metaPayload = null;
-
-    // Template selected at send time takes priority over the saved default.
-    // overrideTemplateName === '' means the user explicitly chose free text for this send.
-    const effectiveTemplateName = overrideTemplateName !== undefined ? overrideTemplateName : reminderConfig.metaTemplateName;
-    const effectiveMapping = overrideMapping !== undefined ? overrideMapping : reminderConfig.templateVariableMapping;
-
-    if (effectiveTemplateName && settings.whatsappIntegration?.enabled) {
-      // Use Meta Template
-      const variablesArray = buildTemplateVariables(effectiveMapping, contextData);
-      messageContent = `[Meta Template: ${effectiveTemplateName}]`;
-      metaPayload = {
-        templateName: effectiveTemplateName,
-        languageCode: metaTemplateLanguage,
-        variables: variablesArray
-      };
-    } else {
-      // Fallback to plain text template
-      const template = reminderConfig.messageTemplate ||
-        'Hi {{customerName}}, this is a friendly reminder that your invoice {{invoiceNumber}} of ₹{{totalAmount}} has a pending balance of ₹{{balanceAmount}}. The payment was due on {{dueDate}}. Please make the payment at your earliest convenience. - {{businessName}}';
-      messageContent = buildMessage(template, contextData);
-    }
-
-    // Determine reminder type
-    let reminderType = 'manual';
-    if (invoice.paymentStatus === 'overdue' || daysOverdue > 0) {
-      reminderType = 'overdue';
-    } else if (invoice.paymentStatus === 'partial') {
-      reminderType = 'partial';
-    }
-
-    // Send WhatsApp message
-    const whatsappResult = await sendWhatsAppMessage(customerPhone, messageContent, metaPayload, settings.whatsappIntegration);
-
-    // Create reminder record
-    const reminder = await PaymentReminder.create({
-      invoiceId: invoice._id,
-      customerId: customer._id,
-      customerName: invoice.customerName,
-      customerPhone,
-      invoiceNumber: invoice.invoiceNumber,
-      totalAmount: invoice.totalAmount,
-      balanceAmount: invoice.balanceAmount,
-      dueDate: invoice.dueDate,
-      daysOverdue,
-      reminderType,
-      messageContent,
-      status: whatsappResult.success ? 'sent' : 'failed',
-      sentAt: whatsappResult.success ? new Date() : undefined,
-      failureReason: whatsappResult.success ? undefined : (whatsappResult.error || 'WhatsApp API error'),
-      reminderCount: reminderCount + 1,
-      whatsappMessageId: whatsappResult.messageId,
+    const { reminder, whatsappResult } = await buildAndSendReminder({
+      invoice,
+      customer,
+      settings,
       userId,
-      dataScope
+      dataScope,
+      reminderCount,
+      templateOverride: {
+        metaTemplateName: overrideTemplateName,
+        metaTemplateLanguage,
+        templateVariableMapping: overrideMapping
+      }
     });
-
-    // Update invoice payment status to overdue if applicable
-    if (daysOverdue > 0 && invoice.paymentStatus !== 'overdue') {
-      invoice.paymentStatus = 'overdue';
-      await invoice.save();
-    }
 
     if (!whatsappResult.success) {
       return res.status(400).json({
@@ -504,9 +447,6 @@ router.post('/send-bulk', protect, async (req, res) => {
     const maxReminders = reminderConfig.maxReminders || 5;
     const daysAfterDue = reminderConfig.daysAfterDue || 1;
     const reminderInterval = reminderConfig.reminderInterval || 3;
-
-    const template = reminderConfig.messageTemplate ||
-      'Hi {{customerName}}, this is a friendly reminder that your invoice {{invoiceNumber}} of ₹{{totalAmount}} has a pending balance of ₹{{balanceAmount}}. The payment was due on {{dueDate}}. Please make the payment at your earliest convenience. - {{businessName}}';
 
     // Build query
     const invoiceQuery = dataScope ? { dataScope } : { userId };
@@ -564,57 +504,13 @@ router.post('/send-bulk', protect, async (req, res) => {
           }
         }
 
-        // Build and send message
-        const contextData = {
-          customerName: invoice.customerName,
-          invoiceNumber: invoice.invoiceNumber,
-          totalAmount: invoice.totalAmount.toLocaleString('en-IN'),
-          balanceAmount: invoice.balanceAmount.toLocaleString('en-IN'),
-          dueDate: formatDate(invoice.dueDate),
-          daysOverdue: daysOverdue.toString(),
-          businessName: settings.companyName || 'Our Company'
-        };
-
-        let messageContent = '';
-        let metaPayload = null;
-
-        if (reminderConfig.metaTemplateName && settings.whatsappIntegration?.enabled) {
-          // Use Meta Template
-          const variablesArray = buildTemplateVariables(reminderConfig.templateVariableMapping, contextData);
-          messageContent = `[Meta Template: ${reminderConfig.metaTemplateName}]`;
-          metaPayload = {
-            templateName: reminderConfig.metaTemplateName,
-            variables: variablesArray
-          };
-        } else {
-          // Fallback to plain text template
-          messageContent = buildMessage(template, contextData);
-        }
-
-        const whatsappResult = await sendWhatsAppMessage(customerPhone, messageContent, metaPayload, settings.whatsappIntegration);
-
-        let reminderType = 'overdue';
-        if (invoice.paymentStatus === 'partial') reminderType = 'partial';
-
-        await PaymentReminder.create({
-          invoiceId: invoice._id,
-          customerId: customer._id,
-          customerName: invoice.customerName,
-          customerPhone,
-          invoiceNumber: invoice.invoiceNumber,
-          totalAmount: invoice.totalAmount,
-          balanceAmount: invoice.balanceAmount,
-          dueDate: invoice.dueDate,
-          daysOverdue,
-          reminderType,
-          messageContent,
-          status: whatsappResult.success ? 'sent' : 'failed',
-          sentAt: whatsappResult.success ? new Date() : undefined,
-          failureReason: whatsappResult.success ? undefined : (whatsappResult.error || 'WhatsApp API error'),
-          reminderCount: reminderCount + 1,
-          whatsappMessageId: whatsappResult.messageId,
+        const { whatsappResult } = await buildAndSendReminder({
+          invoice,
+          customer,
+          settings,
           userId,
-          dataScope
+          dataScope,
+          reminderCount
         });
 
         if (whatsappResult.success) {
@@ -622,12 +518,6 @@ router.post('/send-bulk', protect, async (req, res) => {
         } else {
           results.failed++;
           results.details.push({ invoiceNumber: invoice.invoiceNumber, reason: whatsappResult.error || 'WhatsApp API error' });
-        }
-
-        // Update invoice status if needed
-        if (daysOverdue > 0 && invoice.paymentStatus !== 'overdue') {
-          invoice.paymentStatus = 'overdue';
-          await invoice.save();
         }
 
       } catch (err) {
@@ -657,11 +547,15 @@ router.post('/send-bulk', protect, async (req, res) => {
 router.get('/settings', protect, async (req, res) => {
   try {
     const settings = await Settings.getOrCreateSettings(req.user._id);
-    
+    // .paymentReminders is a raw nested path, not a subdocument — accessing it directly bypasses
+    // the document's toJSON/flattenMaps, so templateVariableMapping (a Map) would serialize to
+    // "{}" in the response even though it's saved correctly. Go through toObject() to flatten it.
+    const paymentReminderSettings = settings.toObject({ flattenMaps: true }).paymentReminders;
+
     res.status(200).json({
       status: 'success',
       data: {
-        settings: settings.paymentReminders || {
+        settings: paymentReminderSettings || {
           enabled: false,
           daysAfterDue: 1,
           reminderInterval: 3,
@@ -715,7 +609,7 @@ router.put('/settings', protect, [
     res.status(200).json({
       status: 'success',
       message: 'Payment reminder settings updated successfully',
-      data: { settings: settings.paymentReminders }
+      data: { settings: settings.toObject({ flattenMaps: true }).paymentReminders }
     });
   } catch (error) {
     console.error('Update payment reminder settings error:', error);
@@ -727,3 +621,5 @@ router.put('/settings', protect, [
 });
 
 module.exports = router;
+// Exposed so the auto-send cron in server.js reuses the real send logic instead of its own copy.
+module.exports.buildAndSendReminder = buildAndSendReminder;
