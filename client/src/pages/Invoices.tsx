@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plus, Search, FileText, Download, Eye, Trash2, DollarSign, Calendar, User, Building, Filter, MoreHorizontal, Send, Copy, Archive, CheckCircle, Clock, AlertCircle, AlertTriangle, Pencil } from "lucide-react";
+import { Plus, Search, FileText, Download, Eye, Trash2, DollarSign, MoreHorizontal, CheckCircle, Clock, AlertCircle, AlertTriangle, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -167,8 +167,9 @@ export default function Invoices() {
       (invoice.jobId?.title || '').toLowerCase().includes(searchTerm.toLowerCase());
     
     const matchesPaymentStatus = paymentStatusFilter === "all" || invoice.paymentStatus === paymentStatusFilter;
+    const matchesStatus = statusFilter === "all" || invoice.status === statusFilter;
 
-    return matchesSearch && matchesPaymentStatus;
+    return matchesSearch && matchesPaymentStatus && matchesStatus;
   });
 
   const handleViewInvoice = (invoice: Invoice) => {
@@ -262,6 +263,18 @@ export default function Invoices() {
     }
   };
 
+  const handleDownloadPDF = async (invoice: Invoice) => {
+    try {
+      await apiClient.downloadInvoicePDF(invoice._id || invoice.id);
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to download invoice PDF",
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleEditClick = (invoice: Invoice) => {
     setInvoiceToEdit(invoice);
     setShowEditDialog(true);
@@ -345,88 +358,61 @@ export default function Invoices() {
     return configs[effectiveStatus as keyof typeof configs] || configs["pending"];
   };
 
-  if (loading) {
-    return (
-      <div className="flex-1 space-y-6 p-6">
-        <div className="animate-pulse space-y-4">
-          <div className="h-8 bg-muted rounded w-1/3"></div>
-          <div className="grid gap-4 md:grid-cols-4">
-            {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="h-24 bg-muted rounded"></div>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="flex-1 space-y-6 p-6">
+    <div className="p-6 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Invoice Management</h1>
-          <p className="text-muted-foreground">
+          <h1 className="text-2xl font-bold tracking-tight">Invoice Management</h1>
+          <p className="text-muted-foreground text-sm">
             Create, manage, and track invoices
           </p>
         </div>
-        <Button onClick={() => setShowCreateDialog(true)}>
-          <Plus className="h-4 w-4 mr-2" />
+        <Button onClick={() => setShowCreateDialog(true)} className="gap-2">
+          <Plus className="w-4 h-4" />
           Create Invoice
         </Button>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card className="shadow-card">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Invoices</CardTitle>
-            <FileText className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.totalInvoices}</div>
-            <p className="text-xs text-muted-foreground">
-              invoices created
-            </p>
-          </CardContent>
-        </Card>
-        
-        <Card className="shadow-card">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Amount</CardTitle>
-            <DollarSign className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">₹{stats.totalAmount.toLocaleString()}</div>
-            <p className="text-xs text-muted-foreground">
-              ₹{stats.paidAmount.toLocaleString()} paid
-            </p>
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <Card>
+          <CardContent className="p-4 flex items-center gap-3">
+            <FileText className="w-5 h-5 text-muted-foreground" />
+            <div>
+              <p className="text-xs text-muted-foreground">Total Invoices</p>
+              <p className="text-xl font-bold">{stats.totalInvoices}</p>
+            </div>
           </CardContent>
         </Card>
 
-        <Card className="shadow-card">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Paid Amount</CardTitle>
-            <Calendar className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">₹{stats.paidAmount.toLocaleString()}</div>
-            <p className="text-xs text-muted-foreground">
-              amount received
-            </p>
+        <Card>
+          <CardContent className="p-4 flex items-center gap-3">
+            <DollarSign className="w-5 h-5 text-muted-foreground" />
+            <div>
+              <p className="text-xs text-muted-foreground">Total Amount</p>
+              <p className="text-xl font-bold">₹{stats.totalAmount.toLocaleString()}</p>
+            </div>
           </CardContent>
         </Card>
 
-        <Card className="shadow-card">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Pending Amount</CardTitle>
-            <User className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-orange-600">₹{stats.pendingAmount.toLocaleString()}</div>
-            <p className="text-xs text-muted-foreground">
-              amount pending
-            </p>
+        <Card>
+          <CardContent className="p-4 flex items-center gap-3">
+            <CheckCircle className="w-5 h-5 text-green-600" />
+            <div>
+              <p className="text-xs text-muted-foreground">Paid Amount</p>
+              <p className="text-xl font-bold text-green-600">₹{stats.paidAmount.toLocaleString()}</p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-4 flex items-center gap-3">
+            <Clock className="w-5 h-5 text-orange-600" />
+            <div>
+              <p className="text-xs text-muted-foreground">Pending Amount</p>
+              <p className="text-xl font-bold text-orange-600">₹{stats.pendingAmount.toLocaleString()}</p>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -442,7 +428,22 @@ export default function Invoices() {
             className="pl-10"
           />
         </div>
-        
+
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger className="w-[140px]">
+            <SelectValue placeholder="Status" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Statuses</SelectItem>
+            <SelectItem value="draft">Draft</SelectItem>
+            <SelectItem value="sent">Sent</SelectItem>
+            <SelectItem value="paid">Paid</SelectItem>
+            <SelectItem value="overdue">Overdue</SelectItem>
+            <SelectItem value="cancelled">Cancelled</SelectItem>
+            <SelectItem value="refunded">Refunded</SelectItem>
+          </SelectContent>
+        </Select>
+
         <Select value={paymentStatusFilter} onValueChange={setPaymentStatusFilter}>
           <SelectTrigger className="w-[140px]">
             <SelectValue placeholder="Payment" />
@@ -457,33 +458,99 @@ export default function Invoices() {
         </Select>
       </div>
 
-      {/* Invoices List */}
-      <div className="grid gap-4">
-        {filteredInvoices.map((invoice, index) => {
-          const paymentStatusConfig = getPaymentStatusConfig(invoice.paymentStatus, invoice.dueDate);
-          
-          return (
-            <Card 
-              key={invoice._id || invoice.id} 
-              className="shadow-card hover:shadow-elevated transition-all duration-300 animate-fade-in cursor-pointer"
-              style={{ animationDelay: `${index * 0.1}s` }}
-              onClick={() => handleViewInvoice(invoice)}
-            >
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-4">
-                    <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
-                      <FileText className="h-6 w-6 text-primary" />
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between mb-2">
-                        <h3 className="text-lg font-semibold">{invoice.invoiceNumber}</h3>
-                        <div className="flex items-center gap-2">
-                          {invoice.noGst && (
-                            <Badge variant="outline" className="font-medium">
-                              No GST
-                            </Badge>
+      {/* Invoices Table */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">All Invoices</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {loading ? (
+            <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
+              Loading invoices...
+            </div>
+          ) : filteredInvoices.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
+              <FileText className="h-10 w-10 text-muted-foreground opacity-40" />
+              <h3 className="text-lg font-semibold">
+                {invoices.length === 0 ? "No invoices yet" : "No invoices found"}
+              </h3>
+              <p className="text-muted-foreground text-sm max-w-sm">
+                {invoices.length === 0
+                  ? "Create your first invoice to get started with billing"
+                  : "Try adjusting your search or filter criteria"
+                }
+              </p>
+              {invoices.length === 0 ? (
+                <Button onClick={() => setShowCreateDialog(true)} className="gap-2">
+                  <Plus className="h-4 w-4" />
+                  Create Your First Invoice
+                </Button>
+              ) : (
+                <Button variant="outline" onClick={() => {
+                  setSearchTerm("");
+                  setStatusFilter("all");
+                  setPaymentStatusFilter("all");
+                }}>
+                  Clear filters
+                </Button>
+              )}
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    <th className="text-left px-4 py-3 font-medium">Invoice #</th>
+                    <th className="text-left px-4 py-3 font-medium">Customer</th>
+                    <th className="text-left px-4 py-3 font-medium">Due Date</th>
+                    <th className="text-left px-4 py-3 font-medium">Amount</th>
+                    <th className="text-left px-4 py-3 font-medium">Status</th>
+                    <th className="text-left px-4 py-3 font-medium">Payment</th>
+                    <th className="text-left px-4 py-3 font-medium">Created</th>
+                    <th className="px-4 py-3 font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredInvoices.map((invoice) => {
+                    const statusConfig = getStatusConfig(invoice.status);
+                    const paymentStatusConfig = getPaymentStatusConfig(invoice.paymentStatus, invoice.dueDate);
+                    const invoiceId = invoice._id || invoice.id;
+
+                    return (
+                      <tr
+                        key={invoiceId}
+                        className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
+                        onClick={() => handleViewInvoice(invoice)}
+                      >
+                        <td className="px-4 py-3 font-mono">
+                          <div className="flex items-center gap-2">
+                            {invoice.invoiceNumber}
+                            {invoice.noGst && (
+                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-sans">
+                                No GST
+                              </Badge>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div>{invoice.customerId.name}</div>
+                          {invoice.jobId && (
+                            <div className="text-xs text-muted-foreground">{invoice.jobId.title}</div>
                           )}
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground">
+                          {new Date(invoice.dueDate).toLocaleDateString()}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="font-medium">₹{invoice.totalAmount.toLocaleString()}</div>
+                          {invoice.balanceDue > 0 && (
+                            <div className="text-xs text-orange-600">Bal: ₹{invoice.balanceDue.toLocaleString()}</div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <Badge variant={statusConfig.variant}>{statusConfig.label}</Badge>
+                        </td>
+                        <td className="px-4 py-3">
                           <Badge
                             variant={paymentStatusConfig.variant}
                             className="cursor-pointer hover:opacity-80 transition-opacity"
@@ -494,118 +561,56 @@ export default function Invoices() {
                           >
                             {paymentStatusConfig.label}
                           </Badge>
-                        </div>
-                      </div>
-                      <p className="text-sm text-muted-foreground mb-2">
-                        <Building className="h-4 w-4 inline mr-1" />
-                        {invoice.customerId.name}
-                        {invoice.jobId && (
-                          <>
-                            <span className="mx-2">•</span>
-                            <span>{invoice.jobId.title}</span>
-                          </>
-                        )}
-                      </p>
-                      <div className="flex items-center space-x-4 text-sm text-muted-foreground">
-                        <span>Due: {new Date(invoice.dueDate).toLocaleDateString()}</span>
-                        <span>•</span>
-                        <span className="font-mono">₹{invoice.totalAmount.toLocaleString()}</span>
-                        {invoice.balanceDue > 0 && (
-                          <>
-                            <span>•</span>
-                            <span className="text-orange-600">Balance: ₹{invoice.balanceDue.toLocaleString()}</span>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div className="flex items-center space-x-4">
-                    <div className="text-right">
-                      <div className="text-sm text-muted-foreground">Created</div>
-                      <div className="font-semibold">
-                        {new Date(invoice.createdAt).toLocaleDateString()}
-                      </div>
-                    </div>
-                    <div className="flex flex-col items-end space-y-2">
-                      <div className="flex space-x-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handlePaymentStatusClick(invoice);
-                          }}
-                          className="gap-2"
-                        >
-                          <DollarSign className="h-3 w-3" />
-                          Update Payment
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleEditClick(invoice);
-                          }}
-                          className="gap-2"
-                        >
-                          <Pencil className="h-3 w-3" />
-                          Edit
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDeleteClick(invoice._id || invoice.id);
-                          }}
-                          className="gap-2 text-destructive hover:text-destructive"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                          Delete
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground">
+                          {new Date(invoice.createdAt).toLocaleDateString()}
+                        </td>
+                        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8">
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                              <DropdownMenuItem onClick={() => handleViewInvoice(invoice)}>
+                                <Eye className="h-4 w-4 mr-2" />
+                                View
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleEditClick(invoice)}>
+                                <Pencil className="h-4 w-4 mr-2" />
+                                Edit
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handlePaymentStatusClick(invoice)}>
+                                <DollarSign className="h-4 w-4 mr-2" />
+                                Update Payment
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleDownloadPDF(invoice)}>
+                                <Download className="h-4 w-4 mr-2" />
+                                Download PDF
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                onClick={() => handleDeleteClick(invoiceId)}
+                                className="text-destructive focus:text-destructive"
+                              >
+                                <Trash2 className="h-4 w-4 mr-2" />
+                                Delete
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
-      {filteredInvoices.length === 0 && (
-        <Card className="shadow-card">
-          <CardContent className="p-12 text-center">
-            <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <h3 className="text-lg font-semibold mb-2">
-              {invoices.length === 0 ? "No invoices yet" : "No invoices found"}
-            </h3>
-            <p className="text-muted-foreground mb-4">
-              {invoices.length === 0 
-                ? "Create your first invoice to get started with billing"
-                : "Try adjusting your search or filter criteria"
-              }
-            </p>
-            {invoices.length === 0 ? (
-              <Button onClick={() => setShowCreateDialog(true)}>
-                <Plus className="h-4 w-4 mr-2" />
-                Create Your First Invoice
-              </Button>
-            ) : (
-              <Button variant="outline" onClick={() => {
-                setSearchTerm("");
-                setStatusFilter("all");
-                setPaymentStatusFilter("all");
-              }}>
-                Clear filters
-              </Button>
-            )}
-          </CardContent>
-        </Card>
-      )}
-      
       {/* Dialogs */}
       <AdvancedCreateInvoiceDialog 
         open={showCreateDialog} 
