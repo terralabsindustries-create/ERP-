@@ -1015,8 +1015,8 @@ class ApiClient {
     return this.get('/payment-reminders', params);
   }
 
-  async sendPaymentReminder(invoiceId: string) {
-    return this.post(`/payment-reminders/send/${invoiceId}`);
+  async sendPaymentReminder(invoiceId: string, templateOverride?: { metaTemplateName?: string; metaTemplateLanguage?: string; templateVariableMapping?: Record<string, string> }) {
+    return this.post(`/payment-reminders/send/${invoiceId}`, templateOverride || {});
   }
 
   async sendBulkPaymentReminders() {

@@ -121,6 +121,18 @@ interface Stats {
   totalSent: number;
 }
 
+// Meta only accepts exactly as many variables as the approved template's body actually declares
+function getTemplateBodyText(template: any): string {
+  const bodyComponent = template?.components?.find((c: any) => c.type === "BODY");
+  return bodyComponent?.text || "";
+}
+
+function getTemplateVariableNumbers(template: any): number[] {
+  const text = getTemplateBodyText(template);
+  const matches = Array.from(text.matchAll(/\{\{(\d+)\}\}/g)).map((m: any) => Number(m[1]));
+  return Array.from(new Set(matches)).sort((a, b) => a - b);
+}
+
 export default function PaymentReminders() {
   const [activeTab, setActiveTab] = useState("overdue");
   const [stats, setStats] = useState<Stats>({
@@ -153,6 +165,9 @@ export default function PaymentReminders() {
   const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
   const [previewDialogOpen, setPreviewDialogOpen] = useState(false);
   const [previewMessage, setPreviewMessage] = useState("");
+  const [sendDialogInvoice, setSendDialogInvoice] = useState<OverdueInvoice | null>(null);
+  const [sendTemplateChoice, setSendTemplateChoice] = useState<string>("__default__");
+  const [sendTemplateMapping, setSendTemplateMapping] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [historyPage, setHistoryPage] = useState(1);
@@ -244,10 +259,13 @@ export default function PaymentReminders() {
     fetchReminders(historyPage);
   }, [historyPage, statusFilter, fetchReminders]);
 
-  const handleSendReminder = async (invoiceId: string) => {
+  const handleSendReminder = async (
+    invoiceId: string,
+    templateOverride?: { metaTemplateName?: string; metaTemplateLanguage?: string; templateVariableMapping?: Record<string, string> }
+  ) => {
     setSendingId(invoiceId);
     try {
-      const response: any = await apiClient.sendPaymentReminder(invoiceId);
+      const response: any = await apiClient.sendPaymentReminder(invoiceId, templateOverride);
       toast({
         title: "Reminder Sent",
         description: response?.message || "Payment reminder sent successfully via WhatsApp",
@@ -256,13 +274,41 @@ export default function PaymentReminders() {
       await Promise.all([fetchStats(), fetchOverdueInvoices(), fetchReminders(historyPage)]);
     } catch (error: any) {
       toast({
-        title: "Error",
+        title: "Failed to Send Reminder",
         description: error.message || "Failed to send payment reminder",
         variant: "destructive",
       });
     } finally {
       setSendingId(null);
     }
+  };
+
+  const openSendDialog = (invoice: OverdueInvoice) => {
+    setSendTemplateChoice(settings.metaTemplateName ? "__default__" : "__freetext__");
+    setSendTemplateMapping(settings.templateVariableMapping || {});
+    setSendDialogInvoice(invoice);
+  };
+
+  const handleConfirmSend = async () => {
+    if (!sendDialogInvoice) return;
+    const invoiceId = sendDialogInvoice._id;
+
+    if (sendTemplateChoice === "__default__") {
+      // Use whatever template is configured in Settings
+      await handleSendReminder(invoiceId);
+    } else if (sendTemplateChoice === "__freetext__") {
+      // Explicitly override to plain text for this send
+      await handleSendReminder(invoiceId, { metaTemplateName: "" });
+    } else {
+      // A specific Meta template was chosen for this send
+      const chosenTemplate = metaTemplates.find((t) => t.name === sendTemplateChoice);
+      await handleSendReminder(invoiceId, {
+        metaTemplateName: sendTemplateChoice,
+        metaTemplateLanguage: chosenTemplate?.language,
+        templateVariableMapping: sendTemplateMapping,
+      });
+    }
+    setSendDialogInvoice(null);
   };
 
   const handleBulkSend = async () => {
@@ -630,7 +676,7 @@ export default function PaymentReminders() {
                               variant={invoice.canSendReminder ? "default" : "outline"}
                               className="gap-1"
                               disabled={!invoice.canSendReminder || sendingId === invoice._id || !invoice.customerPhone}
-                              onClick={() => handleSendReminder(invoice._id)}
+                              onClick={() => openSendDialog(invoice)}
                             >
                               {sendingId === invoice._id ? (
                                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -933,45 +979,62 @@ export default function PaymentReminders() {
                       </p>
                     </div>
 
-                    {settings.metaTemplateName && (
-                      <div className="space-y-3 mt-4 border-t pt-4">
-                        <Label>Variable Mapping</Label>
-                        <p className="text-xs text-muted-foreground">Map your ERP data to the variables (e.g. {'{{1}}'}, {'{{2}}'}) in this Meta template.</p>
-                        
-                        {[1, 2, 3, 4, 5].map(num => (
-                          <div key={num} className="flex items-center gap-4">
-                            <span className="text-sm font-mono bg-muted px-2 py-1 rounded w-16 text-center">{`{{${num}}}`}</span>
-                            <Select 
-                              disabled={!settings.enabled}
-                              value={settings.templateVariableMapping?.[num.toString()] || "none"}
-                              onValueChange={(val) => {
-                                setSettings(prev => ({
-                                  ...prev,
-                                  templateVariableMapping: {
-                                    ...(prev.templateVariableMapping || {}),
-                                    [num.toString()]: val === "none" ? "" : val
-                                  }
-                                }));
-                              }}
-                            >
-                              <SelectTrigger className="flex-1">
-                                <SelectValue placeholder={`Select data for {{${num}}}`} />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="none">-- Not Used --</SelectItem>
-                                <SelectItem value="customerName">Customer Name</SelectItem>
-                                <SelectItem value="invoiceNumber">Invoice Number</SelectItem>
-                                <SelectItem value="totalAmount">Total Amount</SelectItem>
-                                <SelectItem value="balanceAmount">Balance Amount</SelectItem>
-                                <SelectItem value="dueDate">Due Date</SelectItem>
-                                <SelectItem value="daysOverdue">Days Overdue</SelectItem>
-                                <SelectItem value="businessName">Business Name</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    {settings.metaTemplateName && (() => {
+                      const selectedTemplateObj = metaTemplates.find(t => t.name === settings.metaTemplateName);
+                      const bodyText = getTemplateBodyText(selectedTemplateObj);
+                      const detected = getTemplateVariableNumbers(selectedTemplateObj);
+                      // Fall back to a 5-slot grid only if we couldn't read the template's real structure
+                      const varNumbers = selectedTemplateObj ? detected : [1, 2, 3, 4, 5];
+
+                      return (
+                        <div className="space-y-3 mt-4 border-t pt-4">
+                          <Label>Variable Mapping</Label>
+                          {bodyText && (
+                            <p className="text-xs bg-muted rounded p-2 font-mono whitespace-pre-wrap">{bodyText}</p>
+                          )}
+                          {varNumbers.length === 0 ? (
+                            <p className="text-xs text-muted-foreground">This template has no variables — nothing to map.</p>
+                          ) : (
+                            <>
+                              <p className="text-xs text-muted-foreground">
+                                Map your ERP data to each variable. Meta rejects the message if the count doesn't match exactly, so every slot below must be filled.
+                              </p>
+                              {varNumbers.map(num => (
+                                <div key={num} className="flex items-center gap-4">
+                                  <span className="text-sm font-mono bg-muted px-2 py-1 rounded w-16 text-center">{`{{${num}}}`}</span>
+                                  <Select
+                                    disabled={!settings.enabled}
+                                    value={settings.templateVariableMapping?.[num.toString()] || ""}
+                                    onValueChange={(val) => {
+                                      setSettings(prev => ({
+                                        ...prev,
+                                        templateVariableMapping: {
+                                          ...(prev.templateVariableMapping || {}),
+                                          [num.toString()]: val
+                                        }
+                                      }));
+                                    }}
+                                  >
+                                    <SelectTrigger className="flex-1">
+                                      <SelectValue placeholder={`Select data for {{${num}}}`} />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="customerName">Customer Name</SelectItem>
+                                      <SelectItem value="invoiceNumber">Invoice Number</SelectItem>
+                                      <SelectItem value="totalAmount">Total Amount</SelectItem>
+                                      <SelectItem value="balanceAmount">Balance Amount</SelectItem>
+                                      <SelectItem value="dueDate">Due Date</SelectItem>
+                                      <SelectItem value="daysOverdue">Days Overdue</SelectItem>
+                                      <SelectItem value="businessName">Business Name</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                              ))}
+                            </>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 ) : (
                   <div className="bg-yellow-50/50 border border-yellow-200 text-yellow-800 p-3 rounded text-sm mb-4">
@@ -1048,6 +1111,138 @@ export default function PaymentReminders() {
           </div>
         </TabsContent>
       </Tabs>
+
+      {/* Send Reminder Dialog — pick template at send time */}
+      <Dialog open={!!sendDialogInvoice} onOpenChange={(open) => !open && setSendDialogInvoice(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Send className="h-5 w-5 text-green-600" />
+              Send Payment Reminder
+            </DialogTitle>
+            <DialogDescription>
+              {sendDialogInvoice && (
+                <>
+                  To <strong>{sendDialogInvoice.customerName}</strong> ({sendDialogInvoice.customerPhone}) for invoice{" "}
+                  <strong>{sendDialogInvoice.invoiceNumber}</strong>
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Template</Label>
+              <Select
+                value={sendTemplateChoice}
+                onValueChange={(val) => {
+                  setSendTemplateChoice(val);
+                  // Reuse the saved default mapping only if it's the same template; otherwise start fresh
+                  // so we don't send stale variables that don't match this template's actual slots.
+                  setSendTemplateMapping(val === settings.metaTemplateName ? (settings.templateVariableMapping || {}) : {});
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose a template" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__default__">
+                    Default {settings.metaTemplateName ? `(Meta: ${settings.metaTemplateName})` : "(Free Text)"}
+                  </SelectItem>
+                  <SelectItem value="__freetext__">Free Text (No Meta Template)</SelectItem>
+                  {metaIntegrationEnabled &&
+                    metaTemplates
+                      .filter((t) => t.status === "APPROVED")
+                      .map((t) => (
+                        <SelectItem key={t.name} value={t.name}>
+                          {t.name}
+                        </SelectItem>
+                      ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {sendTemplateChoice !== "__default__" && sendTemplateChoice !== "__freetext__" && (() => {
+              const chosenTemplateObj = metaTemplates.find((t) => t.name === sendTemplateChoice);
+              const bodyText = getTemplateBodyText(chosenTemplateObj);
+              const varNumbers = getTemplateVariableNumbers(chosenTemplateObj);
+
+              return (
+                <div className="space-y-3 border-t pt-4">
+                  <Label>Variable Mapping</Label>
+                  {bodyText && (
+                    <p className="text-xs bg-muted rounded p-2 font-mono whitespace-pre-wrap">{bodyText}</p>
+                  )}
+                  {varNumbers.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">This template has no variables.</p>
+                  ) : (
+                    <>
+                      <p className="text-xs text-muted-foreground">
+                        Meta rejects the message if the variable count doesn't match exactly — fill every slot below.
+                      </p>
+                      {varNumbers.map((num) => (
+                        <div key={num} className="flex items-center gap-4">
+                          <span className="text-sm font-mono bg-muted px-2 py-1 rounded w-16 text-center">{`{{${num}}}`}</span>
+                          <Select
+                            value={sendTemplateMapping[num.toString()] || ""}
+                            onValueChange={(val) =>
+                              setSendTemplateMapping((prev) => ({
+                                ...prev,
+                                [num.toString()]: val,
+                              }))
+                            }
+                          >
+                            <SelectTrigger className="flex-1">
+                              <SelectValue placeholder={`Select data for {{${num}}}`} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="customerName">Customer Name</SelectItem>
+                              <SelectItem value="invoiceNumber">Invoice Number</SelectItem>
+                              <SelectItem value="totalAmount">Total Amount</SelectItem>
+                              <SelectItem value="balanceAmount">Balance Amount</SelectItem>
+                              <SelectItem value="dueDate">Due Date</SelectItem>
+                              <SelectItem value="daysOverdue">Days Overdue</SelectItem>
+                              <SelectItem value="businessName">Business Name</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              );
+            })()}
+
+            {sendTemplateChoice === "__freetext__" && (
+              <p className="text-xs text-muted-foreground border-t pt-4">
+                Uses the free text message template configured in Settings, filled in with this invoice's details.
+              </p>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setSendDialogInvoice(null)}
+              disabled={sendingId === sendDialogInvoice?._id}
+            >
+              Cancel
+            </Button>
+            <Button
+              className="bg-green-600 hover:bg-green-700 gap-2"
+              onClick={handleConfirmSend}
+              disabled={sendingId === sendDialogInvoice?._id}
+            >
+              {sendingId === sendDialogInvoice?._id ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4" />
+              )}
+              Send Reminder
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Bulk Send Confirmation Dialog */}
       <AlertDialog open={bulkConfirmOpen} onOpenChange={setBulkConfirmOpen}>

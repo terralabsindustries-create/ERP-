@@ -1,8 +1,35 @@
 const express = require('express');
 const { body, query } = require('express-validator');
 const { protect } = require('../middleware/auth');
+const PaymentReminder = require('../models/PaymentReminder');
 
 const router = express.Router();
+
+// Apply a Meta message status callback ('sent' | 'delivered' | 'read' | 'failed') to whichever
+// PaymentReminder we sent with that WhatsApp message ID.
+async function applyWhatsAppStatusUpdate(status) {
+  const messageId = status?.id;
+  const metaStatus = status?.status;
+  if (!messageId || !metaStatus) return;
+
+  const update = {};
+  if (metaStatus === 'delivered' || metaStatus === 'read') {
+    update.status = 'delivered';
+    update.deliveredAt = status.timestamp ? new Date(Number(status.timestamp) * 1000) : new Date();
+  } else if (metaStatus === 'failed') {
+    update.status = 'failed';
+    update.failureReason = status.errors?.[0]?.title || status.errors?.[0]?.message || 'Message delivery failed';
+  } else {
+    // 'sent' is already recorded synchronously when we make the send call — nothing to do
+    return;
+  }
+
+  try {
+    await PaymentReminder.updateOne({ whatsappMessageId: messageId }, { $set: update });
+  } catch (error) {
+    console.error('Failed to apply WhatsApp status update:', error);
+  }
+}
 
 // WhatsApp message template schema (stored in memory for now, could be moved to database)
 const messageTemplates = [
@@ -241,10 +268,14 @@ router.post('/send-bulk', protect, [
 // @desc    WhatsApp webhook endpoint (for receiving messages)
 // @access  Public
 router.get('/webhook', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-  
+  // express-mongo-sanitize (applied globally) strips any query key containing a dot, which wipes
+  // out Meta's hub.* verification params before they reach req.query. Meta's handshake always
+  // sends these exact fixed keys by protocol, so read them straight from the raw query string.
+  const rawQuery = new URLSearchParams(req.url.split('?')[1] || '');
+  const mode = rawQuery.get('hub.mode');
+  const token = rawQuery.get('hub.verify_token');
+  const challenge = rawQuery.get('hub.challenge');
+
   const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || '14551411';
   
   if (mode === 'subscribe' && token === verifyToken) {
@@ -257,29 +288,33 @@ router.get('/webhook', (req, res) => {
 // @route   POST /api/whatsapp/webhook
 // @desc    WhatsApp webhook endpoint (for receiving messages)
 // @access  Public
-router.post('/webhook', (req, res) => {
+router.post('/webhook', async (req, res) => {
+  // Acknowledge immediately — Meta retries aggressively (and eventually disables the webhook)
+  // if it doesn't get a fast 200, so processing happens after the response is sent.
+  res.status(200).json({ status: 'ok' });
+
   try {
     const body = req.body;
-    
-    // TODO: Process incoming WhatsApp messages
-    console.log('Received WhatsApp webhook:', body);
-    
-    // Handle different types of webhook events
-    if (body.object === 'whatsapp_business_account') {
-      body.entry.forEach(entry => {
-        entry.changes.forEach(change => {
-          if (change.field === 'messages') {
-            // Process incoming messages
-            console.log('New message received:', change.value);
-          }
-        });
-      });
+    if (body.object !== 'whatsapp_business_account') return;
+
+    for (const entry of body.entry || []) {
+      for (const change of entry.changes || []) {
+        if (change.field !== 'messages') continue;
+        const value = change.value || {};
+
+        // Delivery/read/failed status callbacks for messages we sent
+        for (const status of value.statuses || []) {
+          await applyWhatsAppStatusUpdate(status);
+        }
+
+        // Inbound messages from customers replying — not yet acted on beyond logging
+        for (const message of value.messages || []) {
+          console.log('New WhatsApp message received:', message);
+        }
+      }
     }
-    
-    res.status(200).json({ status: 'ok' });
   } catch (error) {
-    console.error('WhatsApp webhook error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('WhatsApp webhook processing error:', error);
   }
 });
 
