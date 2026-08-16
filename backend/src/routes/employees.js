@@ -108,7 +108,8 @@ router.post('/', requirePermission('Human Resources: Create & Edit'), [
       performedByName: req.user.fullName,
       actionType: 'create',
       severity: 'low',
-      userId: req.user._id
+      userId: req.user._id,
+      dataScope: req.user.dataScope
     }).catch(() => {});
 
     res.status(201).json({ status: 'success', message: 'Employee created successfully', data: { employee } });
@@ -184,6 +185,7 @@ router.delete('/:id', requirePermission('Human Resources: Delete'), async (req, 
       actionType: 'delete',
       severity: 'high',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     }).catch(err => console.error('Activity log (delete employee) failed:', err.message));
 
     res.json({ status: 'success', message: `Employee deleted successfully.${note}` });

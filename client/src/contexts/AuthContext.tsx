@@ -3,8 +3,10 @@ import apiClient, { ApiResponse } from '@/lib/apiClient';
 import { useToast } from '@/hooks/use-toast';
 import { SubscriptionModal } from '@/components/subscription/SubscriptionModal';
 
-// Subscription plans are hidden for now. Flip to `true` to bring back the
-// pricing modal (and its Razorpay checkout) exactly as it was.
+// Gates the general "your subscription lapsed" auto-check (sign in, page
+// reload, refreshUser). Hidden for now. Flip to `true` to re-enable it.
+// The signup-page pricing modal below is intentionally NOT gated by this —
+// it always shows once right after a brand-new account is created.
 const SUBSCRIPTION_PLANS_ENABLED = false;
 
 interface User {
@@ -52,6 +54,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Check subscription status and show modal if needed
   const checkSubscriptionStatus = (userData: User) => {
     if (!SUBSCRIPTION_PLANS_ENABLED) return;
+
+    // Subscriptions belong to the admin who signed up — manager/staff logins
+    // are created via User Management, never carry their own subscription,
+    // and must never be shown the paywall.
+    if (userData.role !== 'admin') {
+      setShowSubscriptionModal(false);
+      return;
+    }
 
     // Show modal if subscription is not active or doesn't exist
     if (!userData.subscription || !userData.subscription.isActive) {
@@ -218,14 +228,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return (
     <AuthContext.Provider value={value}>
       {children}
-      {SUBSCRIPTION_PLANS_ENABLED && (
-        <SubscriptionModal
-          open={showSubscriptionModal}
-          onClose={() => setShowSubscriptionModal(false)}
-          userPlan={user?.subscription?.plan}
-          onPaymentSuccess={refreshUser}
-        />
-      )}
+      {/* Not gated by SUBSCRIPTION_PLANS_ENABLED: this modal is only ever
+          opened explicitly, right after a brand-new account is created on
+          the signup page (see OTPVerification). */}
+      <SubscriptionModal
+        open={showSubscriptionModal}
+        onClose={() => setShowSubscriptionModal(false)}
+        userPlan={user?.subscription?.plan}
+        onPaymentSuccess={refreshUser}
+      />
     </AuthContext.Provider>
   );
 }

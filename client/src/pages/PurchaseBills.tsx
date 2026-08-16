@@ -4,14 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -27,14 +19,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Plus, Download, MoreHorizontal, Pencil, Trash2, CheckCircle2, Receipt, Wallet, FileText } from "lucide-react";
+import { Plus, Search, Download, MoreHorizontal, Pencil, Trash2, CheckCircle2, Receipt, Wallet, FileText } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
 import { formatCurrency } from "@/lib/utils";
 import { NewPurchaseBillDialog } from "@/components/purchase-bills/NewPurchaseBillDialog";
 
-const statusVariant: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
-  paid: "default",
+const statusVariant: Record<string, "success" | "secondary" | "destructive" | "outline"> = {
+  paid: "success",
   partial: "secondary",
   pending: "outline",
 };
@@ -124,149 +116,152 @@ export default function PurchaseBills() {
     d ? new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" }) : "-";
 
   return (
-    <div className="flex-1 space-y-6 p-6">
+    <div className="p-6 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Purchase Bills</h1>
-          <p className="text-muted-foreground">Record and track bills received from vendors</p>
+          <h1 className="text-2xl font-bold tracking-tight">Purchase Bills</h1>
+          <p className="text-muted-foreground text-sm">Record and track bills received from vendors</p>
         </div>
         <Button className="gap-2" onClick={handleNew}>
-          <Plus className="h-4 w-4" />
+          <Plus className="w-4 h-4" />
           New Purchase Bill
         </Button>
       </div>
 
-      {/* Stats */}
-      <div className="grid gap-4 md:grid-cols-3">
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <FileText className="h-4 w-4" /> Total Bills
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.totalBills || 0}</div>
-            <p className="text-xs text-muted-foreground">{formatCurrency(stats.totalAmount || 0)} billed</p>
+          <CardContent className="p-4 flex items-center gap-3">
+            <FileText className="w-5 h-5 text-muted-foreground" />
+            <div>
+              <p className="text-xs text-muted-foreground">Total Bills</p>
+              <p className="text-xl font-bold">{stats.totalBills || 0}</p>
+            </div>
           </CardContent>
         </Card>
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Wallet className="h-4 w-4" /> Paid
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">{formatCurrency(stats.paidAmount || 0)}</div>
-            <p className="text-xs text-muted-foreground">Total paid to vendors</p>
+          <CardContent className="p-4 flex items-center gap-3">
+            <Wallet className="w-5 h-5 text-muted-foreground" />
+            <div>
+              <p className="text-xs text-muted-foreground">Paid</p>
+              <p className="text-xl font-bold text-success">{formatCurrency(stats.paidAmount || 0)}</p>
+            </div>
           </CardContent>
         </Card>
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Receipt className="h-4 w-4" /> Outstanding
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-amber-600">{formatCurrency(stats.outstandingAmount || 0)}</div>
-            <p className="text-xs text-muted-foreground">Balance payable</p>
+          <CardContent className="p-4 flex items-center gap-3">
+            <Receipt className="w-5 h-5 text-muted-foreground" />
+            <div>
+              <p className="text-xs text-muted-foreground">Outstanding</p>
+              <p className="text-xl font-bold text-warning">{formatCurrency(stats.outstandingAmount || 0)}</p>
+            </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Table */}
+      {/* Search */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          fetchData();
+        }}
+        className="flex items-center gap-2"
+      >
+        <div className="relative max-w-sm flex-1">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search bill #, vendor, invoice #"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-10"
+          />
+        </div>
+        <Button type="submit" variant="outline">
+          Search
+        </Button>
+      </form>
+
+      {/* Bills Table */}
       <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-4">
-            <CardTitle>All Bills</CardTitle>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                fetchData();
-              }}
-              className="flex gap-2"
-            >
-              <Input
-                placeholder="Search bill #, vendor, invoice #"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="w-64"
-              />
-              <Button type="submit" variant="outline">
-                Search
-              </Button>
-            </form>
-          </div>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">All Bills</CardTitle>
         </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Bill #</TableHead>
-                <TableHead>Vendor</TableHead>
-                <TableHead>Vendor Inv #</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead className="text-right">Total</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="w-[60px]" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
-                    Loading...
-                  </TableCell>
-                </TableRow>
-              ) : bills.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
-                    No purchase bills yet. Click "New Purchase Bill" to record one.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                bills.map((bill) => (
-                  <TableRow key={bill._id}>
-                    <TableCell className="font-medium">{bill.billNumber}</TableCell>
-                    <TableCell>{bill.vendorName}</TableCell>
-                    <TableCell>{bill.vendorInvoiceNumber || "-"}</TableCell>
-                    <TableCell>{formatDate(bill.billDate)}</TableCell>
-                    <TableCell className="text-right">{formatCurrency(bill.totalAmount || 0)}</TableCell>
-                    <TableCell>
-                      <Badge variant={statusVariant[bill.paymentStatus] || "outline"} className="capitalize">
-                        {bill.paymentStatus}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon">
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => handleDownload(bill)}>
-                            <Download className="h-4 w-4 mr-2" /> Download PDF
-                          </DropdownMenuItem>
-                          {bill.paymentStatus !== "paid" && (
-                            <DropdownMenuItem onClick={() => handleMarkPaid(bill)}>
-                              <CheckCircle2 className="h-4 w-4 mr-2" /> Mark Paid
+        <CardContent className="p-0">
+          {loading ? (
+            <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
+              Loading purchase bills...
+            </div>
+          ) : bills.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
+              <FileText className="h-10 w-10 text-muted-foreground opacity-40" />
+              <h3 className="text-lg font-semibold">No purchase bills yet</h3>
+              <p className="text-muted-foreground text-sm max-w-sm">
+                Click "New Purchase Bill" to record one.
+              </p>
+              <Button onClick={handleNew} className="gap-2">
+                <Plus className="h-4 w-4" />
+                New Purchase Bill
+              </Button>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    <th className="text-left px-4 py-3 font-medium">Bill #</th>
+                    <th className="text-left px-4 py-3 font-medium">Vendor</th>
+                    <th className="text-left px-4 py-3 font-medium">Vendor Inv #</th>
+                    <th className="text-left px-4 py-3 font-medium">Date</th>
+                    <th className="text-left px-4 py-3 font-medium">Total</th>
+                    <th className="text-left px-4 py-3 font-medium">Status</th>
+                    <th className="px-4 py-3 font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bills.map((bill) => (
+                    <tr key={bill._id} className="border-b hover:bg-muted/30 transition-colors">
+                      <td className="px-4 py-3 font-medium">{bill.billNumber}</td>
+                      <td className="px-4 py-3">{bill.vendorName}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{bill.vendorInvoiceNumber || "-"}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{formatDate(bill.billDate)}</td>
+                      <td className="px-4 py-3 font-medium">{formatCurrency(bill.totalAmount || 0)}</td>
+                      <td className="px-4 py-3">
+                        <Badge variant={statusVariant[bill.paymentStatus] || "outline"} className="capitalize">
+                          {bill.paymentStatus}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon" className="h-8 w-8">
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => handleDownload(bill)}>
+                              <Download className="h-4 w-4 mr-2" /> Download PDF
                             </DropdownMenuItem>
-                          )}
-                          <DropdownMenuItem onClick={() => handleEdit(bill)}>
-                            <Pencil className="h-4 w-4 mr-2" /> Edit
-                          </DropdownMenuItem>
-                          <DropdownMenuItem className="text-destructive" onClick={() => setDeleteId(bill._id)}>
-                            <Trash2 className="h-4 w-4 mr-2" /> Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+                            {bill.paymentStatus !== "paid" && (
+                              <DropdownMenuItem onClick={() => handleMarkPaid(bill)}>
+                                <CheckCircle2 className="h-4 w-4 mr-2" /> Mark Paid
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuItem onClick={() => handleEdit(bill)}>
+                              <Pencil className="h-4 w-4 mr-2" /> Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setDeleteId(bill._id)}>
+                              <Trash2 className="h-4 w-4 mr-2" /> Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </CardContent>
       </Card>
 

@@ -1,9 +1,8 @@
 import { useState, useEffect } from "react";
-import { Plus, Search, Users, Clock, CheckCircle, AlertCircle, Calendar, User, Trash2, Shield } from "lucide-react";
+import { Plus, Search, Users, Clock, CheckCircle, AlertCircle, User, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { CreateTaskDialog } from "@/components/staff/CreateTaskDialog";
@@ -19,6 +18,7 @@ export default function Staff() {
   const [staff, setStaff] = useState<any[]>([]);
   const [managers, setManagers] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [showCreateTaskDialog, setShowCreateTaskDialog] = useState(false);
   const [showEditTaskDialog, setShowEditTaskDialog] = useState(false);
@@ -30,16 +30,13 @@ export default function Staff() {
   const { toast } = useToast();
 
   useEffect(() => {
-    fetchStaff();
-    fetchManagers();
-    fetchTasks();
+    Promise.all([fetchStaff(), fetchManagers(), fetchTasks()]).finally(() => setLoading(false));
   }, []);
 
   const fetchStaff = async () => {
     try {
       const response: any = await apiClient.get('/users', { role: 'staff' });
-      console.log('👥 Staff response:', response);
-      
+
       let staffData: any[] = [];
       if (response && response.users && Array.isArray(response.users)) {
         staffData = response.users;
@@ -50,7 +47,7 @@ export default function Staff() {
       } else if (response && Array.isArray(response.data)) {
         staffData = response.data;
       }
-      
+
       setStaff(Array.isArray(staffData) ? staffData : []);
     } catch (error) {
       console.error('Error fetching staff:', error);
@@ -65,8 +62,7 @@ export default function Staff() {
   const fetchManagers = async () => {
     try {
       const response: any = await apiClient.get('/users', { role: 'manager' });
-      console.log('👨‍💼 Managers response:', response);
-      
+
       let managersData: any[] = [];
       if (response && response.users && Array.isArray(response.users)) {
         managersData = response.users;
@@ -77,7 +73,7 @@ export default function Staff() {
       } else if (response && Array.isArray(response.data)) {
         managersData = response.data;
       }
-      
+
       setManagers(Array.isArray(managersData) ? managersData : []);
     } catch (error) {
       console.error('Error fetching managers:', error);
@@ -92,15 +88,14 @@ export default function Staff() {
   const fetchTasks = async () => {
     try {
       const response: any = await apiClient.getTasks();
-      console.log('📋 Tasks response:', response);
-      
+
       let tasksData = [];
       if (response && response.data && Array.isArray(response.data)) {
         tasksData = response.data;
       } else if (Array.isArray(response)) {
         tasksData = response;
       }
-      
+
       setTasks(tasksData);
     } catch (error) {
       console.error('Error fetching tasks:', error);
@@ -190,6 +185,37 @@ export default function Staff() {
   const activeStaff = staff.filter(member => member?.isActive === true).length;
   const activeManagers = managers.filter(member => member?.isActive === true).length;
 
+  const buildStaffCardProps = (member: any, fallbackRole: string, fallbackDept: string) => {
+    const memberId = member._id || member.id;
+    const isAssignedTo = (task: any) => {
+      const assignedTo = task.assignedTo;
+      if (typeof assignedTo === 'string') return assignedTo === memberId;
+      return assignedTo?._id === memberId;
+    };
+
+    return {
+      id: memberId,
+      name: member.fullName || member.name || `Unknown ${fallbackRole}`,
+      role: member.role || fallbackRole,
+      department: member.department || fallbackDept,
+      email: member.email || 'Not provided',
+      phone: member.phone || '',
+      fullName: member.fullName,
+      isActive: member.isActive,
+      companyName: member.companyName,
+      dataScope: member.dataScope,
+      permissions: member.permissions,
+      avatar: member.avatar,
+      lastLogin: member.lastLogin,
+      createdAt: member.createdAt,
+      updatedAt: member.updatedAt,
+      activeTasks: tasks.filter(task => isAssignedTo(task) && task.status !== 'completed').length,
+      completedTasks: tasks.filter(task => isAssignedTo(task) && task.status === 'completed').length,
+      status: member.isActive ? 'active' : 'inactive',
+      accountStatus: member.status
+    };
+  };
+
   const handleScheduleClick = (staffMember: any) => {
     const formattedStaff = {
       id: staffMember._id || staffMember.id,
@@ -202,19 +228,16 @@ export default function Staff() {
   };
 
   const handleEditTask = (task: any) => {
-    console.log('🔧 Editing task:', task);
     setSelectedTask(task);
     setShowEditTaskDialog(true);
   };
 
   const handleComment = (task: any) => {
-    console.log('💬 Adding comment to task:', task);
     setSelectedTask(task);
     setShowCommentDialog(true);
   };
 
   const handleComplete = async (task: any) => {
-    console.log('✅ Completing task:', task);
     try {
       await apiClient.updateTaskStatus(task._id || task.id, 'completed');
       toast({
@@ -266,68 +289,54 @@ export default function Staff() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Staff & Task Management</h1>
-          <p className="text-muted-foreground">Manage team members, edit credentials, and assign tasks</p>
+          <h1 className="text-2xl font-bold tracking-tight">Staff & Task Management</h1>
+          <p className="text-muted-foreground text-sm">Manage team members, edit credentials, and assign tasks</p>
         </div>
-        <div className="flex space-x-2">
-          <Button onClick={() => setShowCreateTaskDialog(true)} variant="gradient" size="lg" className="gap-2">
-            <Plus className="h-4 w-4" />
-            Create Task
-          </Button>
-        </div>
+        <Button onClick={() => setShowCreateTaskDialog(true)} className="gap-2">
+          <Plus className="w-4 h-4" />
+          Create Task
+        </Button>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Users className="h-4 w-4" />
-              Active Staff
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{activeStaff}</div>
-            <p className="text-xs text-muted-foreground">team members</p>
-          </CardContent>
-        </Card>
-        
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Shield className="h-4 w-4" />
-              Active Managers
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{activeManagers}</div>
-            <p className="text-xs text-muted-foreground">managers</p>
-          </CardContent>
-        </Card>
-        
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <CheckCircle className="h-4 w-4 text-success" />
-              Completed
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-success">{completedTasks}</div>
-            <p className="text-xs text-muted-foreground">tasks finished</p>
+          <CardContent className="p-4 flex items-center gap-3">
+            <Users className="w-5 h-5 text-muted-foreground" />
+            <div>
+              <p className="text-xs text-muted-foreground">Active Staff</p>
+              <p className="text-xl font-bold">{activeStaff}</p>
+            </div>
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <AlertCircle className="h-4 w-4 text-destructive" />
-              Overdue
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-destructive">{overdueTasks}</div>
-            <p className="text-xs text-muted-foreground">need attention</p>
+          <CardContent className="p-4 flex items-center gap-3">
+            <Shield className="w-5 h-5 text-muted-foreground" />
+            <div>
+              <p className="text-xs text-muted-foreground">Active Managers</p>
+              <p className="text-xl font-bold">{activeManagers}</p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-4 flex items-center gap-3">
+            <CheckCircle className="w-5 h-5 text-muted-foreground" />
+            <div>
+              <p className="text-xs text-muted-foreground">Completed Tasks</p>
+              <p className="text-xl font-bold">{completedTasks}</p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-4 flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-destructive" />
+            <div>
+              <p className="text-xs text-muted-foreground">Overdue Tasks</p>
+              <p className="text-xl font-bold text-destructive">{overdueTasks}</p>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -351,131 +360,139 @@ export default function Staff() {
           <TabsTrigger value="tasks">Tasks</TabsTrigger>
         </TabsList>
         
-        <TabsContent value="staff" className="space-y-4">
-          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {filteredStaff.map((member) => (
-              <StaffCard 
-                key={member._id || member.id}  
-                staff={{
-                  id: member._id || member.id,
-                  name: member.fullName || member.name || 'Unknown Staff',
-                  role: member.role || 'Staff',
-                  department: member.department || 'General',
-                  email: member.email || 'Not provided',
-                  phone: member.phone || '',
-                  fullName: member.fullName,
-                  isActive: member.isActive,
-                  companyName: member.companyName,
-                  dataScope: member.dataScope,
-                  permissions: member.permissions,
-                  avatar: member.avatar,
-                  lastLogin: member.lastLogin,
-                  createdAt: member.createdAt,
-                  updatedAt: member.updatedAt,
-                  activeTasks: tasks.filter(task => {
-                    const assignedTo = task.assignedTo;
-                    if (typeof assignedTo === 'string') {
-                      return assignedTo === (member._id || member.id) && task.status !== 'completed';
-                    } else if (assignedTo?._id) {
-                      return assignedTo._id === (member._id || member.id) && task.status !== 'completed';
-                    }
-                    return false;
-                  }).length,
-                  completedTasks: tasks.filter(task => {
-                    const assignedTo = task.assignedTo;
-                    if (typeof assignedTo === 'string') {
-                      return assignedTo === (member._id || member.id) && task.status === 'completed';
-                    } else if (assignedTo?._id) {
-                      return assignedTo._id === (member._id || member.id) && task.status === 'completed';
-                    }
-                    return false;
-                  }).length,
-                  status: member.isActive ? 'active' : 'inactive',
-                  accountStatus: member.status
-                }}
-                onSchedule={() => handleScheduleClick(member)}
-                onStaffUpdated={fetchStaff}
-                onDelete={() => handleDeleteClick(member, 'Staff')}
-              />
-            ))}
-          </div>
-          {filteredStaff.length === 0 && (
-            <div className="text-center py-12">
-              <User className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-              <h3 className="text-lg font-semibold mb-2">No staff found</h3>
-              <p className="text-muted-foreground">No staff members match your search criteria.</p>
-            </div>
-          )}
+        <TabsContent value="staff">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">All Staff</CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              {loading ? (
+                <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
+                  Loading staff...
+                </div>
+              ) : filteredStaff.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
+                  <User className="h-10 w-10 text-muted-foreground opacity-40" />
+                  <h3 className="text-lg font-semibold">No staff found</h3>
+                  <p className="text-muted-foreground text-sm max-w-sm">No staff members match your search criteria.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/50">
+                        <th className="text-left px-4 py-3 font-medium">Name</th>
+                        <th className="text-left px-4 py-3 font-medium">Contact</th>
+                        <th className="text-left px-4 py-3 font-medium">Tasks</th>
+                        <th className="text-left px-4 py-3 font-medium">Next Shift</th>
+                        <th className="text-left px-4 py-3 font-medium">Status</th>
+                        <th className="px-4 py-3 font-medium">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredStaff.map((member) => (
+                        <StaffCard
+                          key={member._id || member.id}
+                          staff={buildStaffCardProps(member, 'Staff', 'General')}
+                          onSchedule={() => handleScheduleClick(member)}
+                          onStaffUpdated={fetchStaff}
+                          onDelete={() => handleDeleteClick(member, 'Staff')}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
-        <TabsContent value="managers" className="space-y-4">
-          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {filteredManagers.map((member) => (
-              <StaffCard 
-                key={member._id || member.id}  
-                staff={{
-                  id: member._id || member.id,
-                  name: member.fullName || member.name || 'Unknown Manager',
-                  role: member.role || 'Manager',
-                  department: member.department || 'Management',
-                  email: member.email || 'Not provided',
-                  phone: member.phone || '',
-                  fullName: member.fullName,
-                  isActive: member.isActive,
-                  companyName: member.companyName,
-                  dataScope: member.dataScope,
-                  permissions: member.permissions,
-                  avatar: member.avatar,
-                  lastLogin: member.lastLogin,
-                  createdAt: member.createdAt,
-                  updatedAt: member.updatedAt,
-                  activeTasks: tasks.filter(task => {
-                    const assignedTo = task.assignedTo;
-                    if (typeof assignedTo === 'string') {
-                      return assignedTo === (member._id || member.id) && task.status !== 'completed';
-                    } else if (assignedTo?._id) {
-                      return assignedTo._id === (member._id || member.id) && task.status !== 'completed';
-                    }
-                    return false;
-                  }).length,
-                  completedTasks: tasks.filter(task => {
-                    const assignedTo = task.assignedTo;
-                    if (typeof assignedTo === 'string') {
-                      return assignedTo === (member._id || member.id) && task.status === 'completed';
-                    } else if (assignedTo?._id) {
-                      return assignedTo._id === (member._id || member.id) && task.status === 'completed';
-                    }
-                    return false;
-                  }).length,
-                  status: member.isActive ? 'active' : 'inactive',
-                  accountStatus: member.status
-                }}
-                onSchedule={() => handleScheduleClick(member)}
-                onStaffUpdated={fetchManagers}
-                onDelete={() => handleDeleteClick(member, 'Manager')}
-              />
-            ))}
-          </div>
-          {filteredManagers.length === 0 && (
-            <div className="text-center py-12">
-              <Shield className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-              <h3 className="text-lg font-semibold mb-2">No managers found</h3>
-              <p className="text-muted-foreground">No managers match your search criteria.</p>
-            </div>
-          )}
+        <TabsContent value="managers">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">All Managers</CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              {loading ? (
+                <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
+                  Loading managers...
+                </div>
+              ) : filteredManagers.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
+                  <Shield className="h-10 w-10 text-muted-foreground opacity-40" />
+                  <h3 className="text-lg font-semibold">No managers found</h3>
+                  <p className="text-muted-foreground text-sm max-w-sm">No managers match your search criteria.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/50">
+                        <th className="text-left px-4 py-3 font-medium">Name</th>
+                        <th className="text-left px-4 py-3 font-medium">Contact</th>
+                        <th className="text-left px-4 py-3 font-medium">Tasks</th>
+                        <th className="text-left px-4 py-3 font-medium">Next Shift</th>
+                        <th className="text-left px-4 py-3 font-medium">Status</th>
+                        <th className="px-4 py-3 font-medium">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredManagers.map((member) => (
+                        <StaffCard
+                          key={member._id || member.id}
+                          staff={buildStaffCardProps(member, 'Manager', 'Management')}
+                          onSchedule={() => handleScheduleClick(member)}
+                          onStaffUpdated={fetchManagers}
+                          onDelete={() => handleDeleteClick(member, 'Manager')}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
-        <TabsContent value="tasks" className="space-y-4">
-          {filteredTasks.map((task) => (
-            <TaskCard key={task._id || task.id} task={task} onEdit={handleEditTask} onComment={handleComment} onComplete={handleComplete} />
-          ))}
-          {filteredTasks.length === 0 && (
-            <div className="text-center py-12">
-              <Clock className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-              <h3 className="text-lg font-semibold mb-2">No tasks found</h3>
-              <p className="text-muted-foreground">No tasks match your search criteria.</p>
-            </div>
-          )}
+        <TabsContent value="tasks">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">All Tasks</CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              {loading ? (
+                <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
+                  Loading tasks...
+                </div>
+              ) : filteredTasks.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
+                  <Clock className="h-10 w-10 text-muted-foreground opacity-40" />
+                  <h3 className="text-lg font-semibold">No tasks found</h3>
+                  <p className="text-muted-foreground text-sm max-w-sm">No tasks match your search criteria.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/50">
+                        <th className="text-left px-4 py-3 font-medium">Task</th>
+                        <th className="text-left px-4 py-3 font-medium">Assigned To</th>
+                        <th className="text-left px-4 py-3 font-medium">Priority</th>
+                        <th className="text-left px-4 py-3 font-medium">Status</th>
+                        <th className="text-left px-4 py-3 font-medium">Due Date</th>
+                        <th className="px-4 py-3 font-medium">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredTasks.map((task) => (
+                        <TaskCard key={task._id || task.id} task={task} onEdit={handleEditTask} onComment={handleComment} onComplete={handleComplete} />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
 

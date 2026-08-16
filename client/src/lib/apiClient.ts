@@ -1460,6 +1460,50 @@ class ApiClient {
     return this.delete(`/activity-log/${id}`);
   }
 
+  async downloadActivityLog(params?: any) {
+    const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
+    const url = `${this.baseURL}/activity-log/export${queryString}`;
+
+    const currentToken = localStorage.getItem('token');
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          ...(currentToken && { Authorization: `Bearer ${currentToken}` }),
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to export activity log');
+      }
+
+      const contentDisposition = response.headers.get('Content-Disposition');
+      let filename = 'activity-log.xlsx';
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename="?(.+)"?/);
+        if (filenameMatch) {
+          filename = filenameMatch[1];
+        }
+      }
+
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(downloadUrl);
+
+      return { status: 'success', message: 'Activity log exported successfully' };
+    } catch (error) {
+      console.error('Export activity log error:', error);
+      throw error;
+    }
+  }
+
   // User Management - Complete Implementation
   async getUsers(params?: any) {
     const queryString = params ? '?' + new URLSearchParams(params).toString() : '';

@@ -35,20 +35,15 @@ export function CalendarView({ selectedDate, onDateSelect, refreshKey }: Calenda
   const updateTaskStatus = async (taskId: string, newStatus: string) => {
     try {
       setUpdatingTaskId(taskId);
-      console.log('📅 Updating task status:', { taskId, newStatus });
-      
-      const response = await apiClient.updateTaskStatus(taskId, newStatus);
-      console.log('📅 Update response:', response);
-      
+      await apiClient.updateTaskStatus(taskId, newStatus);
       toast.success(`Task status changed to ${newStatus}`);
-      
+
       // Refresh events to show updated status
       fetchEvents();
     } catch (error: any) {
-      console.error('📅 Error updating task status:', error);
-      console.error('📅 Error response:', error.response);
-      
-      const errorMessage = error.response?.data?.message || 
+      console.error('Error updating task status:', error);
+
+      const errorMessage = error.response?.data?.message ||
                           error.response?.data?.error || 
                           error.message || 
                           "Failed to update task status";
@@ -61,10 +56,9 @@ export function CalendarView({ selectedDate, onDateSelect, refreshKey }: Calenda
 
   const fetchEvents = async () => {
     if (!user || !(user as any).id) {
-      console.log('📅 No user or user ID available');
       return;
     }
-    
+
     const staffId = (user as any).id;
 
     // Two task sources, because they scope differently:
@@ -143,18 +137,9 @@ export function CalendarView({ selectedDate, onDateSelect, refreshKey }: Calenda
     if (events.length > 0) {
       const firstEventDate = new Date(events[0].startDate);
       const currentDate = new Date();
-      
-      console.log('🗓️ Auto-navigation check:', {
-        firstEventDate: firstEventDate.toDateString(),
-        firstEventYear: firstEventDate.getFullYear(),
-        currentDate: currentDate.toDateString(),
-        currentYear: currentDate.getFullYear(),
-        shouldNavigate: firstEventDate.getFullYear() !== currentDate.getFullYear()
-      });
-      
+
       // If the first event is in a different year, navigate to that year
       if (firstEventDate.getFullYear() !== currentDate.getFullYear()) {
-        console.log('🗓️ Auto-navigating to event year:', firstEventDate.getFullYear());
         setCurrentMonth(new Date(firstEventDate.getFullYear(), firstEventDate.getMonth(), 1));
       }
     }
@@ -162,33 +147,16 @@ export function CalendarView({ selectedDate, onDateSelect, refreshKey }: Calenda
 
   // Helper function to get events for a specific date
   const getEventsForDate = (date: Date) => {
-    const filteredEvents = events.filter(event => {
+    return events.filter(event => {
       const eventStartDate = new Date(event.startDate);
       const eventEndDate = new Date(event.endDate);
-      
+
       const isSameDayMatch = isSameDay(eventStartDate, date);
       const isInRangeMatch = date >= eventStartDate && date <= eventEndDate;
-      
-      if (isSameDayMatch || isInRangeMatch) {
-        console.log('🎯 Event found for date:', {
-          date: date.toDateString(),
-          eventTitle: event.title,
-          eventStart: eventStartDate.toDateString(),
-          eventEnd: eventEndDate.toDateString(),
-          isSameDay: isSameDayMatch,
-          isInRange: isInRangeMatch
-        });
-      }
-      
+
       // Check if the date falls within the event's date range
       return isSameDayMatch || isInRangeMatch;
     });
-    
-    if (filteredEvents.length > 0) {
-      console.log(`📅 Found ${filteredEvents.length} events for ${date.toDateString()}`);
-    }
-    
-    return filteredEvents;
   };
 
   // Items for the day the user clicked, soonest first.
@@ -210,6 +178,20 @@ export function CalendarView({ selectedDate, onDateSelect, refreshKey }: Calenda
     if (event.status === 'completed') return <CheckCircle className="h-3 w-3" />;
     if (event.priority === 'urgent' || event.priority === 'high') return <AlertCircle className="h-3 w-3" />;
     return <Clock className="h-3 w-3" />;
+  };
+
+  const getPriorityBadgeVariant = (priority?: string) => {
+    if (priority === 'urgent') return 'destructive';
+    if (priority === 'high') return 'warning';
+    if (priority === 'medium') return 'secondary';
+    return 'outline';
+  };
+
+  const getStatusBadgeVariant = (status?: string) => {
+    if (status === 'completed') return 'success';
+    if (status === 'in_progress') return 'pending';
+    if (status === 'cancelled') return 'destructive';
+    return 'outline';
   };
 
   return (
@@ -298,23 +280,13 @@ export function CalendarView({ selectedDate, onDateSelect, refreshKey }: Calenda
                           <div className="space-y-2">
                             <p className="font-medium">{event.title}</p>
                             {event.description && <p className="text-sm text-muted-foreground">{event.description}</p>}
-                            <div className="flex items-center gap-2 text-xs">
-                              <span className={`px-2 py-1 rounded ${
-                                event.priority === 'urgent' ? 'bg-red-100 text-red-800' :
-                                event.priority === 'high' ? 'bg-orange-100 text-orange-800' :
-                                event.priority === 'medium' ? 'bg-yellow-100 text-yellow-800' :
-                                'bg-gray-100 text-gray-800'
-                              }`}>
+                            <div className="flex items-center gap-2">
+                              <Badge variant={getPriorityBadgeVariant(event.priority)} className="text-xs">
                                 {event.priority}
-                              </span>
-                              <span className={`px-2 py-1 rounded ${
-                                event.status === 'completed' ? 'bg-green-100 text-green-800' :
-                                event.status === 'in_progress' ? 'bg-blue-100 text-blue-800' :
-                                event.status === 'cancelled' ? 'bg-red-100 text-red-800' :
-                                'bg-gray-100 text-gray-800'
-                              }`}>
+                              </Badge>
+                              <Badge variant={getStatusBadgeVariant(event.status)} className="text-xs">
                                 {event.status}
-                              </span>
+                              </Badge>
                             </div>
                             <p className="text-xs text-muted-foreground">
                               Due: {format(new Date(event.startDate), 'MMM dd, h:mm a')}
@@ -376,7 +348,7 @@ export function CalendarView({ selectedDate, onDateSelect, refreshKey }: Calenda
                       {event.description && <p className="text-sm text-muted-foreground">{event.description}</p>}
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
                         <span>Due: {format(new Date(event.startDate), 'MMM dd, h:mm a')}</span>
-                        {event.status === 'completed' && <span className="text-green-600">✓ Completed</span>}
+                        {event.status === 'completed' && <span className="text-success">✓ Completed</span>}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">

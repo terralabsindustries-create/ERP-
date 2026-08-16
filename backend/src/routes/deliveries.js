@@ -3,6 +3,7 @@ const { body, query } = require('express-validator');
 const Delivery = require('../models/Delivery');
 const Job = require('../models/Job');
 const Customer = require('../models/Customer');
+const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -173,12 +174,26 @@ router.post('/', protect, deliveryValidation, async (req, res) => {
     };
     
     const delivery = await Delivery.create(deliveryData);
-    
+
     // Populate the created delivery
     const populatedDelivery = await Delivery.findById(delivery._id)
       .populate('jobId', 'title status customerId')
       .populate('customerId', 'name phone email address');
-    
+
+    ActivityLog.logActivity({
+      action: 'Delivery Created',
+      description: `Delivery "${delivery.trackingNumber}" was created`,
+      entityType: 'delivery',
+      entityId: delivery._id,
+      entityName: delivery.trackingNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'create',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (create delivery) failed:', err.message));
+
     res.status(201).json({
       status: 'success',
       message: 'Delivery created successfully',
@@ -215,7 +230,22 @@ router.put('/:id', protect, deliveryValidation, async (req, res) => {
         message: 'Delivery not found'
       });
     }
-    
+
+    ActivityLog.logActivity({
+      action: 'Delivery Updated',
+      description: `Delivery "${delivery.trackingNumber}" was updated`,
+      entityType: 'delivery',
+      entityId: delivery._id,
+      entityName: delivery.trackingNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: Object.keys(req.body) },
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (update delivery) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Delivery updated successfully',
@@ -249,7 +279,21 @@ router.delete('/:id', protect, async (req, res) => {
         message: 'Delivery not found'
       });
     }
-    
+
+    ActivityLog.logActivity({
+      action: 'Delivery Deleted',
+      description: `Delivery "${delivery.trackingNumber}" was deleted`,
+      entityType: 'delivery',
+      entityId: delivery._id,
+      entityName: delivery.trackingNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'delete',
+      severity: 'high',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (delete delivery) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Delivery deleted successfully'
@@ -273,14 +317,14 @@ router.put('/:id/status', protect, [
 ], async (req, res) => {
   try {
     const { status, notes } = req.body;
-    
+
+    const updateFields = { status };
+    if (notes !== undefined) updateFields.notes = notes;
+    if (status === 'delivered') updateFields.deliveredDate = new Date();
+
     const delivery = await Delivery.findOneAndUpdate(
       { _id: req.params.id },
-      { 
-        status,
-        notes: notes || delivery.notes,
-        deliveredDate: status === 'delivered' ? new Date() : delivery.deliveredDate
-      },
+      updateFields,
       { new: true, runValidators: true }
     )
       .populate('jobId', 'title status customerId')
@@ -292,7 +336,22 @@ router.put('/:id/status', protect, [
         message: 'Delivery not found'
       });
     }
-    
+
+    const deliveryStatusActionType = status === 'delivered' ? 'complete' : status === 'cancelled' ? 'cancel' : 'update';
+    ActivityLog.logActivity({
+      action: 'Delivery Status Changed',
+      description: `Delivery "${delivery.trackingNumber}" status changed to ${status}`,
+      entityType: 'delivery',
+      entityId: delivery._id,
+      entityName: delivery.trackingNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: deliveryStatusActionType,
+      severity: 'medium',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (delivery status) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Delivery status updated successfully',

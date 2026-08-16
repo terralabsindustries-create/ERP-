@@ -3,6 +3,7 @@ const { body, query } = require('express-validator');
 const Payment = require('../models/Payment');
 const Customer = require('../models/Customer');
 const Invoice = require('../models/Invoice');
+const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/requirePermission');
 
@@ -207,7 +208,21 @@ router.post('/', protect, requirePermission('Payments: Record Payment'), payment
     const populatedPayment = await Payment.findById(payment._id)
       .populate('customerId', 'name email phone')
       .populate('invoiceId', 'invoiceNumber totalAmount');
-    
+
+    ActivityLog.logActivity({
+      action: 'Payment Recorded',
+      description: `Payment ${payment.paymentId} of ${payment.amount} was recorded for ${customer.name}`,
+      entityType: 'payment',
+      entityId: payment._id,
+      entityName: payment.paymentId,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'create',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (create payment) failed:', err.message));
+
     res.status(201).json({
       status: 'success',
       message: 'Payment created successfully',
@@ -244,7 +259,22 @@ router.put('/:id', protect, requirePermission('Payments: Record Payment'), payme
         message: 'Payment not found'
       });
     }
-    
+
+    ActivityLog.logActivity({
+      action: 'Payment Updated',
+      description: `Payment ${payment.paymentId} was updated`,
+      entityType: 'payment',
+      entityId: payment._id,
+      entityName: payment.paymentId,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: Object.keys(req.body) },
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (update payment) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Payment updated successfully',
@@ -278,7 +308,21 @@ router.delete('/:id', protect, requirePermission('Payments: Delete'), async (req
         message: 'Payment not found'
       });
     }
-    
+
+    ActivityLog.logActivity({
+      action: 'Payment Deleted',
+      description: `Payment ${payment.paymentId} was deleted`,
+      entityType: 'payment',
+      entityId: payment._id,
+      entityName: payment.paymentId,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'delete',
+      severity: 'high',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (delete payment) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Payment deleted successfully'

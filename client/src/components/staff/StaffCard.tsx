@@ -1,8 +1,15 @@
 import { useState, useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { User, Phone, Mail, CheckCircle, Clock, Edit, Calendar, CalendarDays, Loader2, Key, Shield, Trash2, MailIcon } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Phone, Mail, Edit, Calendar, Loader2, Key, Trash2, MailIcon, MoreHorizontal } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { EditStaffDialog } from "./EditStaffDialog";
 import { StaffCredentialsDialog } from "./StaffCredentialsDialog";
@@ -132,133 +139,106 @@ export function StaffCard({ staff, onSchedule, onStaffUpdated, onDelete }: Staff
 
   const formatShiftTime = (schedule: Schedule | null) => {
     if (!schedule) return 'No schedule';
-    
-    const shiftNames = {
-      morning: 'Morning Shift',
-      afternoon: 'Afternoon Shift', 
-      evening: 'Evening Shift',
-      night: 'Night Shift'
-    };
-    
     return `${schedule.startTime} - ${schedule.endTime}`;
   };
+
   return (
     <>
-      <Card>
-        <CardHeader className="pb-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <div className="p-2 bg-primary/10 rounded-lg">
-                <User className="h-5 w-5 text-primary" />
-              </div>
-              <div>
-                <h3 className="font-semibold">{staff.name}</h3>
-                <p className="text-sm text-muted-foreground">{staff.role} • {staff.department}</p>
-              </div>
+      <tr className="border-b hover:bg-muted/30 transition-colors">
+        <td className="px-4 py-3">
+          <div className="font-medium">{staff.name}</div>
+          <div className="text-xs text-muted-foreground">{staff.role} • {staff.department}</div>
+        </td>
+        <td className="px-4 py-3 text-muted-foreground">
+          {staff.phone && (
+            <div className="flex items-center gap-1">
+              <Phone className="h-3 w-3" />
+              {staff.phone}
             </div>
-            {isInvited ? (
-              <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700">
-                Invited
-              </Badge>
-            ) : (
-              <Badge variant={staff.status === "active" ? "success" : "secondary"}>
-                {staff.status}
-              </Badge>
-            )}
+          )}
+          <div className="flex items-center gap-1 text-xs">
+            <Mail className="h-3 w-3" />
+            {staff.email}
           </div>
-        </CardHeader>
-        
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 gap-4 text-sm">
+        </td>
+        <td className="px-4 py-3">
+          <div>{staff.activeTasks} active</div>
+          <div className="text-xs text-muted-foreground">{staff.completedTasks} completed</div>
+        </td>
+        <td className="px-4 py-3 text-muted-foreground">
+          {isLoadingSchedule ? (
             <div className="flex items-center gap-2">
-              <Phone className="h-4 w-4 text-muted-foreground" />
-              <span>{staff.phone}</span>
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Loading...
             </div>
-            <div className="flex items-center gap-2">
-              <Mail className="h-4 w-4 text-muted-foreground" />
-              <span className="truncate">{staff.email}</span>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4 p-3 bg-muted/50 rounded-lg">
-            <div className="flex items-center gap-2">
-              <Clock className="h-4 w-4 text-warning" />
-              <div>
-                <p className="text-sm font-semibold">{staff.activeTasks}</p>
-                <p className="text-xs text-muted-foreground">Active Tasks</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <CheckCircle className="h-4 w-4 text-success" />
-              <div>
-                <p className="text-sm font-semibold">{staff.completedTasks}</p>
-                <p className="text-xs text-muted-foreground">Completed</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
-            <div className="flex items-center gap-2 mb-2">
-              <CalendarDays className="h-4 w-4 text-blue-600" />
-              <p className="text-sm font-medium text-blue-900">Next Shift</p>
-            </div>
-            {isLoadingSchedule ? (
-              <div className="flex items-center gap-2">
-                <Loader2 className="h-3 w-3 animate-spin text-blue-600" />
-                <p className="text-xs text-blue-700">Loading...</p>
-              </div>
-            ) : nextShift ? (
-              <>
-                <p className="text-xs text-blue-700">{nextShift.dayOfWeek}, {formatShiftTime(nextShift)}</p>
-                <p className="text-xs text-blue-600 capitalize">{nextShift.shiftType} Shift</p>
-              </>
-            ) : (
-              <p className="text-xs text-blue-700">No scheduled shifts</p>
-            )}
-          </div>
-
-          <div className="flex items-center justify-end pt-2">
-            <div className="flex items-center space-x-1">
-              <Button size="sm" variant="outline" className="gap-1 text-xs px-2" onClick={onSchedule}>
-                <Calendar className="h-3 w-3" />
-                Schedule
+          ) : nextShift ? (
+            <>
+              <div>{nextShift.dayOfWeek}, {formatShiftTime(nextShift)}</div>
+              <div className="text-xs capitalize">{nextShift.shiftType} Shift</div>
+            </>
+          ) : (
+            <span className="text-xs">No scheduled shifts</span>
+          )}
+        </td>
+        <td className="px-4 py-3">
+          {isInvited ? (
+            <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700">
+              Invited
+            </Badge>
+          ) : (
+            <Badge variant={staff.status === "active" ? "success" : "secondary"}>
+              {staff.status}
+            </Badge>
+          )}
+        </td>
+        <td className="px-4 py-3">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-8 w-8">
+                <MoreHorizontal className="h-4 w-4" />
               </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Actions</DropdownMenuLabel>
+              <DropdownMenuItem onClick={onSchedule}>
+                <Calendar className="h-4 w-4 mr-2" />
+                Schedule
+              </DropdownMenuItem>
               {isInvited ? (
                 // No password exists yet, so there is nothing to reset — the only
                 // useful action is putting a fresh link in their inbox.
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="gap-1 text-xs px-2 bg-amber-50 text-amber-700 hover:bg-amber-100"
-                  onClick={handleResendInvitation}
-                  disabled={isResending}
-                >
+                <DropdownMenuItem onClick={handleResendInvitation} disabled={isResending}>
                   {isResending ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                   ) : (
-                    <MailIcon className="h-3 w-3" />
+                    <MailIcon className="h-4 w-4 mr-2" />
                   )}
                   Resend Invite
-                </Button>
+                </DropdownMenuItem>
               ) : (
-                <Button size="sm" variant="outline" className="gap-1 text-xs px-2 bg-blue-50 text-blue-700 hover:bg-blue-100" onClick={() => setShowCredentialsDialog(true)}>
-                  <Key className="h-3 w-3" />
+                <DropdownMenuItem onClick={() => setShowCredentialsDialog(true)}>
+                  <Key className="h-4 w-4 mr-2" />
                   Password
-                </Button>
+                </DropdownMenuItem>
               )}
-              <Button size="sm" variant="outline" className="gap-1 text-xs px-2" onClick={() => setShowEditDialog(true)}>
-                <Edit className="h-3 w-3" />
-              </Button>
+              <DropdownMenuItem onClick={() => setShowEditDialog(true)}>
+                <Edit className="h-4 w-4 mr-2" />
+                Edit
+              </DropdownMenuItem>
               {onDelete && (
-                <Button size="sm" variant="destructive" className="gap-1 text-xs px-2" onClick={onDelete}>
-                  <Trash2 className="h-3 w-3" />
-                </Button>
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={onDelete} className="text-destructive focus:text-destructive">
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete
+                  </DropdownMenuItem>
+                </>
               )}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-      
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </td>
+      </tr>
+
       {/* Edit Staff Dialog */}
       <EditStaffDialog
         open={showEditDialog}
@@ -269,7 +249,7 @@ export function StaffCard({ staff, onSchedule, onStaffUpdated, onDelete }: Staff
           setShowEditDialog(false);
         }}
       />
-      
+
       {/* Staff Credentials Dialog */}
       <StaffCredentialsDialog
         open={showCredentialsDialog}

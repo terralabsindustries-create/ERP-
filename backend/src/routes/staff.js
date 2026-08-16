@@ -267,6 +267,7 @@ router.put('/:staffId/email', authorize('admin', 'manager'), async (req, res) =>
       },
       severity: 'medium',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.json({ 
@@ -331,6 +332,7 @@ router.put('/:staffId/password', authorize('admin', 'manager'), async (req, res)
       actionType: 'update',
       severity: 'medium',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.json({ 

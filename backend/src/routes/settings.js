@@ -67,6 +67,7 @@ router.put('/', protect, settingsValidation, async (req, res) => {
       
       severity: 'low',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.status(200).json({
@@ -145,6 +146,7 @@ router.put('/company', protect, [
       
       severity: 'medium',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.status(200).json({
@@ -217,6 +219,7 @@ router.put('/business', protect, [
       
       severity: 'medium',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.status(200).json({
@@ -261,6 +264,7 @@ router.put('/notifications', protect, async (req, res) => {
       
       severity: 'low',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.status(200).json({
@@ -313,6 +317,7 @@ router.put('/security', protect, authorize(['admin']), [
       
       severity: 'high',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.status(200).json({
@@ -360,6 +365,7 @@ router.put('/integrations', protect, async (req, res) => {
       
       severity: 'medium',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.status(200).json({
@@ -401,6 +407,7 @@ router.put('/custom-fields', protect, async (req, res) => {
       
       severity: 'low',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.status(200).json({
@@ -442,6 +449,7 @@ router.put('/theme', protect, async (req, res) => {
       
       severity: 'low',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.status(200).json({
@@ -535,6 +543,7 @@ router.post('/reset', protect, authorize(['admin']), async (req, res) => {
       
       severity: 'high',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.status(200).json({

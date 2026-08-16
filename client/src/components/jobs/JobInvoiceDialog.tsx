@@ -103,7 +103,7 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
   // Fetch customers when dialog opens
   const fetchCustomers = async () => {
     try {
-      const response = await apiClient.getCustomers();
+      const response = await apiClient.getCustomer();
       console.log('👥 Customers fetched:', response);
       // Ensure we always have an array
       const customersData = Array.isArray(response) ? response : (response?.customers || []);

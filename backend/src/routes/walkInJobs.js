@@ -2,6 +2,7 @@ const express = require('express');
 const { body, query } = require('express-validator');
 const WalkInJob = require('../models/WalkInJob');
 const User = require('../models/User');
+const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -152,12 +153,26 @@ router.post('/', protect, walkInJobValidation, async (req, res) => {
     };
     
     const job = await WalkInJob.create(jobData);
-    
+
     // Populate the created job
     const populatedJob = await WalkInJob.findById(job._id)
       .populate('assignedTo.operator', 'name email phone')
       .populate('qualityCheck.checkedBy', 'name email');
-    
+
+    ActivityLog.logActivity({
+      action: 'Walk-in Job Created',
+      description: `Walk-in job ${populatedJob.jobNumber} for ${populatedJob.customerName} was created`,
+      entityType: 'walk_in_job',
+      entityId: populatedJob._id,
+      entityName: populatedJob.jobNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'create',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (create walk-in job) failed:', err.message));
+
     res.status(201).json({
       status: 'success',
       message: 'Walk-in job created successfully',
@@ -194,7 +209,22 @@ router.put('/:id', protect, walkInJobValidation, async (req, res) => {
         message: 'Walk-in job not found'
       });
     }
-    
+
+    ActivityLog.logActivity({
+      action: 'Walk-in Job Updated',
+      description: `Walk-in job ${job.jobNumber} was updated`,
+      entityType: 'walk_in_job',
+      entityId: job._id,
+      entityName: job.jobNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: Object.keys(req.body) },
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (update walk-in job) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Walk-in job updated successfully',
@@ -228,7 +258,21 @@ router.delete('/:id', protect, async (req, res) => {
         message: 'Walk-in job not found'
       });
     }
-    
+
+    ActivityLog.logActivity({
+      action: 'Walk-in Job Deleted',
+      description: `Walk-in job ${job.jobNumber} was deleted`,
+      entityType: 'walk_in_job',
+      entityId: job._id,
+      entityName: job.jobNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'delete',
+      severity: 'high',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (delete walk-in job) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Walk-in job deleted successfully'
@@ -277,7 +321,21 @@ router.put('/:id/status', protect, [
         message: 'Walk-in job not found'
       });
     }
-    
+
+    ActivityLog.logActivity({
+      action: 'Walk-In Job Status Updated',
+      description: `Walk-in job "${job.jobNumber}" status changed to ${status}`,
+      entityType: 'walk_in_job',
+      entityId: job._id,
+      entityName: job.jobNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: status === 'completed' ? 'complete' : status === 'cancelled' ? 'cancel' : 'update',
+      severity: 'medium',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (walk-in job status) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Walk-in job status updated successfully',
@@ -336,7 +394,21 @@ router.put('/:id/assign', protect, [
         message: 'Walk-in job not found'
       });
     }
-    
+
+    ActivityLog.logActivity({
+      action: 'Walk-In Job Assigned',
+      description: `Walk-in job "${job.jobNumber}" assigned to ${operator.fullName}`,
+      entityType: 'walk_in_job',
+      entityId: job._id,
+      entityName: job.jobNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'assign',
+      severity: 'medium',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (walk-in job assign) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Walk-in job assigned successfully',
@@ -389,7 +461,21 @@ router.put('/:id/quality-check', protect, [
         message: 'Walk-in job not found'
       });
     }
-    
+
+    ActivityLog.logActivity({
+      action: 'Walk-In Job Quality Check Updated',
+      description: `Quality check ${approved ? 'approved' : 'updated'} for walk-in job "${job.jobNumber}"`,
+      entityType: 'walk_in_job',
+      entityId: job._id,
+      entityName: job.jobNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: approved === true ? 'approve' : approved === false ? 'reject' : 'update',
+      severity: 'medium',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (walk-in job quality check) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Quality check updated successfully',

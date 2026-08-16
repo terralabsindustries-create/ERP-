@@ -57,7 +57,7 @@ export const QuickPrintDialog = ({ onJobCreated }: QuickPrintDialogProps) => {
 
   const fetchExistingCustomers = async () => {
     try {
-      const response = await apiClient.getCustomers();
+      const response = await apiClient.getCustomer();
       console.log('Fetched customers:', response.customers);
       setExistingCustomers(response.customers || []);
     } catch (error) {

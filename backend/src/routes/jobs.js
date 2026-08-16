@@ -2,6 +2,7 @@ const express = require('express');
 const { body, query } = require('express-validator');
 const Job = require('../models/Job');
 const Customer = require('../models/Customer');
+const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/requirePermission');
 
@@ -252,7 +253,21 @@ router.post('/', protect, requirePermission('Jobs: Create & Edit'), jobValidatio
       { path: 'customerId', select: 'name email phone' },
       { path: 'createdBy', select: 'fullName' }
     ]);
-    
+
+    ActivityLog.logActivity({
+      action: 'Job Created',
+      description: `Job ${job.title} was created`,
+      entityType: 'job',
+      entityId: job._id,
+      entityName: job.title,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'create',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (create job) failed:', err.message));
+
     res.status(201).json({
       status: 'success',
       message: 'Job created successfully',
@@ -331,6 +346,21 @@ router.put('/:id', protect, requirePermission('Jobs: Create & Edit'), jobValidat
       .populate('customerId', 'name email phone')
       .populate('createdBy', 'fullName');
 
+    ActivityLog.logActivity({
+      action: 'Job Updated',
+      description: `Job ${updatedJob.title} was updated`,
+      entityType: 'job',
+      entityId: updatedJob._id,
+      entityName: updatedJob.title,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: Object.keys(req.body) },
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (update job) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Job updated successfully',
@@ -378,7 +408,21 @@ router.delete('/:id', protect, requirePermission('Jobs: Delete'), async (req, re
 
     // Hard delete - actually remove from database
     await Job.deleteOne(findQuery);
-    
+
+    ActivityLog.logActivity({
+      action: 'Job Deleted',
+      description: `Job ${job.title} was deleted`,
+      entityType: 'job',
+      entityId: job._id,
+      entityName: job.title,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'delete',
+      severity: 'high',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (delete job) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Job deleted successfully'
@@ -454,7 +498,21 @@ router.post('/:id/update-status', protect, requirePermission('Jobs: Change Statu
       { path: 'customerId', select: 'name email phone' },
       { path: 'assignedTo.handlerId', select: 'fullName' }
     ]);
-    
+
+    ActivityLog.logActivity({
+      action: 'Job Status Updated',
+      description: `Job ${job.title} status was changed to ${status}`,
+      entityType: 'job',
+      entityId: job._id,
+      entityName: job.title,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      severity: 'medium',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (job status update) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Job status updated successfully',
@@ -510,7 +568,21 @@ router.post('/:id/assign', protect, [
       { path: 'assignedOperator', select: 'name' },
       { path: 'customerId', select: 'name email' }
     ]);
-    
+
+    ActivityLog.logActivity({
+      action: 'Job Assigned',
+      description: `Job ${job.title} was assigned to ${operatorName}`,
+      entityType: 'job',
+      entityId: job._id,
+      entityName: job.title,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'assign',
+      severity: 'medium',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (job assign) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Job assigned successfully',
@@ -567,7 +639,21 @@ router.post('/:id/update-flow-stage', protect, [
       { path: 'customerId', select: 'name email phone' },
       { path: 'assignedTo.handlerId', select: 'fullName' }
     ]);
-    
+
+    ActivityLog.logActivity({
+      action: 'Job Flow Stage Updated',
+      description: `Job ${job.title} flow stage was changed to ${stage}`,
+      entityType: 'job',
+      entityId: job._id,
+      entityName: job.title,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      severity: 'medium',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (job flow stage update) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Job flow stage updated successfully',

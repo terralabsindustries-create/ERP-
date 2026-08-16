@@ -11,11 +11,11 @@ export default function CalendarPage() {
   const refresh = () => setRefreshKey((k) => k + 1);
 
   return (
-    <div className="flex-1 space-y-6 p-6">
+    <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Calendar &amp; Reminders</h1>
-          <p className="text-muted-foreground">Centralized view of tasks, deliveries, and deadlines</p>
+          <h1 className="text-2xl font-bold tracking-tight">Calendar &amp; Reminders</h1>
+          <p className="text-muted-foreground text-sm">Centralized view of tasks, deliveries, and deadlines</p>
         </div>
         <CreateEventDialog selectedDate={selectedDate} onEventCreated={refresh} />
       </div>

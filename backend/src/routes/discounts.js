@@ -3,6 +3,7 @@ const { body, query } = require('express-validator');
 const DiscountRule = require('../models/DiscountRule');
 const CustomerPricing = require('../models/CustomerPricing');
 const Customer = require('../models/Customer');
+const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -149,6 +150,20 @@ router.post('/rules', protect, discountRuleValidation, async (req, res) => {
       userId: req.user._id
     });
 
+    ActivityLog.logActivity({
+      action: 'Discount Rule Created',
+      description: `Discount rule ${discountRule.name} was created`,
+      entityType: 'discount_rule',
+      entityId: discountRule._id,
+      entityName: discountRule.name,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'create',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (create discount rule) failed:', err.message));
+
     res.status(201).json({
       status: 'success',
       message: 'Discount rule created successfully',
@@ -182,6 +197,21 @@ router.put('/rules/:id', protect, discountRuleValidation, async (req, res) => {
       });
     }
 
+    ActivityLog.logActivity({
+      action: 'Discount Rule Updated',
+      description: `Discount rule ${discountRule.name} was updated`,
+      entityType: 'discount_rule',
+      entityId: discountRule._id,
+      entityName: discountRule.name,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: Object.keys(req.body) },
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (update discount rule) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Discount rule updated successfully',
@@ -213,6 +243,20 @@ router.delete('/rules/:id', protect, async (req, res) => {
         message: 'Discount rule not found'
       });
     }
+
+    ActivityLog.logActivity({
+      action: 'Discount Rule Deleted',
+      description: `Discount rule ${discountRule.name} was deleted`,
+      entityType: 'discount_rule',
+      entityId: discountRule._id,
+      entityName: discountRule.name,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'delete',
+      severity: 'high',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (delete discount rule) failed:', err.message));
 
     res.status(200).json({
       status: 'success',
@@ -363,6 +407,20 @@ router.post('/customer-pricing', protect, customerPricingValidation, async (req,
     const populatedPricing = await CustomerPricing.findById(customerPricing._id)
       .populate('customerId', 'name email phone');
 
+    ActivityLog.logActivity({
+      action: 'Customer Pricing Created',
+      description: `Custom pricing rule created for ${customer.name}`,
+      entityType: 'customer_pricing',
+      entityId: customerPricing._id,
+      entityName: customer.name,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'create',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (create customer pricing) failed:', err.message));
+
     res.status(201).json({
       status: 'success',
       message: 'Customer pricing rule created successfully',
@@ -397,6 +455,21 @@ router.put('/customer-pricing/:id', protect, customerPricingValidation, async (r
       });
     }
 
+    ActivityLog.logActivity({
+      action: 'Customer Pricing Updated',
+      description: `Custom pricing rule updated for ${customerPricing.customerName}`,
+      entityType: 'customer_pricing',
+      entityId: customerPricing._id,
+      entityName: customerPricing.customerName,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: Object.keys(req.body) },
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (update customer pricing) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Customer pricing rule updated successfully',
@@ -428,6 +501,20 @@ router.delete('/customer-pricing/:id', protect, async (req, res) => {
         message: 'Customer pricing rule not found'
       });
     }
+
+    ActivityLog.logActivity({
+      action: 'Customer Pricing Deleted',
+      description: `Custom pricing rule deleted for ${customerPricing.customerName}`,
+      entityType: 'customer_pricing',
+      entityId: customerPricing._id,
+      entityName: customerPricing.customerName,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'delete',
+      severity: 'medium',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (delete customer pricing) failed:', err.message));
 
     res.status(200).json({
       status: 'success',

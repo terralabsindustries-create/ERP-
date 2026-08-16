@@ -4,6 +4,7 @@ const TimeEntry = require('../models/TimeEntry');
 const Job = require('../models/Job');
 const Task = require('../models/Task');
 const User = require('../models/User');
+const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -181,6 +182,20 @@ router.post('/', protect, timeEntryValidation, async (req, res) => {
       .populate('taskId', 'title description status')
       .populate('staffId', 'fullName email role');
 
+    ActivityLog.logActivity({
+      action: 'Time Entry Created',
+      description: `Time entry "${timeEntry.description}" was created`,
+      entityType: 'time_entry',
+      entityId: timeEntry._id,
+      entityName: timeEntry.description,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'create',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (create time entry) failed:', err.message));
+
     res.status(201).json({
       status: 'success',
       message: 'Time entry created successfully',
@@ -217,6 +232,21 @@ router.put('/:id', protect, timeEntryValidation, async (req, res) => {
       });
     }
 
+    ActivityLog.logActivity({
+      action: 'Time Entry Updated',
+      description: `Time entry "${timeEntry.description}" was updated`,
+      entityType: 'time_entry',
+      entityId: timeEntry._id,
+      entityName: timeEntry.description,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: Object.keys(req.body) },
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (update time entry) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Time entry updated successfully',
@@ -248,6 +278,20 @@ router.delete('/:id', protect, async (req, res) => {
         message: 'Time entry not found'
       });
     }
+
+    ActivityLog.logActivity({
+      action: 'Time Entry Deleted',
+      description: `Time entry "${timeEntry.description}" was deleted`,
+      entityType: 'time_entry',
+      entityId: timeEntry._id,
+      entityName: timeEntry.description,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'delete',
+      severity: 'high',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (delete time entry) failed:', err.message));
 
     res.status(200).json({
       status: 'success',
@@ -295,6 +339,20 @@ router.post('/:id/start', protect, async (req, res) => {
     timeEntry.startTime = new Date();
     timeEntry.endTime = null;
     await timeEntry.save();
+
+    ActivityLog.logActivity({
+      action: 'Time Entry Started',
+      description: `Timer for "${timeEntry.description}" was started`,
+      entityType: 'time_entry',
+      entityId: timeEntry._id,
+      entityName: timeEntry.description,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'start',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (start time entry) failed:', err.message));
 
     res.status(200).json({
       status: 'success',
@@ -387,6 +445,20 @@ router.post('/:id/stop', protect, async (req, res) => {
     }
     
     await timeEntry.save();
+
+    ActivityLog.logActivity({
+      action: 'Time Entry Stopped',
+      description: `Timer for "${timeEntry.description}" was stopped`,
+      entityType: 'time_entry',
+      entityId: timeEntry._id,
+      entityName: timeEntry.description,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'stop',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (stop time entry) failed:', err.message));
 
     res.status(200).json({
       status: 'success',

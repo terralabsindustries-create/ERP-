@@ -230,6 +230,7 @@ router.post('/upload', protect, upload.single('file'), [
       
       severity: 'low',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.status(201).json({
@@ -287,6 +288,7 @@ router.put('/:id', protect, [
       
       severity: 'low',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.status(200).json({
@@ -351,6 +353,7 @@ router.get('/:id/download', protect, async (req, res) => {
       
       severity: 'low',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.download(filePath, file.originalName);
@@ -401,6 +404,7 @@ router.delete('/:fileId', protect, async (req, res) => {
       
       severity: 'medium',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.status(200).json({

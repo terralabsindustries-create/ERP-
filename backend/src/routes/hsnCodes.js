@@ -1,6 +1,7 @@
 const express = require('express');
 const { body, query } = require('express-validator');
 const HsnCode = require('../models/HsnCode');
+const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -160,7 +161,21 @@ router.post('/', protect, hsnValidation, async (req, res) => {
     }
 
     const hsnCode = await HsnCode.create(hsnCodeData);
-    
+
+    ActivityLog.logActivity({
+      action: 'HSN Code Created',
+      description: `HSN Code ${hsnCode.hsnCode} was created`,
+      entityType: 'hsn_code',
+      entityId: hsnCode._id,
+      entityName: hsnCode.hsnCode,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'create',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (create hsn code) failed:', err.message));
+
     res.status(201).json({
       status: 'success',
       message: 'HSN Code created successfully',
@@ -220,7 +235,22 @@ router.put('/:id', protect, hsnValidation, async (req, res) => {
       req.body,
       { new: true, runValidators: true }
     );
-    
+
+    ActivityLog.logActivity({
+      action: 'HSN Code Updated',
+      description: `HSN Code ${hsnCode.hsnCode} was updated`,
+      entityType: 'hsn_code',
+      entityId: hsnCode._id,
+      entityName: hsnCode.hsnCode,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: Object.keys(req.body) },
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (update hsn code) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'HSN Code updated successfully',
@@ -260,7 +290,21 @@ router.delete('/:id', protect, async (req, res) => {
     // Soft delete - change status to inactive
     hsnCode.isActive = false;
     await hsnCode.save();
-    
+
+    ActivityLog.logActivity({
+      action: 'HSN Code Deleted',
+      description: `HSN Code ${hsnCode.hsnCode} was deleted`,
+      entityType: 'hsn_code',
+      entityId: hsnCode._id,
+      entityName: hsnCode.hsnCode,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'delete',
+      severity: 'high',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (delete hsn code) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'HSN Code deleted successfully'

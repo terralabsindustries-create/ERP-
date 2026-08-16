@@ -3,6 +3,7 @@ const { body, query } = require('express-validator');
 const AccountTransaction = require('../models/AccountTransaction');
 const AccountBalance = require('../models/AccountBalance');
 const Cheque = require('../models/Cheque');
+const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/requirePermission');
 
@@ -270,6 +271,20 @@ router.post('/transactions', protect, requirePermission('Accounts: Create & Edit
       .populate('jobId', 'title status')
       .populate('invoiceId', 'invoiceNumber totalAmount');
 
+    ActivityLog.logActivity({
+      action: 'Account Transaction Created',
+      description: `Account transaction ${transaction.transactionNumber} was created`,
+      entityType: 'account_transaction',
+      entityId: transaction._id,
+      entityName: transaction.transactionNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'create',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (create account transaction) failed:', err.message));
+
     res.status(201).json({
       status: 'success',
       message: 'Account transaction created successfully',
@@ -338,7 +353,22 @@ router.put('/transactions/:id', protect, requirePermission('Accounts: Create & E
     
     // Update account balances
     await updateAccountBalances(req.user._id, transaction);
-    
+
+    ActivityLog.logActivity({
+      action: 'Account Transaction Updated',
+      description: `Account transaction ${transaction.transactionNumber} was updated`,
+      entityType: 'account_transaction',
+      entityId: transaction._id,
+      entityName: transaction.transactionNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: Object.keys(req.body) },
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (update account transaction) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Account transaction updated successfully',
@@ -375,7 +405,21 @@ router.delete('/transactions/:id', protect, requirePermission('Accounts: Delete'
     
     // Update account balances (reverse the transaction)
     await reverseAccountBalances(req.user._id, transaction);
-    
+
+    ActivityLog.logActivity({
+      action: 'Account Transaction Deleted',
+      description: `Account transaction ${transaction.transactionNumber} was deleted`,
+      entityType: 'account_transaction',
+      entityId: transaction._id,
+      entityName: transaction.transactionNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'delete',
+      severity: 'high',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (delete account transaction) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Account transaction deleted successfully'

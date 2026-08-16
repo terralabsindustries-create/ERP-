@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { ArrowLeft, Mail, Shield, Timer } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { BASE_URL } from "@/lib/apiClient";
+import { useAuth } from "@/contexts/AuthContext";
 
 const OTP_LIFETIME_SECONDS = 600; // matches the 10-minute OTP expiry on the server
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -36,6 +37,7 @@ export function OTPVerification({
   const [resendIn, setResendIn] = useState(RESEND_COOLDOWN_SECONDS);
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { refreshUser, setShowSubscriptionModal } = useAuth();
 
   const canResend = resendIn === 0;
 
@@ -122,6 +124,13 @@ export function OTPVerification({
         if (data.token) {
           localStorage.setItem('token', data.token);
         }
+
+        // Load the new account into AuthContext so the app treats them as
+        // signed in, then show the pricing modal — this is the one and only
+        // place it opens. Logins created later via User Management never
+        // trigger it.
+        await refreshUser();
+        setShowSubscriptionModal(true);
 
         toast({
           title: "Account Created!",

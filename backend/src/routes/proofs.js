@@ -3,6 +3,7 @@ const { body, query } = require('express-validator');
 const Proof = require('../models/Proof');
 const Job = require('../models/Job');
 const Customer = require('../models/Customer');
+const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -179,13 +180,27 @@ router.post('/', protect, proofValidation, async (req, res) => {
     };
     
     const proof = await Proof.create(proofData);
-    
+
     // Populate the created proof
     const populatedProof = await Proof.findById(proof._id)
       .populate('jobId', 'title status customerId')
       .populate('customerId', 'name email phone')
       .populate('approval.approvedBy', 'name email');
-    
+
+    ActivityLog.logActivity({
+      action: 'Proof Created',
+      description: `Proof "${proof.title}" was created`,
+      entityType: 'proof',
+      entityId: proof._id,
+      entityName: proof.title,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'create',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (create proof) failed:', err.message));
+
     res.status(201).json({
       status: 'success',
       message: 'Proof created successfully',
@@ -223,7 +238,22 @@ router.put('/:id', protect, proofValidation, async (req, res) => {
         message: 'Proof not found'
       });
     }
-    
+
+    ActivityLog.logActivity({
+      action: 'Proof Updated',
+      description: `Proof "${proof.title}" was updated`,
+      entityType: 'proof',
+      entityId: proof._id,
+      entityName: proof.title,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: Object.keys(req.body) },
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (update proof) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Proof updated successfully',
@@ -257,7 +287,21 @@ router.delete('/:id', protect, async (req, res) => {
         message: 'Proof not found'
       });
     }
-    
+
+    ActivityLog.logActivity({
+      action: 'Proof Deleted',
+      description: `Proof "${proof.title}" was deleted`,
+      entityType: 'proof',
+      entityId: proof._id,
+      entityName: proof.title,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'delete',
+      severity: 'high',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (delete proof) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Proof deleted successfully'
@@ -301,7 +345,21 @@ router.put('/:id/approve', protect, [
         message: 'Proof not found'
       });
     }
-    
+
+    ActivityLog.logActivity({
+      action: 'Proof Approved',
+      description: `Proof "${proof.title}" was approved`,
+      entityType: 'proof',
+      entityId: proof._id,
+      entityName: proof.title,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'approve',
+      severity: 'medium',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (approve proof) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Proof approved successfully',
@@ -348,7 +406,21 @@ router.put('/:id/reject', protect, [
         message: 'Proof not found'
       });
     }
-    
+
+    ActivityLog.logActivity({
+      action: 'Proof Rejected',
+      description: `Proof "${proof.title}" was rejected`,
+      entityType: 'proof',
+      entityId: proof._id,
+      entityName: proof.title,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'reject',
+      severity: 'medium',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (reject proof) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Proof rejected successfully',

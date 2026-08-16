@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Plus, Search, FileText, Download, Eye, Trash2, DollarSign, MoreHorizontal, CheckCircle, Clock, AlertCircle, AlertTriangle, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -89,9 +90,10 @@ const safeParseAmount = (value: string): number | null => {
 };
 
 export default function Invoices() {
+  const [searchParams] = useSearchParams();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState("");
+  const [searchTerm, setSearchTerm] = useState(() => searchParams.get("q") || "");
   const [statusFilter, setStatusFilter] = useState("all");
   const [paymentStatusFilter, setPaymentStatusFilter] = useState("all");
   const [showCreateDialog, setShowCreateDialog] = useState(false);

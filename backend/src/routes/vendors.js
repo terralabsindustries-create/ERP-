@@ -1,6 +1,7 @@
 const express = require('express');
 const { body, query } = require('express-validator');
 const Vendor = require('../models/Vendor');
+const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/requirePermission');
 
@@ -182,7 +183,21 @@ router.post('/', protect, requirePermission('Vendors: Create & Edit'), vendorVal
     };
     
     const vendor = await Vendor.create(vendorData);
-    
+
+    ActivityLog.logActivity({
+      action: 'Vendor Created',
+      description: `Vendor ${vendor.name} was created`,
+      entityType: 'vendor',
+      entityId: vendor._id,
+      entityName: vendor.name,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'create',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (create vendor) failed:', err.message));
+
     res.status(201).json({
       status: 'success',
       message: 'Vendor created successfully',
@@ -217,7 +232,22 @@ router.put('/:id', protect, requirePermission('Vendors: Create & Edit'), vendorV
         message: 'Vendor not found'
       });
     }
-    
+
+    ActivityLog.logActivity({
+      action: 'Vendor Updated',
+      description: `Vendor ${vendor.name} was updated`,
+      entityType: 'vendor',
+      entityId: vendor._id,
+      entityName: vendor.name,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: Object.keys(req.body) },
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (update vendor) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Vendor updated successfully',
@@ -251,7 +281,21 @@ router.delete('/:id', protect, requirePermission('Vendors: Delete'), async (req,
         message: 'Vendor not found'
       });
     }
-    
+
+    ActivityLog.logActivity({
+      action: 'Vendor Deleted',
+      description: `Vendor ${vendor.name} was deleted`,
+      entityType: 'vendor',
+      entityId: vendor._id,
+      entityName: vendor.name,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'delete',
+      severity: 'high',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (delete vendor) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Vendor deleted successfully'

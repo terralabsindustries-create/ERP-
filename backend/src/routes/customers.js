@@ -1,6 +1,7 @@
 const express = require('express');
 const { body, query } = require('express-validator');
 const Customer = require('../models/Customer');
+const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/requirePermission');
 const { createDataScopeQuery } = require('../utils/dataScopeHelper');
@@ -177,9 +178,23 @@ router.post('/', protect, requirePermission('Customers: Create & Edit'), custome
     }
 
     const customer = await Customer.create(customerData);
-    
+
     await customer.populate('createdBy', 'fullName email');
-    
+
+    ActivityLog.logActivity({
+      action: 'Customer Created',
+      description: `Customer ${customer.name} was created`,
+      entityType: 'customer',
+      entityId: customer._id,
+      entityName: customer.name,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'create',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (create customer) failed:', err.message));
+
     res.status(201).json({
       status: 'success',
       message: 'Customer created successfully',
@@ -187,7 +202,7 @@ router.post('/', protect, requirePermission('Customers: Create & Edit'), custome
         customer
       }
     });
-    
+
   } catch (error) {
     console.error('Create customer error:', error);
     res.status(500).json({
@@ -243,7 +258,22 @@ router.put('/:id', protect, requirePermission('Customers: Create & Edit'), custo
       req.body,
       { new: true, runValidators: true }
     ).populate('createdBy', 'fullName email');
-    
+
+    ActivityLog.logActivity({
+      action: 'Customer Updated',
+      description: `Customer ${customer.name} was updated`,
+      entityType: 'customer',
+      entityId: customer._id,
+      entityName: customer.name,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: Object.keys(req.body) },
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (update customer) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Customer updated successfully',
@@ -251,7 +281,7 @@ router.put('/:id', protect, requirePermission('Customers: Create & Edit'), custo
         customer
       }
     });
-    
+
   } catch (error) {
     console.error('Update customer error:', error);
     res.status(500).json({
@@ -284,6 +314,20 @@ router.delete('/:id', protect, requirePermission('Customers: Delete'), async (re
     customer.status = 'inactive';
     customer.isActive = false;
     await customer.save();
+
+    ActivityLog.logActivity({
+      action: 'Customer Deleted',
+      description: `Customer ${customer.name} was deleted`,
+      entityType: 'customer',
+      entityId: customer._id,
+      entityName: customer.name,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'delete',
+      severity: 'high',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (delete customer) failed:', err.message));
 
     res.status(200).json({
       status: 'success',

@@ -3,6 +3,7 @@ const { body, query } = require('express-validator');
 const Cost = require('../models/Cost');
 const Job = require('../models/Job');
 const Vendor = require('../models/Vendor');
+const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -202,7 +203,21 @@ router.post('/', protect, costValidation, async (req, res) => {
     const populatedCost = await Cost.findById(cost._id)
       .populate('jobId', 'title status customerId')
       .populate('vendorId', 'name contactPerson');
-    
+
+    ActivityLog.logActivity({
+      action: 'Cost Created',
+      description: `Cost "${cost.description}" was added to job ${cost.jobTitle}`,
+      entityType: 'cost',
+      entityId: cost._id,
+      entityName: cost.description,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'create',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (create cost) failed:', err.message));
+
     res.status(201).json({
       status: 'success',
       message: 'Cost created successfully',
@@ -248,7 +263,22 @@ router.put('/:id', protect, costValidation, async (req, res) => {
     
     const totalCost = jobCosts[0]?.total || 0;
     await Job.findByIdAndUpdate(cost.jobId, { actualCost: totalCost });
-    
+
+    ActivityLog.logActivity({
+      action: 'Cost Updated',
+      description: `Cost "${cost.description}" for job ${cost.jobTitle} was updated`,
+      entityType: 'cost',
+      entityId: cost._id,
+      entityName: cost.description,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: Object.keys(req.body) },
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (update cost) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Cost updated successfully',
@@ -291,7 +321,21 @@ router.delete('/:id', protect, async (req, res) => {
     
     const totalCost = jobCosts[0]?.total || 0;
     await Job.findByIdAndUpdate(cost.jobId, { actualCost: totalCost });
-    
+
+    ActivityLog.logActivity({
+      action: 'Cost Deleted',
+      description: `Cost "${cost.description}" for job ${cost.jobTitle} was deleted`,
+      entityType: 'cost',
+      entityId: cost._id,
+      entityName: cost.description,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'delete',
+      severity: 'high',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (delete cost) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Cost deleted successfully'

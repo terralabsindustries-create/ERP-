@@ -1,24 +1,18 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { format } from "date-fns";
-import { formatCurrency } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   Briefcase,
-  Receipt,
   Users,
-  Calendar,
   TrendingUp,
   Package,
   Clock,
   AlertTriangle,
   BarChart3,
   DollarSign,
-  ShoppingCart,
-  Activity,
   Target,
   CreditCard,
-  UserPlus,
   Edit,
   Save,
   X,
@@ -30,7 +24,6 @@ import { Input } from "@/components/ui/input";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
 import { NotificationCenter } from "@/components/dashboard/NotificationCenter";
-import { QuickPrintDialog } from "@/components/dashboard/QuickPrintDialog";
 import { TaskWidget } from "@/components/dashboard/TaskWidget";
 import { PaymentDuesWidget } from "@/components/dashboard/PaymentDuesWidget";
 import { QuickReminderDialog } from "@/components/dashboard/QuickReminderDialog";
@@ -239,7 +232,6 @@ export default function Dashboard() {
           <div className="flex items-center gap-2">
             <DashboardShortcuts
               onJobCreated={fetchDashboardStats}
-              onPaymentCreated={fetchDashboardStats}
               onQuotationCreated={fetchDashboardStats}
               onOrderCreated={fetchDashboardStats}
               onCustomerCreated={fetchDashboardStats}

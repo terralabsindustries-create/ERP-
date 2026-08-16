@@ -2,93 +2,88 @@ const express = require('express');
 const { query } = require('express-validator');
 const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/requirePermission');
 
 const router = express.Router();
 
-// @route   GET /api/activity-log
-// @desc    Get activity log entries for the authenticated user
-// @access  Private
-router.get('/', protect, [
-  query('entityType').optional().isIn(['customer', 'job', 'invoice', 'payment', 'inventory', 'vendor', 'staff', 'task', 'delivery', 'emergency_order', 'walk_in_job', 'proof', 'time_entry', 'event', 'discount_rule', 'customer_pricing', 'hsn_code', 'account_transaction', 'cheque', 'cost', 'user', 'system']),
-  query('actionType').optional().isIn(['create', 'read', 'update', 'delete', 'login', 'logout', 'export', 'import', 'approve', 'reject', 'assign', 'complete', 'cancel', 'start', 'pause', 'stop', 'upload', 'download', 'send', 'receive']),
+const ENTITY_TYPES = ['customer', 'job', 'invoice', 'payment', 'inventory', 'vendor', 'staff', 'task', 'delivery', 'emergency_order', 'walk_in_job', 'proof', 'time_entry', 'event', 'discount_rule', 'customer_pricing', 'hsn_code', 'account_transaction', 'cheque', 'cost', 'user', 'system'];
+const ACTION_TYPES = ['create', 'read', 'update', 'delete', 'login', 'logout', 'export', 'import', 'approve', 'reject', 'assign', 'complete', 'cancel', 'start', 'pause', 'stop', 'upload', 'download', 'send', 'receive'];
+
+// Tenant filter, same fallback pattern used across the rest of the app
+// (see utils/dataScopeHelper.js): accounts with a dataScope share it between
+// the admin and their staff/managers; accounts predating dataScope fall back
+// to the individual user's own id.
+const scopeQueryFor = (user) =>
+  user.dataScope ? { dataScope: user.dataScope } : { userId: user._id };
+
+const buildListQuery = (user, { entityType, actionType, severity, performedBy, dateFrom, dateTo, search }) => {
+  const q = { ...scopeQueryFor(user) };
+
+  if (entityType && entityType !== 'all') q.entityType = entityType;
+  if (actionType && actionType !== 'all') q.actionType = actionType;
+  if (severity && severity !== 'all') q.severity = severity;
+  if (performedBy) q.performedBy = performedBy;
+
+  if (dateFrom || dateTo) {
+    q.createdAt = {};
+    if (dateFrom) q.createdAt.$gte = new Date(dateFrom);
+    if (dateTo) q.createdAt.$lte = new Date(dateTo);
+  }
+
+  if (search) {
+    q.$or = [
+      { action: { $regex: search, $options: 'i' } },
+      { description: { $regex: search, $options: 'i' } },
+      { entityName: { $regex: search, $options: 'i' } },
+      { performedByName: { $regex: search, $options: 'i' } },
+      { tags: { $in: [new RegExp(search, 'i')] } }
+    ];
+  }
+
+  return q;
+};
+
+const listFilterValidators = [
+  query('entityType').optional().isIn(ENTITY_TYPES),
+  query('actionType').optional().isIn(ACTION_TYPES),
   query('severity').optional().isIn(['low', 'medium', 'high', 'critical']),
   query('performedBy').optional().isMongoId(),
   query('dateFrom').optional().isISO8601(),
   query('dateTo').optional().isISO8601(),
-  query('search').optional().trim(),
+  query('search').optional().trim()
+];
+
+// @route   GET /api/activity-log
+// @desc    Get activity log entries for the authenticated account (tenant-scoped)
+// @access  Private
+router.get('/', protect, [
+  ...listFilterValidators,
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 })
 ], async (req, res) => {
   try {
     const {
-      entityType,
-      actionType,
-      severity,
-      performedBy,
-      dateFrom,
-      dateTo,
-      search,
       page = 1,
       limit = 20,
       sortBy = 'createdAt',
       sortOrder = 'desc'
     } = req.query;
 
-    // Build query
-    const query = {};
-
-    if (entityType && entityType !== 'all') {
-      query.entityType = entityType;
-    }
-
-    if (actionType && actionType !== 'all') {
-      query.actionType = actionType;
-    }
-
-    if (severity && severity !== 'all') {
-      query.severity = severity;
-    }
-
-    if (performedBy) {
-      query.performedBy = performedBy;
-    }
-
-    // Date range filter
-    if (dateFrom || dateTo) {
-      query.createdAt = {};
-      if (dateFrom) query.createdAt.$gte = new Date(dateFrom);
-      if (dateTo) query.createdAt.$lte = new Date(dateTo);
-    }
-
-    if (search) {
-      query.$or = [
-        { action: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } },
-        { entityName: { $regex: search, $options: 'i' } },
-        { performedByName: { $regex: search, $options: 'i' } },
-        { tags: { $in: [new RegExp(search, 'i')] } }
-      ];
-    }
-
-    // Calculate pagination
+    const listQuery = buildListQuery(req.user, req.query);
     const skip = (page - 1) * limit;
+    const sort = { [sortBy]: sortOrder === 'desc' ? -1 : 1 };
 
-    // Build sort object
-    const sort = {};
-    sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
-
-    // Execute query
-    const activities = await ActivityLog.find(query)
-      .populate('performedBy', 'name email')
-      .populate('relatedCustomer', 'name')
-      .populate('relatedJob', 'title')
-      .populate('relatedInvoice', 'invoiceNumber')
-      .sort(sort)
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    // Get total count
-    const totalActivities = await ActivityLog.countDocuments(query);
+    const [activities, totalActivities] = await Promise.all([
+      ActivityLog.find(listQuery)
+        .populate('performedBy', 'fullName email')
+        .populate('relatedCustomer', 'name')
+        .populate('relatedJob', 'title')
+        .populate('relatedInvoice', 'invoiceNumber')
+        .sort(sort)
+        .skip(skip)
+        .limit(parseInt(limit)),
+      ActivityLog.countDocuments(listQuery)
+    ]);
 
     res.status(200).json({
       status: 'success',
@@ -112,40 +107,182 @@ router.get('/', protect, [
   }
 });
 
-// @route   GET /api/activity-log/:id
-// @desc    Get single activity log entry
+// @route   GET /api/activity-log/stats/summary
+// @desc    Get activity log statistics for the authenticated account
 // @access  Private
-router.get('/:id', protect, async (req, res) => {
+router.get('/stats/summary', protect, [
+  query('days').optional().isInt({ min: 1, max: 365 })
+], async (req, res) => {
   try {
-    const activity = await ActivityLog.findOne({ _id: req.params.id })
-      .populate('performedBy', 'name email')
-      .populate('relatedCustomer', 'name')
-      .populate('relatedJob', 'title')
-      .populate('relatedInvoice', 'invoiceNumber');
-
-    if (!activity) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Activity log entry not found'
-      });
-    }
+    const days = parseInt(req.query.days) || 30;
+    const stats = await ActivityLog.getActivityStats(scopeQueryFor(req.user), days);
 
     res.status(200).json({
       status: 'success',
-      data: { activity }
+      data: { stats }
     });
 
   } catch (error) {
-    console.error('Get activity log entry error:', error);
+    console.error('Get activity stats error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Server error while fetching activity log entry'
+      message: 'Server error while fetching activity statistics'
+    });
+  }
+});
+
+// @route   GET /api/activity-log/recent
+// @desc    Get recent activity log entries for the authenticated account
+// @access  Private
+router.get('/recent', protect, [
+  query('limit').optional().isInt({ min: 1, max: 50 })
+], async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+
+    const activities = await ActivityLog.find(scopeQueryFor(req.user))
+      .populate('performedBy', 'fullName email')
+      .populate('relatedCustomer', 'name')
+      .populate('relatedJob', 'title')
+      .populate('relatedInvoice', 'invoiceNumber')
+      .sort({ createdAt: -1 })
+      .limit(limit);
+
+    res.status(200).json({
+      status: 'success',
+      data: { activities }
+    });
+
+  } catch (error) {
+    console.error('Get recent activity error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error while fetching recent activity'
+    });
+  }
+});
+
+// @route   GET /api/activity-log/critical
+// @desc    Get high/critical severity activity log entries for the authenticated account
+// @access  Private
+router.get('/critical', protect, [
+  query('page').optional().isInt({ min: 1 }),
+  query('limit').optional().isInt({ min: 1, max: 100 })
+], async (req, res) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+
+    const listQuery = {
+      ...scopeQueryFor(req.user),
+      severity: { $in: ['high', 'critical'] }
+    };
+
+    const skip = (page - 1) * limit;
+
+    const [activities, totalActivities] = await Promise.all([
+      ActivityLog.find(listQuery)
+        .populate('performedBy', 'fullName email')
+        .populate('relatedCustomer', 'name')
+        .populate('relatedJob', 'title')
+        .populate('relatedInvoice', 'invoiceNumber')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      ActivityLog.countDocuments(listQuery)
+    ]);
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        activities,
+        pagination: {
+          current: parseInt(page),
+          total: Math.ceil(totalActivities / limit),
+          count: activities.length,
+          totalActivities
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Get critical activity error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error while fetching critical activity'
+    });
+  }
+});
+
+// @route   GET /api/activity-log/export
+// @desc    Export activity log entries matching the current filters as an .xlsx file
+// @access  Private
+router.get('/export', protect, requirePermission('Activity Log: Export'), listFilterValidators, async (req, res) => {
+  try {
+    const listQuery = buildListQuery(req.user, req.query);
+
+    const activities = await ActivityLog.find(listQuery)
+      .populate('performedBy', 'fullName email')
+      .sort({ createdAt: -1 })
+      .limit(10000);
+
+    const ExcelJS = require('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Activity Log');
+
+    worksheet.columns = [
+      { header: 'Date', key: 'date', width: 20 },
+      { header: 'Action', key: 'action', width: 25 },
+      { header: 'Description', key: 'description', width: 45 },
+      { header: 'Entity Type', key: 'entityType', width: 16 },
+      { header: 'Entity Name', key: 'entityName', width: 22 },
+      { header: 'Performed By', key: 'performedBy', width: 22 },
+      { header: 'Action Type', key: 'actionType', width: 14 },
+      { header: 'Severity', key: 'severity', width: 12 }
+    ];
+
+    worksheet.getRow(1).font = { bold: true, size: 11 };
+    worksheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFD3D3D3' }
+    };
+
+    activities.forEach(activity => {
+      worksheet.addRow({
+        date: activity.createdAt ? new Date(activity.createdAt).toLocaleString('en-GB') : '',
+        action: activity.action,
+        description: activity.description,
+        entityType: activity.entityType,
+        entityName: activity.entityName || '',
+        performedBy: activity.performedByName,
+        actionType: activity.actionType,
+        severity: activity.severity
+      });
+    });
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename=activity-log-${Date.now()}.xlsx`
+    );
+
+    await workbook.xlsx.write(res);
+    res.end();
+
+  } catch (error) {
+    console.error('Export activity log error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error while exporting activity log'
     });
   }
 });
 
 // @route   GET /api/activity-log/entity/:entityType/:entityId
-// @desc    Get activity log for a specific entity
+// @desc    Get activity log for a specific entity within the authenticated account
 // @access  Private
 router.get('/entity/:entityType/:entityId', protect, [
   query('page').optional().isInt({ min: 1 }),
@@ -155,19 +292,15 @@ router.get('/entity/:entityType/:entityId', protect, [
     const { entityType, entityId } = req.params;
     const { page = 1, limit = 20 } = req.query;
 
-    // Validate entity type
-    const validEntityTypes = ['customer', 'job', 'invoice', 'payment', 'inventory', 'vendor', 'staff', 'task', 'delivery', 'emergency_order', 'walk_in_job', 'proof', 'time_entry', 'event', 'discount_rule', 'customer_pricing', 'hsn_code', 'account_transaction', 'cheque', 'cost', 'user', 'system'];
-    
-    if (!validEntityTypes.includes(entityType)) {
+    if (!ENTITY_TYPES.includes(entityType)) {
       return res.status(400).json({
         status: 'error',
         message: 'Invalid entity type'
       });
     }
 
-    const activities = await ActivityLog.getEntityActivity(entityType, entityId, req.user._id);
+    const activities = await ActivityLog.getEntityActivity(entityType, entityId, scopeQueryFor(req.user));
 
-    // Calculate pagination
     const skip = (page - 1) * limit;
     const paginatedActivities = activities.slice(skip, skip + parseInt(limit));
 
@@ -194,7 +327,7 @@ router.get('/entity/:entityType/:entityId', protect, [
 });
 
 // @route   GET /api/activity-log/user/:userId
-// @desc    Get activity log for a specific user
+// @desc    Get activity log for a specific user within the authenticated account
 // @access  Private
 router.get('/user/:userId', protect, [
   query('page').optional().isInt({ min: 1 }),
@@ -204,9 +337,8 @@ router.get('/user/:userId', protect, [
     const { userId } = req.params;
     const { page = 1, limit = 20 } = req.query;
 
-    const activities = await ActivityLog.getUserActivity(req.user._id, userId, parseInt(limit));
+    const activities = await ActivityLog.getUserActivity(scopeQueryFor(req.user), userId, parseInt(limit));
 
-    // Calculate pagination
     const skip = (page - 1) * limit;
     const paginatedActivities = activities.slice(skip, skip + parseInt(limit));
 
@@ -232,118 +364,51 @@ router.get('/user/:userId', protect, [
   }
 });
 
-// @route   GET /api/activity-log/stats/summary
-// @desc    Get activity log statistics
+// @route   GET /api/activity-log/:id
+// @desc    Get single activity log entry (must belong to the authenticated account)
 // @access  Private
-router.get('/stats/summary', protect, [
-  query('days').optional().isInt({ min: 1, max: 365 })
-], async (req, res) => {
+router.get('/:id', protect, async (req, res) => {
   try {
-    const days = parseInt(req.query.days) || 30;
-    const stats = await ActivityLog.getActivityStats(req.user._id, days);
-
-    res.status(200).json({
-      status: 'success',
-      data: { stats }
-    });
-
-  } catch (error) {
-    console.error('Get activity stats error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while fetching activity statistics'
-    });
-  }
-});
-
-// @route   GET /api/activity-log/recent
-// @desc    Get recent activity log entries
-// @access  Private
-router.get('/recent', protect, [
-  query('limit').optional().isInt({ min: 1, max: 50 })
-], async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit) || 10;
-
-    const activities = await ActivityLog.find({})
-      .populate('performedBy', 'name email')
+    const activity = await ActivityLog.findOne({ _id: req.params.id, ...scopeQueryFor(req.user) })
+      .populate('performedBy', 'fullName email')
       .populate('relatedCustomer', 'name')
       .populate('relatedJob', 'title')
-      .populate('relatedInvoice', 'invoiceNumber')
-      .sort({ createdAt: -1 })
-      .limit(limit);
+      .populate('relatedInvoice', 'invoiceNumber');
+
+    if (!activity) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Activity log entry not found'
+      });
+    }
 
     res.status(200).json({
       status: 'success',
-      data: { activities }
+      data: { activity }
     });
 
   } catch (error) {
-    console.error('Get recent activity error:', error);
+    console.error('Get activity log entry error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Server error while fetching recent activity'
-    });
-  }
-});
-
-// @route   GET /api/activity-log/critical
-// @desc    Get critical activity log entries
-// @access  Private
-router.get('/critical', protect, [
-  query('page').optional().isInt({ min: 1 }),
-  query('limit').optional().isInt({ min: 1, max: 100 })
-], async (req, res) => {
-  try {
-    const { page = 1, limit = 20 } = req.query;
-
-    const query = { 
-       
-      severity: { $in: ['high', 'critical'] } 
-    };
-
-    const skip = (page - 1) * limit;
-
-    const activities = await ActivityLog.find(query)
-      .populate('performedBy', 'name email')
-      .populate('relatedCustomer', 'name')
-      .populate('relatedJob', 'title')
-      .populate('relatedInvoice', 'invoiceNumber')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    const totalActivities = await ActivityLog.countDocuments(query);
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        activities,
-        pagination: {
-          current: parseInt(page),
-          total: Math.ceil(totalActivities / limit),
-          count: activities.length,
-          totalActivities
-        }
-      }
-    });
-
-  } catch (error) {
-    console.error('Get critical activity error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while fetching critical activity'
+      message: 'Server error while fetching activity log entry'
     });
   }
 });
 
 // @route   DELETE /api/activity-log/:id
-// @desc    Delete activity log entry (admin only)
-// @access  Private
+// @desc    Delete an activity log entry
+// @access  Private (admin only — an audit trail that any user can prune isn't one)
 router.delete('/:id', protect, async (req, res) => {
   try {
-    // Only allow deletion of own activities or if user is admin
-    const activity = await ActivityLog.findOne({ _id: req.params.id });
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only an admin can delete activity log entries.'
+      });
+    }
+
+    const activity = await ActivityLog.findOne({ _id: req.params.id, ...scopeQueryFor(req.user) });
 
     if (!activity) {
       return res.status(404).json({

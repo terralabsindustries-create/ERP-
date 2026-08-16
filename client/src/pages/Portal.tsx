@@ -62,8 +62,8 @@ const Portal = () => {
       }
 
       // Find customer by name
-      const response = await apiClient.getCustomers();
-      const customers = response.data?.customers || [];
+      const response = await apiClient.getCustomer();
+      const customers = response.customers || [];
       const customer = customers.find((c: any) => 
         c.name.toLowerCase().includes(name.toLowerCase())
       );

@@ -14,10 +14,7 @@ import {
   Percent,
   DollarSign,
   Globe,
-  UserPlus,
   ShieldCheck,
-  History,
-  Settings,
   Banknote,
   BookOpen,
   ClipboardList,
@@ -121,17 +118,9 @@ export function AppSidebar() {
       ],
     },
     {
-      label: "Staff Management",
-      items: [
-        { title: "Create Login", href: "/create-login", icon: UserPlus, permission: "User Management" },
-        // { title: "Activity Log", href: "/activity-log", icon: History, permission: "Activity Log" },
-      ],
-    },
-    {
       label: "Reports & Settings",
       items: [
         // { title: "Reports", href: "/reports", icon: BarChart3, permission: "Reports" },
-        { title: "Settings", href: "/settings", icon: Settings, permission: "Settings" },
       ],
     },
   ];

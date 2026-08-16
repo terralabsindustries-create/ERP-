@@ -2,6 +2,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const router = express.Router();
 const Inventory = require('../models/Inventory');
+const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/requirePermission');
 
@@ -354,6 +355,20 @@ router.post('/', requirePermission('Inventory: Create & Edit'), async (req, res)
     const item = new Inventory(inventoryData);
     await item.save();
 
+    ActivityLog.logActivity({
+      action: 'Inventory Item Created',
+      description: `Inventory item ${item.name} was created`,
+      entityType: 'inventory',
+      entityId: item._id,
+      entityName: item.name,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'create',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (create inventory) failed:', err.message));
+
     res.status(201).json({ success: true, data: item });
   } catch (error) {
     console.error('Error creating inventory item:', error);
@@ -384,6 +399,21 @@ router.put('/:id', requirePermission('Inventory: Create & Edit'), async (req, re
       return res.status(404).json({ success: false, message: 'Inventory item not found' });
     }
 
+    ActivityLog.logActivity({
+      action: 'Inventory Item Updated',
+      description: `Inventory item ${item.name} was updated`,
+      entityType: 'inventory',
+      entityId: item._id,
+      entityName: item.name,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: Object.keys(req.body) },
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (update inventory) failed:', err.message));
+
     res.json({ success: true, data: item });
   } catch (error) {
     console.error('Error updating inventory item:', error);
@@ -403,6 +433,21 @@ router.delete('/:id', requirePermission('Inventory: Delete'), async (req, res) =
     if (!item) {
       return res.status(404).json({ success: false, message: 'Inventory item not found' });
     }
+
+    ActivityLog.logActivity({
+      action: 'Inventory Item Deleted',
+      description: `Inventory item ${item.name} was deleted`,
+      entityType: 'inventory',
+      entityId: item._id,
+      entityName: item.name,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'delete',
+      severity: 'high',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (delete inventory) failed:', err.message));
+
     res.json({ success: true, message: 'Inventory item deleted successfully' });
   } catch (error) {
     console.error('Error deleting inventory item:', error);
@@ -436,6 +481,21 @@ router.post('/:id/adjust', requirePermission('Inventory: Adjust Stock'), async (
 
     item.quantity = quantity;
     await item.save();
+
+    ActivityLog.logActivity({
+      action: 'Inventory Stock Adjusted',
+      description: `Inventory item ${item.name} stock was adjusted to ${quantity}${reason ? ` (${reason})` : ''}`,
+      entityType: 'inventory',
+      entityId: item._id,
+      entityName: item.name,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: Object.keys(req.body) },
+      severity: 'medium',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (adjust inventory) failed:', err.message));
 
     res.json({ success: true, data: item, message: 'Inventory adjusted successfully' });
   } catch (error) {

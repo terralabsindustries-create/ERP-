@@ -5,6 +5,7 @@ const Job = require('../models/Job');
 const Customer = require('../models/Customer');
 const Task = require('../models/Task');
 const Delivery = require('../models/Delivery');
+const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -216,6 +217,20 @@ router.post('/events', protect, eventValidation, async (req, res) => {
       .populate('deliveryId', 'deliveryAddress status')
       .populate('attendees.userId', 'name email');
 
+    ActivityLog.logActivity({
+      action: 'Event Created',
+      description: `Event "${event.title}" was created`,
+      entityType: 'event',
+      entityId: event._id,
+      entityName: event.title,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'create',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (create event) failed:', err.message));
+
     res.status(201).json({
       status: 'success',
       message: 'Event created successfully',
@@ -254,6 +269,21 @@ router.put('/events/:id', protect, eventValidation, async (req, res) => {
       });
     }
 
+    ActivityLog.logActivity({
+      action: 'Event Updated',
+      description: `Event "${event.title}" was updated`,
+      entityType: 'event',
+      entityId: event._id,
+      entityName: event.title,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: Object.keys(req.body) },
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (update event) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Event updated successfully',
@@ -285,6 +315,20 @@ router.delete('/events/:id', protect, async (req, res) => {
         message: 'Event not found'
       });
     }
+
+    ActivityLog.logActivity({
+      action: 'Event Deleted',
+      description: `Event "${event.title}" was deleted`,
+      entityType: 'event',
+      entityId: event._id,
+      entityName: event.title,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'delete',
+      severity: 'high',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (delete event) failed:', err.message));
 
     res.status(200).json({
       status: 'success',

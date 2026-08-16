@@ -1,6 +1,5 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Clock, User, AlertTriangle, CheckCircle, Edit, MessageSquare } from "lucide-react";
 
 interface TaskCardProps {
@@ -34,8 +33,6 @@ export function TaskCard({ task, onComment, onComplete, onEdit }: TaskCardProps)
   };
 
   const getAssignedStaffInfo = () => {
-    console.log('🔍 TaskCard - assignedTo data:', task.assignedTo);
-    
     if (typeof task.assignedTo === 'string') {
       return { name: task.assignedTo, position: 'Staff' };
     }
@@ -107,71 +104,53 @@ export function TaskCard({ task, onComment, onComplete, onEdit }: TaskCardProps)
   };
 
   return (
-    <Card className={isOverdue() ? "border-destructive/50" : ""}>
-      <CardHeader className="pb-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-4">
-            <div>
-              <h3 className="font-semibold">{task.title}</h3>
-              <p className="text-sm text-muted-foreground">Job: {getJobInfo().title}</p>
-            </div>
-          </div>
-          <div className="flex items-center space-x-2">
-            <Badge variant={getPriorityVariant(task.priority)}>
-              {task.priority}
-            </Badge>
-            <Badge variant={getStatusVariant(task.status)} className="gap-1">
-              {getStatusIcon(task.status)}
-              {task.status}
-            </Badge>
-          </div>
+    <tr className={`border-b hover:bg-muted/30 transition-colors ${isOverdue() ? "bg-destructive/5" : ""}`}>
+      <td className="px-4 py-3">
+        <div className="font-medium">{task.title}</div>
+        <div className="text-xs text-muted-foreground">Job: {getJobInfo().title}</div>
+      </td>
+      <td className="px-4 py-3">
+        <div className="flex items-center gap-1 text-muted-foreground">
+          <User className="h-3 w-3" />
+          {getAssignedStaffInfo().name}
         </div>
-      </CardHeader>
-      
-      <CardContent className="space-y-4">
-        <p className="text-sm text-muted-foreground">{task.description}</p>
-
-        <div className="grid grid-cols-2 gap-4 text-sm">
-          <div className="flex items-center gap-2">
-            <User className="h-4 w-4 text-muted-foreground" />
-            <span>{getAssignedStaffInfo().name}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Clock className="h-4 w-4 text-muted-foreground" />
-            <span>Due: {formatDueDate()}</span>
-          </div>
+      </td>
+      <td className="px-4 py-3">
+        <Badge variant={getPriorityVariant(task.priority)}>{task.priority}</Badge>
+      </td>
+      <td className="px-4 py-3">
+        <Badge variant={getStatusVariant(task.status)} className="gap-1">
+          {getStatusIcon(task.status)}
+          {task.status}
+        </Badge>
+      </td>
+      <td className="px-4 py-3 text-muted-foreground">
+        <div>{formatDueDate()}</div>
+        <div className={`text-xs ${isOverdue() ? "text-destructive" : ""}`}>
+          {isOverdue() ? "Overdue" : task.status === "completed" ? "" : (() => {
+            const days = getDaysUntilDue();
+            return days !== null ? `Due in ${days} days` : '';
+          })()}
         </div>
-
-        <div className="flex items-center justify-between pt-2">
-          <div className="text-sm text-muted-foreground">
-            {isOverdue() ? "Task is overdue" : (() => {
-              const days = getDaysUntilDue();
-              return days !== null ? `Due in ${days} days` : 'No due date';
-            })()}
-          </div>
-          
-          <div className="flex items-center space-x-2">
-            <Button size="sm" variant="outline" className="gap-2" onClick={() => onComment?.(task)}>
-              <MessageSquare className="h-4 w-4" />
-              Comment
-              {task.comments && task.comments.length > 0 && (
-                <span className="bg-primary text-primary-foreground rounded-full px-2 py-0.5 text-xs font-medium">
-                  {task.comments.length}
-                </span>
-              )}
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => onEdit?.(task)}>
-              <Edit className="h-4 w-4" />
-            </Button>
-            {task.status !== "completed" && (
-              <Button size="sm" variant="outline" className="gap-2" onClick={() => onComplete?.(task)}>
-                <CheckCircle className="h-4 w-4" />
-                Complete
-              </Button>
+      </td>
+      <td className="px-4 py-3">
+        <div className="flex items-center gap-1">
+          <Button size="sm" variant="ghost" className="h-8 gap-1 px-2" onClick={() => onComment?.(task)}>
+            <MessageSquare className="h-4 w-4" />
+            {task.comments && task.comments.length > 0 && (
+              <span className="text-xs">{task.comments.length}</span>
             )}
-          </div>
+          </Button>
+          <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => onEdit?.(task)}>
+            <Edit className="h-4 w-4" />
+          </Button>
+          {task.status !== "completed" && (
+            <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => onComplete?.(task)}>
+              <CheckCircle className="h-4 w-4" />
+            </Button>
+          )}
         </div>
-      </CardContent>
-    </Card>
+      </td>
+    </tr>
   );
 }

@@ -40,14 +40,12 @@ export function ReminderPanel({ refreshKey }: { refreshKey: number }) {
 
   const fetchReminders = async () => {
     if (!user || !(user as any).id) {
-      console.log('🔔 No user or user ID available');
       return;
     }
-    
+
     try {
       const staffId = (user as any).id;
-      console.log('🔔 Fetching reminders for staff:', staffId);
-      
+
       // Tasks come from two differently-scoped endpoints: /tasks returns what
       // this user owns (admin/manager view), /tasks/by-staff returns what is
       // assigned to them (staff view). Merge both so every role sees its work.
@@ -75,38 +73,20 @@ export function ReminderPanel({ refreshKey }: { refreshKey: number }) {
       
       // Fetch staff's schedule for today
       const scheduleResponse: any = await apiClient.getStaffSchedule(staffId);
-      console.log('📅 Raw schedule response:', scheduleResponse);
       let todaySchedule = null;
-      
+
       // Handle different response structures for schedule
-      if (scheduleResponse === null || scheduleResponse === undefined) {
-        console.log('📅 No schedule response');
-      } else if (Array.isArray(scheduleResponse)) {
-        const today = new Date().getDay(); // 0 = Sunday, 1 = Monday, etc.
-        const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-        const todayName = dayNames[today];
+      const today = new Date().getDay(); // 0 = Sunday, 1 = Monday, etc.
+      const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      const todayName = dayNames[today];
+      if (Array.isArray(scheduleResponse)) {
         todaySchedule = scheduleResponse.find((s: any) => s.dayOfWeek === todayName);
-        console.log('📅 Today\'s schedule from array:', todaySchedule);
-      } else if (scheduleResponse.data && Array.isArray(scheduleResponse.data)) {
-        const today = new Date().getDay();
-        const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-        const todayName = dayNames[today];
+      } else if (scheduleResponse?.data && Array.isArray(scheduleResponse.data)) {
         todaySchedule = scheduleResponse.data.find((s: any) => s.dayOfWeek === todayName);
-        console.log('📅 Today\'s schedule from data array:', todaySchedule);
-      } else if (scheduleResponse.success && scheduleResponse.data && Array.isArray(scheduleResponse.data)) {
-        const today = new Date().getDay();
-        const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-        const todayName = dayNames[today];
-        todaySchedule = scheduleResponse.data.find((s: any) => s.dayOfWeek === todayName);
-        console.log('📅 Today\'s schedule from success response:', todaySchedule);
       }
-      
-      console.log('📋 Final tasks count:', tasksData.length);
-      console.log('📅 Today\'s schedule found:', !!todaySchedule);
-      
+
       // Convert tasks to event format
       const taskEvents = tasksData.map((task: any) => {
-        console.log('🔍 Processing task:', task);
         return {
           id: task._id || task.id,
           title: task.title,
@@ -162,7 +142,6 @@ export function ReminderPanel({ refreshKey }: { refreshKey: number }) {
 
       // If no events were found, create a default schedule event for today
       if (allEvents.length === 0) {
-        console.log('🔔 No events found, creating default schedule');
         const defaultEvent = {
           id: 'default-schedule',
           title: 'Today\'s Schedule',
@@ -217,7 +196,6 @@ export function ReminderPanel({ refreshKey }: { refreshKey: number }) {
   };
 
   useEffect(() => {
-    console.log('🔔 ReminderPanel useEffect triggered:', { user: !!user, refreshKey });
     if (user) {
       fetchReminders();
     }
@@ -242,44 +220,11 @@ export function ReminderPanel({ refreshKey }: { refreshKey: number }) {
     return "secondary";
   };
 
-  const getTimeUntil = (date: string) => {
-    const now = new Date();
-    const eventDate = new Date(date);
-    const diff = eventDate.getTime() - now.getTime();
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-
-    if (days > 0) return `${days} day${days > 1 ? 's' : ''}`;
-    if (hours > 0) return `${hours} hour${hours > 1 ? 's' : ''}`;
-    return "Soon";
-  };
-
-  // Filter events for today only
-  const todayEvents = events.filter(event => {
-    if (event.eventType === 'schedule') {
-      // Always show schedule events for today
-      console.log('🔔 Including schedule event:', event.title);
-      return true;
-    }
-    
-    if (event.eventType === 'task') {
-      // For tasks, show them if they're assigned to the staff (regardless of due date)
-      // This matches the behavior in the staff dashboard
-      console.log('🔔 Including task event:', {
-        title: event.title,
-        startDate: event.startDate,
-        status: event.status
-      });
-      return true; // Show all assigned tasks for today's reminders
-    }
-    
-    console.log('🔔 Excluding event:', event.title, event.eventType);
-    return false;
-  });
-
-  console.log('🔔 Today events count:', todayEvents.length);
-  console.log('🔔 Current date:', new Date().toDateString());
-  console.log('🔔 All events:', events.map(e => ({ title: e.title, date: new Date(e.startDate).toDateString() })));
+  // Filter events for today only: schedule events always show, and all
+  // assigned tasks show regardless of due date (matches the staff dashboard).
+  const todayEvents = events.filter(event => (
+    event.eventType === 'schedule' || event.eventType === 'task'
+  ));
 
   return (
     <div className="space-y-4">
@@ -308,7 +253,7 @@ export function ReminderPanel({ refreshKey }: { refreshKey: number }) {
               
               return (
                 <div key={event.id} className={`flex items-center justify-between p-3 border rounded-lg transition-colors ${
-                  isOverdue ? 'border-red-200 bg-red-50' : 'hover:bg-muted/30'
+                  isOverdue ? 'border-destructive/30 bg-destructive/5' : 'hover:bg-muted/30'
                 }`}>
                   <div className="flex items-center space-x-3">
                     <Icon className={`h-4 w-4 ${
@@ -345,7 +290,7 @@ export function ReminderPanel({ refreshKey }: { refreshKey: number }) {
                         variant="ghost"
                         size="sm"
                         onClick={() => markAsCompleted(event.id, event.eventType)}
-                        className="h-6 w-6 p-0 hover:bg-green-100"
+                        className="h-6 w-6 p-0 hover:bg-success/10"
                         title="Mark as completed"
                       >
                         <CheckCircle className="h-3 w-3" />

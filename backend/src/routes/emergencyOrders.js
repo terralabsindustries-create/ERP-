@@ -1,6 +1,7 @@
 const express = require('express');
 const { body, query } = require('express-validator');
 const EmergencyOrder = require('../models/EmergencyOrder');
+const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -139,11 +140,25 @@ router.post('/', protect, emergencyOrderValidation, async (req, res) => {
     };
     
     const emergencyOrder = await EmergencyOrder.create(emergencyOrderData);
-    
+
     // Populate the created emergency order
     const populatedEmergencyOrder = await EmergencyOrder.findById(emergencyOrder._id)
       .populate('jobId', 'title status');
-    
+
+    ActivityLog.logActivity({
+      action: 'Emergency Order Created',
+      description: `Emergency order for "${emergencyOrder.customerName}" was created`,
+      entityType: 'emergency_order',
+      entityId: emergencyOrder._id,
+      entityName: emergencyOrder.customerName,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'create',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (create emergency order) failed:', err.message));
+
     res.status(201).json({
       status: 'success',
       message: 'Emergency order created successfully',
@@ -178,7 +193,22 @@ router.put('/:id', protect, emergencyOrderValidation, async (req, res) => {
         message: 'Emergency order not found'
       });
     }
-    
+
+    ActivityLog.logActivity({
+      action: 'Emergency Order Updated',
+      description: `Emergency order for "${emergencyOrder.customerName}" was updated`,
+      entityType: 'emergency_order',
+      entityId: emergencyOrder._id,
+      entityName: emergencyOrder.customerName,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: Object.keys(req.body) },
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (update emergency order) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Emergency order updated successfully',
@@ -212,7 +242,21 @@ router.delete('/:id', protect, async (req, res) => {
         message: 'Emergency order not found'
       });
     }
-    
+
+    ActivityLog.logActivity({
+      action: 'Emergency Order Deleted',
+      description: `Emergency order for ${emergencyOrder.customerName} was deleted`,
+      entityType: 'emergency_order',
+      entityId: emergencyOrder._id,
+      entityName: emergencyOrder.customerName,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'delete',
+      severity: 'high',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (delete emergency order) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Emergency order deleted successfully'
@@ -236,24 +280,38 @@ router.put('/:id/status', protect, [
 ], async (req, res) => {
   try {
     const { status, notes } = req.body;
-    
+
+    const updateFields = { status };
+    if (notes !== undefined) updateFields.notes = notes;
+    if (status === 'completed') updateFields.completedAt = new Date();
+
     const emergencyOrder = await EmergencyOrder.findOneAndUpdate(
       { _id: req.params.id },
-      { 
-        status,
-        notes: notes || emergencyOrder.notes,
-        completedAt: status === 'completed' ? new Date() : emergencyOrder.completedAt
-      },
+      updateFields,
       { new: true, runValidators: true }
     ).populate('jobId', 'title status');
-    
+
     if (!emergencyOrder) {
       return res.status(404).json({
         status: 'error',
         message: 'Emergency order not found'
       });
     }
-    
+
+    ActivityLog.logActivity({
+      action: 'Emergency Order Status Updated',
+      description: `Emergency order for ${emergencyOrder.customerName} status changed to ${status}`,
+      entityType: 'emergency_order',
+      entityId: emergencyOrder._id,
+      entityName: emergencyOrder.customerName,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: status === 'completed' ? 'complete' : status === 'cancelled' ? 'cancel' : 'update',
+      severity: 'medium',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (emergency order status) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Emergency order status updated successfully',

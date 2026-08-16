@@ -5,6 +5,7 @@ const Customer = require('../models/Customer');
 const Job = require('../models/Job');
 const HsnCode = require('../models/HsnCode');
 const Settings = require('../models/Settings');
+const ActivityLog = require('../models/ActivityLog');
 const PDFService = require('../services/PDFService');
 const InventoryService = require('../services/InventoryService');
 const { protect } = require('../middleware/auth');
@@ -463,6 +464,20 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
       .populate('customerId', 'name email phone gstNumber')
       .populate('jobId', 'title status');
 
+    ActivityLog.logActivity({
+      action: 'Invoice Created',
+      description: `Invoice ${invoice.invoiceNumber} was created`,
+      entityType: 'invoice',
+      entityId: invoice._id,
+      entityName: invoice.invoiceNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'create',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (create invoice) failed:', err.message));
+
     res.status(201).json({
       status: 'success',
       message: 'Invoice created successfully',
@@ -548,6 +563,21 @@ router.put('/:id', protect, requirePermission('Invoicing: Create & Edit'), async
     ).populate('customerId', 'name email phone gstNumber')
      .populate('jobId', 'title status');
 
+    ActivityLog.logActivity({
+      action: 'Invoice Updated',
+      description: `Invoice ${invoice.invoiceNumber} was updated`,
+      entityType: 'invoice',
+      entityId: invoice._id,
+      entityName: invoice.invoiceNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: Object.keys(req.body) },
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (update invoice) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Invoice updated successfully',
@@ -555,7 +585,7 @@ router.put('/:id', protect, requirePermission('Invoicing: Create & Edit'), async
         invoice
       }
     });
-    
+
   } catch (error) {
     console.error('Update invoice error:', error);
     res.status(500).json({
@@ -586,7 +616,21 @@ router.delete('/:id', protect, requirePermission('Invoicing: Delete'), async (re
     
     // Delete the invoice completely
     await Invoice.deleteOne({ _id: req.params.id });
-    
+
+    ActivityLog.logActivity({
+      action: 'Invoice Deleted',
+      description: `Invoice ${invoice.invoiceNumber} was deleted`,
+      entityType: 'invoice',
+      entityId: invoice._id,
+      entityName: invoice.invoiceNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'delete',
+      severity: 'high',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (delete invoice) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: 'Invoice deleted successfully'
@@ -660,7 +704,21 @@ router.patch('/:id/cancel', protect, async (req, res) => {
     invoice.cancelledAt = new Date();
     invoice.cancellationReason = req.body.reason || 'Invoice cancelled';
     await invoice.save();
-    
+
+    ActivityLog.logActivity({
+      action: 'Invoice Cancelled',
+      description: `Invoice ${invoice.invoiceNumber} was cancelled`,
+      entityType: 'invoice',
+      entityId: invoice._id,
+      entityName: invoice.invoiceNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'cancel',
+      severity: 'medium',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (cancel invoice) failed:', err.message));
+
     // Restore inventory
     try {
       const restoreResult = await InventoryService.restoreInventoryForCancelledInvoice(
@@ -770,6 +828,20 @@ router.patch('/:id/payment-status', protect, requirePermission('Invoicing: Recor
     await invoice.save();
     console.log('✅ Invoice saved successfully');
 
+    ActivityLog.logActivity({
+      action: 'Invoice Payment Status Updated',
+      description: `Invoice ${invoice.invoiceNumber} payment status was changed to ${paymentStatus}`,
+      entityType: 'invoice',
+      entityId: invoice._id,
+      entityName: invoice.invoiceNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      severity: 'medium',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (invoice payment status update) failed:', err.message));
+
     // Populate and return updated invoice
     const updatedInvoice = await Invoice.findById(req.params.id)
       .populate('customerId', 'name email phone gstNumber')
@@ -817,6 +889,21 @@ router.patch('/:id/no-gst', protect, [
 
     invoice.noGst = noGst;
     await invoice.save();
+
+    ActivityLog.logActivity({
+      action: 'Invoice No GST Flag Updated',
+      description: `Invoice ${invoice.invoiceNumber} was ${noGst ? 'marked as' : 'unmarked from'} No GST`,
+      entityType: 'invoice',
+      entityId: invoice._id,
+      entityName: invoice.invoiceNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: ['noGst'] },
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (invoice noGst update) failed:', err.message));
 
     // Populate and return updated invoice
     const updatedInvoice = await Invoice.findById(req.params.id)
@@ -994,6 +1081,20 @@ router.post('/:id/send-email', protect, requirePermission('Invoicing: Send Email
     const invoiceName = `Invoice_${invoice.invoiceNumber}`;
     await PDFService.sendInvoiceEmail(pdfBuffer, email, invoiceName, message);
 
+    ActivityLog.logActivity({
+      action: 'Invoice Emailed',
+      description: `Invoice ${invoice.invoiceNumber} was emailed to ${email}`,
+      entityType: 'invoice',
+      entityId: invoice._id,
+      entityName: invoice.invoiceNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'send',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (send invoice email) failed:', err.message));
+
     res.status(200).json({
       status: 'success',
       message: `Invoice ${invoice.invoiceNumber} sent successfully to ${email}`,
@@ -1126,6 +1227,20 @@ router.post('/:id/send-whatsapp', protect, requirePermission('WhatsApp: Send Mes
         message: whatsappResult.error || 'Failed to send invoice via WhatsApp'
       });
     }
+
+    ActivityLog.logActivity({
+      action: 'Invoice Sent via WhatsApp',
+      description: `Invoice ${invoice.invoiceNumber} was sent via WhatsApp to ${phone}`,
+      entityType: 'invoice',
+      entityId: invoice._id,
+      entityName: invoice.invoiceNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'send',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (send invoice whatsapp) failed:', err.message));
 
     res.status(200).json({
       status: 'success',

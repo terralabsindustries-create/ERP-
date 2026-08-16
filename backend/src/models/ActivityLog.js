@@ -85,6 +85,13 @@ const activityLogSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
+  },
+  // Tenant isolation: shared by an admin and their staff/managers, same as
+  // every other collection in the app (see utils/dataScopeHelper.js). Falls
+  // back to userId for records/accounts predating dataScope. Indexed below
+  // via the compound { dataScope: 1, createdAt: -1 } index.
+  dataScope: {
+    type: String
   }
 }, {
   timestamps: true,
@@ -94,6 +101,7 @@ const activityLogSchema = new mongoose.Schema({
 
 // Indexes for efficient querying
 activityLogSchema.index({ userId: 1, createdAt: -1 });
+activityLogSchema.index({ dataScope: 1, createdAt: -1 });
 activityLogSchema.index({ entityType: 1, entityId: 1 });
 activityLogSchema.index({ performedBy: 1, createdAt: -1 });
 activityLogSchema.index({ actionType: 1, createdAt: -1 });
@@ -140,7 +148,8 @@ activityLogSchema.statics.logActivity = async function(data) {
     metadata,
     severity = 'low',
     tags = [],
-    userId
+    userId,
+    dataScope
   } = data;
 
   return this.create({
@@ -161,14 +170,16 @@ activityLogSchema.statics.logActivity = async function(data) {
     metadata,
     severity,
     tags,
-    userId
+    userId,
+    dataScope
   });
 };
 
-// Static method to get activity for an entity
-activityLogSchema.statics.getEntityActivity = async function(entityType, entityId, userId) {
-  return this.find({ entityType, entityId, userId })
-    .populate('performedBy', 'name email')
+// Static method to get activity for an entity. scopeQuery is a tenant filter
+// built by the caller, e.g. { dataScope } or { userId } as a fallback.
+activityLogSchema.statics.getEntityActivity = async function(entityType, entityId, scopeQuery) {
+  return this.find({ entityType, entityId, ...scopeQuery })
+    .populate('performedBy', 'fullName email')
     .populate('relatedCustomer', 'name')
     .populate('relatedJob', 'title')
     .populate('relatedInvoice', 'invoiceNumber')
@@ -176,12 +187,12 @@ activityLogSchema.statics.getEntityActivity = async function(entityType, entityI
 };
 
 // Static method to get user activity
-activityLogSchema.statics.getUserActivity = async function(userId, performedBy, limit = 50) {
-  const query = { userId };
+activityLogSchema.statics.getUserActivity = async function(scopeQuery, performedBy, limit = 50) {
+  const query = { ...scopeQuery };
   if (performedBy) query.performedBy = performedBy;
-  
+
   return this.find(query)
-    .populate('performedBy', 'name email')
+    .populate('performedBy', 'fullName email')
     .populate('relatedCustomer', 'name')
     .populate('relatedJob', 'title')
     .populate('relatedInvoice', 'invoiceNumber')
@@ -190,7 +201,7 @@ activityLogSchema.statics.getUserActivity = async function(userId, performedBy, 
 };
 
 // Static method to get activity statistics
-activityLogSchema.statics.getActivityStats = async function(userId, days = 30) {
+activityLogSchema.statics.getActivityStats = async function(scopeQuery, days = 30) {
   const startDate = new Date();
   startDate.setDate(startDate.getDate() - days);
 
@@ -201,25 +212,25 @@ activityLogSchema.statics.getActivityStats = async function(userId, days = 30) {
     recentActivities,
     criticalActivities
   ] = await Promise.all([
-    this.countDocuments({ userId, createdAt: { $gte: startDate } }),
+    this.countDocuments({ ...scopeQuery, createdAt: { $gte: startDate } }),
     this.aggregate([
-      { $match: { userId: userId, createdAt: { $gte: startDate } } },
+      { $match: { ...scopeQuery, createdAt: { $gte: startDate } } },
       { $group: { _id: '$actionType', count: { $sum: 1 } } },
       { $sort: { count: -1 } }
     ]),
     this.aggregate([
-      { $match: { userId: userId, createdAt: { $gte: startDate } } },
+      { $match: { ...scopeQuery, createdAt: { $gte: startDate } } },
       { $group: { _id: '$performedBy', count: { $sum: 1 } } },
       { $lookup: { from: 'users', localField: '_id', foreignField: '_id', as: 'user' } },
       { $unwind: '$user' },
-      { $project: { userName: '$user.name', count: 1 } },
+      { $project: { userName: '$user.fullName', count: 1 } },
       { $sort: { count: -1 } }
     ]),
-    this.find({ userId, createdAt: { $gte: startDate } })
-      .populate('performedBy', 'name')
+    this.find({ ...scopeQuery, createdAt: { $gte: startDate } })
+      .populate('performedBy', 'fullName')
       .sort({ createdAt: -1 })
       .limit(10),
-    this.countDocuments({ userId, severity: 'critical', createdAt: { $gte: startDate } })
+    this.countDocuments({ ...scopeQuery, severity: 'critical', createdAt: { $gte: startDate } })
   ]);
 
   return {

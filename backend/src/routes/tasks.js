@@ -3,6 +3,7 @@ const router = express.Router();
 const Task = require('../models/Task');
 const User = require('../models/User');
 const Job = require('../models/Job');
+const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 const { body, query, param } = require('express-validator');
 
@@ -285,7 +286,21 @@ router.post('/', taskValidation, async (req, res) => {
     // Populate the task with related data
     await task.populate('assignedTo', 'fullName email role department');
     await task.populate('jobId', 'title status');
-    
+
+    ActivityLog.logActivity({
+      action: 'Task Created',
+      description: `Task "${task.title}" was created`,
+      entityType: 'task',
+      entityId: task._id,
+      entityName: task.title,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'create',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (create task) failed:', err.message));
+
     res.status(201).json({ success: true, data: task });
   } catch (error) {
     console.error('Error creating task:', error);
@@ -309,7 +324,22 @@ router.put('/:id', [
     if (!task) {
       return res.status(404).json({ success: false, message: 'Task not found' });
     }
-    
+
+    ActivityLog.logActivity({
+      action: 'Task Updated',
+      description: `Task "${task.title}" was updated`,
+      entityType: 'task',
+      entityId: task._id,
+      entityName: task.title,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      changes: { fields: Object.keys(req.body) },
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (update task) failed:', err.message));
+
     res.json({ success: true, data: task });
   } catch (error) {
     console.error('Error updating task:', error);
@@ -326,6 +356,21 @@ router.delete('/:id', [
     if (!task) {
       return res.status(404).json({ success: false, message: 'Task not found' });
     }
+
+    ActivityLog.logActivity({
+      action: 'Task Deleted',
+      description: `Task "${task.title}" was deleted`,
+      entityType: 'task',
+      entityId: task._id,
+      entityName: task.title,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'delete',
+      severity: 'high',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (delete task) failed:', err.message));
+
     res.json({ success: true, message: 'Task deleted successfully' });
   } catch (error) {
     console.error('Error deleting task:', error);
@@ -369,7 +414,22 @@ router.put('/:id/status', [
       updatedBy: req.user.id,
       taskTitle: updatedTask.title
     });
-    
+
+    const statusActionType = status === 'completed' ? 'complete' : status === 'cancelled' ? 'cancel' : 'update';
+    ActivityLog.logActivity({
+      action: 'Task Status Changed',
+      description: `Task "${updatedTask.title}" status changed to ${status}`,
+      entityType: 'task',
+      entityId: updatedTask._id,
+      entityName: updatedTask.title,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: statusActionType,
+      severity: 'medium',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (task status) failed:', err.message));
+
     res.json({ success: true, data: updatedTask });
   } catch (error) {
     console.error('Error updating task status:', error);

@@ -143,7 +143,7 @@ export function QuickReminderDialog({ onReminderCreated }: QuickReminderDialogPr
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button className="gap-2 bg-yellow-500 hover:bg-yellow-600 text-white" size="sm">
+        <Button variant="outline" className="gap-2" size="sm">
           <Plus className="w-4 h-4" />
           Quick Reminder
         </Button>

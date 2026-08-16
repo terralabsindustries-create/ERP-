@@ -60,10 +60,12 @@ const purchaseBillItemSchema = new mongoose.Schema({
 });
 
 const purchaseBillSchema = new mongoose.Schema({
+  // Uniqueness is enforced per-tenant below via the userId+billNumber compound
+  // index, not globally — a bare `unique: true` here would make every tenant
+  // fight over the same "BILL-202608-0001" sequence and fail with E11000.
   billNumber: {
     type: String,
     required: [true, 'Bill number is required'],
-    unique: true,
     trim: true
   },
   vendorInvoiceNumber: {
@@ -169,7 +171,7 @@ const purchaseBillSchema = new mongoose.Schema({
 });
 
 // Indexes
-purchaseBillSchema.index({ userId: 1, billNumber: 1 });
+purchaseBillSchema.index({ userId: 1, billNumber: 1 }, { unique: true });
 purchaseBillSchema.index({ userId: 1, vendorId: 1 });
 purchaseBillSchema.index({ userId: 1, billDate: -1 });
 purchaseBillSchema.index({ userId: 1, paymentStatus: 1 });

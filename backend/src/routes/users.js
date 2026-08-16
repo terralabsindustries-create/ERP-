@@ -297,6 +297,7 @@ router.post('/', protect, authorize('admin', 'manager'), userValidation, async (
       actionType: isReinvite ? 'update' : 'create',
       severity: 'medium',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     const userResponse = user.toObject();
@@ -383,6 +384,7 @@ router.post('/:id/resend-invitation', protect, authorize('admin', 'manager'), as
       actionType: 'update',
       severity: 'low',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.status(200).json({
@@ -552,6 +554,7 @@ router.put('/:id', protect, updateUserValidation, async (req, res) => {
       
       severity: 'low',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.status(200).json({
@@ -625,6 +628,7 @@ router.put('/:id/password', protect, [
       
       severity: 'medium',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.status(200).json({
@@ -683,6 +687,7 @@ router.delete('/:id', protect, authorize('admin'), async (req, res) => {
       
       severity: 'high',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.status(200).json({
@@ -740,6 +745,7 @@ router.put('/:id/toggle-status', protect, authorize('admin'), async (req, res) =
       
       severity: 'medium',
       userId: req.user._id,
+      dataScope: req.user.dataScope,
     });
 
     res.status(200).json({
