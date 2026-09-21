@@ -5,6 +5,11 @@ const quotationItemSchema = new mongoose.Schema({
   description: { type: String, trim: true, default: '' },
   quantity: { type: Number, required: true, min: [0.01, 'Quantity must be greater than 0'] },
   unit_price: { type: Number, required: true, min: [0, 'Unit price cannot be negative'] },
+  unit: {
+    type: String,
+    enum: ['pieces', 'boxes', 'reams', 'kg', 'grams', 'liters', 'meters', 'sqft', 'sqm', 'rolls', 'sheets'],
+    default: 'pieces'
+  },
   tax_rate: { type: Number, default: 0, min: 0, max: 100 },
   tax_amount: { type: Number, default: 0 },
   total_amount: { type: Number, required: true, min: 0 }

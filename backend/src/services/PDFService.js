@@ -1306,6 +1306,15 @@ class PDFService {
     return Number.isInteger(v) ? String(v) : v.toLocaleString('en-IN', { maximumFractionDigits: 2 });
   }
 
+  // "5 boxes", "12.5 sq ft". Pieces is the default unit, so it is left off and
+  // a plain count reads the same as it always has.
+  static formatQtyWithUnit(n, unit) {
+    const UNIT_LABELS = { grams: 'g', liters: 'L', meters: 'm', sqft: 'sq ft', sqm: 'sq m' };
+    const qty = this.fmtQty(n);
+    if (!unit || unit === 'pieces') return qty;
+    return `${qty} ${UNIT_LABELS[unit] || unit}`;
+  }
+
   static splitAddress(str) {
     if (!str || typeof str !== 'string') return [];
     const parts = str.includes('\n') ? str.split('\n') : str.split(',');
@@ -1419,6 +1428,7 @@ class PDFService {
       code: '',
       rate: item.unit_price || 0,
       qty: item.quantity || 0,
+      unit: item.unit,
       total: item.total_amount != null ? item.total_amount : ((item.quantity || 0) * (item.unit_price || 0))
     }));
 
@@ -1556,7 +1566,7 @@ class PDFService {
       doc.text(it.description || '', cols.desc, startY, { width: colsW.desc });
       const descH = doc.heightOfString(it.description || ' ', { width: colsW.desc });
       doc.text(this.fmtNum(it.rate), cols.rate, startY, { width: colsW.rate, align: 'right' });
-      doc.text(this.fmtQty(it.qty), cols.qty, startY, { width: colsW.qty, align: 'right' });
+      doc.text(this.formatQtyWithUnit(it.qty, it.unit), cols.qty, startY, { width: colsW.qty, align: 'right' });
       doc.text(this.fmtNum(it.total), cols.total, startY, { width: colsW.total, align: 'right' });
 
       let subY = startY + descH;

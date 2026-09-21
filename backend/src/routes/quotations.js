@@ -58,7 +58,8 @@ const quotationValidation = [
   body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
   body('items.*.item_name').notEmpty().withMessage('Item name is required'),
   body('items.*.quantity').isFloat({ min: 0.01 }).withMessage('Quantity must be greater than 0'),
-  body('items.*.unit_price').isFloat({ min: 0 }).withMessage('Unit price cannot be negative')
+  body('items.*.unit_price').isFloat({ min: 0 }).withMessage('Unit price cannot be negative'),
+  body('items.*.unit').optional().isIn(Quotation.schema.path('items').schema.path('unit').enumValues).withMessage('Invalid unit')
 ];
 
 // GET /api/quotations
@@ -137,6 +138,7 @@ router.post('/', protect, requirePermission('Quotations: Create & Edit'), quotat
         item_name: item.item_name,
         description: item.description || '',
         quantity: item.quantity,
+        unit: item.unit || 'pieces',
         unit_price: item.unit_price,
         tax_rate: item.tax_rate || 0,
         tax_amount: taxAmount,
@@ -272,6 +274,7 @@ router.post('/:id/convert-to-invoice', protect, requirePermission('Quotations: C
         itemName: qi.item_name,
         description: qi.description || '',
         quantity: qi.quantity,
+        unit: qi.unit || 'pieces',
         unitPrice: qi.unit_price,
         totalAmount: lineTotal,
         gstRate: isGst ? (qi.tax_rate || 0) : 0,
@@ -371,7 +374,7 @@ router.post('/:id/send-email', protect, requirePermission('Quotations: Send Emai
       <tr>
         <td style="padding:8px;border-bottom:1px solid #eee;">${item.item_name}</td>
         <td style="padding:8px;border-bottom:1px solid #eee;">${item.description || '-'}</td>
-        <td style="padding:8px;border-bottom:1px solid #eee;text-align:center;">${item.quantity}</td>
+        <td style="padding:8px;border-bottom:1px solid #eee;text-align:center;">${PDFService.formatQtyWithUnit(item.quantity, item.unit)}</td>
         <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">&#8377;${item.unit_price.toFixed(2)}</td>
         ${quotation.gst_type === 'gst' ? `<td style="padding:8px;border-bottom:1px solid #eee;text-align:center;">${item.tax_rate}%</td>` : ''}
         <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">&#8377;${item.total_amount.toFixed(2)}</td>

@@ -22,7 +22,7 @@ const router = express.Router();
 
 // An admin is minted by signup and owns one dataScope. Inside that scope they can
 // hand out a limited number of manager/staff logins.
-const MAX_STAFF_LOGINS = parseInt(process.env.MAX_STAFF_LOGINS, 10) || 5;
+const MAX_STAFF_LOGINS = parseInt(process.env.MAX_STAFF_LOGINS, 10) || 20;
 
 // Everyone in the admin's dataScope except the admins themselves occupies a seat.
 const staffSeatQuery = (user) => ({
