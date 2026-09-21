@@ -11,6 +11,9 @@ import apiClient from "@/lib/apiClient";
 import { Search, User, Mail, Phone, Plus, Trash2 } from "lucide-react";
 import { JobInvoiceDialog } from "./JobInvoiceDialog";
 import { ViewInvoiceDialog } from "../invoices/ViewInvoiceDialog";
+import { UNITS_OF_MEASUREMENT } from "../inventory/CreateItemDialog";
+
+const AREA_UNITS = ['sqft', 'sqm'];
 
 interface CreateJobDialogProps {
   open: boolean;
@@ -250,6 +253,18 @@ export function CreateJobDialog({
     });
   };
 
+  // Switching between a count unit and an area unit changes which fields the
+  // row needs (Qty vs Length × Width), so itemType follows the unit.
+  const changeItemUnit = (index: number, unit: string) => {
+    const isAreaUnit = AREA_UNITS.includes(unit);
+
+    updateItem(index, 'unit', unit);
+    updateItem(index, 'itemType', isAreaUnit ? 'Square Feet' : 'Numbers');
+    if (!isAreaUnit && !formData.items[index].quantity) {
+      updateItem(index, 'quantity', 1);
+    }
+  };
+
   const handleCustomerSelect = (customer: any) => {
     setSelectedCustomer(customer);
     setFormData(prev => ({
@@ -380,6 +395,7 @@ export function CreateJobDialog({
       const items = (createdJob.items || []).map((item: any) => ({
         itemName: item.itemName,
         itemType: item.itemType || 'Numbers',  // Pass itemType to backend
+        unit: item.unit || 'pieces',
         quantity: item.quantity || 0,  // Send actual quantity field
         totalSquareFeet: item.totalSquareFeet || 0,  // Send actual totalSquareFeet field
         length: item.length || 0,  // Send length for square feet items
@@ -1024,7 +1040,7 @@ export function CreateJobDialog({
               </CardHeader>
               <CardContent className="space-y-4">
                 {formData.items.map((item, index) => (
-                  <div key={index} className="grid grid-cols-1 md:grid-cols-7 gap-2 p-4 border rounded-lg">
+                  <div key={index} className="grid grid-cols-1 md:grid-cols-8 gap-2 p-4 border rounded-lg">
                     <div className="space-y-1">
                       <Label className="text-xs">Item Name</Label>
                       <div className="relative autocomplete-container">
@@ -1064,7 +1080,7 @@ export function CreateJobDialog({
                                     setFormData(prev => {
                                       const newItems = [...prev.items];
                                       const invUnit = invItem.unit || 'pieces';
-                                      const isAreaUnit = ['sqft', 'sqm'].includes(invUnit);
+                                      const isAreaUnit = AREA_UNITS.includes(invUnit);
 
                                       newItems[index] = {
                                         ...newItems[index],
@@ -1139,6 +1155,25 @@ export function CreateJobDialog({
                           </div>
                         )}
                       </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-xs">Unit</Label>
+                      <Select
+                        value={item.unit || 'pieces'}
+                        onValueChange={(value) => changeItemUnit(index, value)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select unit" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {UNITS_OF_MEASUREMENT.map((unit) => (
+                            <SelectItem key={unit.value} value={unit.value}>
+                              {unit.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
 
                     {/* Conditional fields based on item unit */}

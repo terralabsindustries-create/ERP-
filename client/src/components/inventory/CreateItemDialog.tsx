@@ -32,7 +32,7 @@ const BUSINESS_CATEGORIES = [
 ];
 
 // Standard units of measurement
-const UNITS_OF_MEASUREMENT = [
+export const UNITS_OF_MEASUREMENT = [
   { value: "pieces", label: "Pieces (pcs)" },
   { value: "boxes", label: "Boxes" },
   { value: "reams", label: "Reams" },

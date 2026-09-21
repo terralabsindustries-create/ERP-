@@ -185,6 +185,7 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
       const items = (job.items || []).map((item: any) => ({
         itemName: item.itemName,
         itemType: item.itemType || 'Numbers',  // Pass itemType to backend
+        unit: item.unit || 'pieces',
         quantity: item.quantity || 0,  // Send actual quantity field
         totalSquareFeet: item.totalSquareFeet || 0,  // Send actual totalSquareFeet field
         length: item.length || 0,  // Send length for square feet items

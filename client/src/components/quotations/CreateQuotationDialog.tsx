@@ -13,6 +13,7 @@ import { Plus, Trash2, FileText, Send, Link, UserPlus } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
 import { CreateCustomerDialog } from "@/components/customers/CreateCustomerDialog";
+import { UNITS_OF_MEASUREMENT } from "@/components/inventory/CreateItemDialog";
 
 interface QuotationItem {
   item_name: string;
@@ -22,7 +23,9 @@ interface QuotationItem {
   tax_rate: number;
   /** Stock on hand when the item was picked, for the availability hint. */
   available_stock?: number;
-  unit?: string;
+  /** The unit that stock is counted in, which the quoted unit may differ from. */
+  stock_unit?: string;
+  unit: string;
 }
 
 interface CreateQuotationDialogProps {
@@ -50,7 +53,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
     notes: "",
   });
   const [items, setItems] = useState<QuotationItem[]>([
-    { item_name: "", description: "", quantity: 1, unit_price: 0, tax_rate: 18 }
+    { item_name: "", description: "", quantity: 1, unit: "pieces", unit_price: 0, tax_rate: 18 }
   ]);
 
   const { toast } = useToast();
@@ -109,6 +112,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
       unit_price: inv.unitCost || 0,
       tax_rate: inv.gstRate ?? updated[index].tax_rate,
       available_stock: inv.quantity ?? 0,
+      stock_unit: inv.unit || 'pieces',
       unit: inv.unit || 'pieces',
     };
     setItems(updated);
@@ -125,7 +129,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
   };
 
   const addItem = () => {
-    setItems([...items, { item_name: "", description: "", quantity: 1, unit_price: 0, tax_rate: 18 }]);
+    setItems([...items, { item_name: "", description: "", quantity: 1, unit: "pieces", unit_price: 0, tax_rate: 18 }]);
   };
 
   const removeItem = (index: number) => {
@@ -174,7 +178,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
         terms_conditions: "",
         notes: "",
       });
-      setItems([{ item_name: "", description: "", quantity: 1, unit_price: 0, tax_rate: 18 }]);
+      setItems([{ item_name: "", description: "", quantity: 1, unit: "pieces", unit_price: 0, tax_rate: 18 }]);
       onQuotationCreated?.();
     } catch (error) {
       console.error('Error creating quotation:', error);
@@ -196,7 +200,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
       <DialogTrigger asChild onClick={() => { fetchCustomers(); fetchInventoryItems(); }}>
         {children}
       </DialogTrigger>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileText className="w-5 h-5" />
@@ -327,7 +331,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
             {items.map((item, index) => (
               <Card key={index}>
                 <CardContent className="p-4">
-                  <div className="grid grid-cols-6 gap-4 items-end">
+                  <div className="grid grid-cols-7 gap-4 items-end">
                     <div className="space-y-2 relative item-name-autocomplete">
                       <Label>Item Name</Label>
                       <Input
@@ -388,10 +392,27 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
                       <Label>Quantity</Label>
                       <Input
                         type="number"
+                        step="any"
                         value={item.quantity}
-                        onChange={(e) => updateItem(index, 'quantity', parseInt(e.target.value) || 0)}
+                        onChange={(e) => updateItem(index, 'quantity', parseFloat(e.target.value) || 0)}
                         placeholder="1"
                       />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label>Unit</Label>
+                      <Select value={item.unit} onValueChange={(value) => updateItem(index, 'unit', value)}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select unit" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {UNITS_OF_MEASUREMENT.map((unit) => (
+                            <SelectItem key={unit.value} value={unit.value}>
+                              {unit.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                     
                     <div className="space-y-2">
@@ -427,16 +448,16 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
 
                   {item.available_stock !== undefined && (
                     <div className="mt-2 text-xs">
-                      {item.quantity > item.available_stock ? (
+                      {item.unit === item.stock_unit && item.quantity > item.available_stock ? (
                         // A quotation does not reserve or deduct stock, so this is a
                         // heads-up for the person quoting, not a blocker.
                         <span className="text-amber-600 font-medium">
                           Quoting {item.quantity} but only {item.available_stock}
-                          {item.unit ? ` ${item.unit}` : ''} in stock — you may need to restock before invoicing.
+                          {item.stock_unit ? ` ${item.stock_unit}` : ''} in stock — you may need to restock before invoicing.
                         </span>
                       ) : (
                         <span className="text-muted-foreground">
-                          In stock: {item.available_stock}{item.unit ? ` ${item.unit}` : ''}
+                          In stock: {item.available_stock}{item.stock_unit ? ` ${item.stock_unit}` : ''}
                         </span>
                       )}
                     </div>
