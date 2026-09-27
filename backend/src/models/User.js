@@ -99,6 +99,12 @@ const userSchema = new mongoose.Schema({
       enum: ALL_PERMISSIONS
     }
   ],
+  // Managers and accountants only: see records (e.g. invoices) created by every
+  // team member instead of just their own. Admins always do; staff never do.
+  canViewAllData: {
+    type: Boolean,
+    default: false
+  },
   subscription: {
     isActive: {
       type: Boolean,
@@ -183,6 +189,7 @@ userSchema.methods.generateProfile = function () {
     companyName: this.companyName,
     dataScope: this.dataScope,
     permissions: this.permissions || [],
+    canViewAllData: this.canViewAllData === true,
     isActive: this.isActive,
     status: this.status,
     invitationExpiresAt: this.invitation ? this.invitation.expiresAt : undefined,

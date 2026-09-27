@@ -6,6 +6,7 @@ const Invoice = require('../models/Invoice');
 const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/requirePermission');
+const { staffScopeQuery } = require('../utils/dataScopeHelper');
 
 const router = express.Router();
 
@@ -159,7 +160,7 @@ router.post('/', protect, requirePermission('Payments: Record Payment'), payment
     if (req.body.invoiceId) {
       invoice = await Invoice.findOne({
         _id: req.body.invoiceId,
-        userId: req.user._id
+        ...staffScopeQuery(req.user)
       });
       
       if (!invoice) {

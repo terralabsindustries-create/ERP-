@@ -40,7 +40,7 @@ interface InvoiceItem {
 
 interface DesignCharge {
   amount: number;
-  sacCode: string;
+  sacCode?: string;
   gstRate: number;
   totalAmount: number;
 }
@@ -579,14 +579,6 @@ export function CreateJobDialog({
 
     // Validate design charge if present
     if (formData.designCharge) {
-      if (!formData.designCharge.sacCode || !formData.designCharge.sacCode.trim()) {
-        toast({
-          title: "Validation Error",
-          description: "Please select SAC Code for design charge",
-          variant: "destructive",
-        });
-        return;
-      }
       if (!formData.designCharge.amount || formData.designCharge.amount <= 0) {
         toast({
           title: "Validation Error",
@@ -1398,9 +1390,9 @@ export function CreateJobDialog({
                     </div>
 
                     <div className="space-y-2">
-                      <Label htmlFor="designChargeSac">SAC Code *</Label>
+                      <Label htmlFor="designChargeSac">SAC Code (Optional)</Label>
                       <Select
-                        value={formData.designCharge.sacCode}
+                        value={formData.designCharge.sacCode || 'no-sac'}
                         onValueChange={(value) => {
                           setFormData(prev => {
                             if (!prev.designCharge) return prev;
@@ -1408,16 +1400,17 @@ export function CreateJobDialog({
                               ...prev,
                               designCharge: {
                                 ...prev.designCharge,
-                                sacCode: value
+                                sacCode: value === 'no-sac' ? undefined : value
                               }
                             };
                           });
                         }}
                       >
                         <SelectTrigger>
-                          <SelectValue placeholder="Select SAC" />
+                          <SelectValue placeholder="Optional - Select SAC" />
                         </SelectTrigger>
                         <SelectContent>
+                          <SelectItem value="no-sac">No SAC Code</SelectItem>
                           {sacCodes.map((sac) => (
                             <SelectItem key={sac._id || sac.id} value={sac.sacCode}>
                               {sac.sacCode} - {sac.description}

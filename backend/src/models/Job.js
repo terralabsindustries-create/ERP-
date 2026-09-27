@@ -25,7 +25,7 @@ const invoiceItemSchema = new mongoose.Schema({
 // Design charge schema
 const designChargeSchema = new mongoose.Schema({
   amount: { type: Number, required: true, default: 0 },
-  sacCode: { type: String, required: true, trim: true, uppercase: true },
+  sacCode: { type: String, trim: true, uppercase: true },
   gstRate: { type: Number, required: true, min: 0, max: 100, default: 18 },
   totalAmount: { type: Number, default: 0 }
 });

@@ -448,7 +448,7 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
                     <div className="flex-1">
                       <div className="font-medium">Design Charge</div>
                       <div className="text-xs text-muted-foreground">
-                        ₹{job.designCharge.amount?.toFixed(2) || 0} @ {job.designCharge.gstRate}% GST (HSN: {job.designCharge.hsnCode})
+                        ₹{job.designCharge.amount?.toFixed(2) || 0} @ {job.designCharge.gstRate}% GST{job.designCharge.sacCode ? ` (SAC: ${job.designCharge.sacCode})` : ''}
                       </div>
                     </div>
                     <div className="text-right font-medium">₹{job.designCharge.totalAmount?.toFixed(2) || 0}</div>

@@ -6,6 +6,7 @@ const Invoice = require('../models/Invoice');
 const Customer = require('../models/Customer');
 const Settings = require('../models/Settings');
 const { sendWhatsAppMessage, buildTemplateVariables } = require('../utils/metaWhatsApp');
+const { staffScopeQuery } = require('../utils/dataScopeHelper');
 
 const router = express.Router();
 
@@ -121,9 +122,10 @@ router.get('/stats', protect, async (req, res) => {
     const dataScope = req.user.dataScope;
 
     // Build query for invoices
-    const invoiceQuery = dataScope
-      ? { dataScope, paymentStatus: { $in: ['pending', 'partial', 'overdue'] } }
-      : { userId, paymentStatus: { $in: ['pending', 'partial', 'overdue'] } };
+    const invoiceQuery = {
+      ...staffScopeQuery(req.user),
+      paymentStatus: { $in: ['pending', 'partial', 'overdue'] }
+    };
 
     // Get overdue invoices (past due date)
     const now = new Date();
@@ -137,7 +139,7 @@ router.get('/stats', protect, async (req, res) => {
     const outstandingAgg = await Invoice.aggregate([
       {
         $match: {
-          ...(dataScope ? { dataScope } : { userId: req.user._id }),
+          ...staffScopeQuery(req.user),
           paymentStatus: { $in: ['pending', 'partial', 'overdue'] },
           dueDate: { $lt: now },
           status: { $nin: ['cancelled', 'refunded'] }
@@ -210,9 +212,7 @@ router.get('/overdue-invoices', protect, async (req, res) => {
     const maxReminders = reminderConfig.maxReminders || 5;
 
     // Build query
-    const invoiceQuery = dataScope
-      ? { dataScope }
-      : { userId };
+    const invoiceQuery = staffScopeQuery(req.user);
 
     // Find overdue invoices
     const invoices = await Invoice.find({
@@ -352,18 +352,11 @@ router.post('/send/:invoiceId', protect, [
     // Allow picking/overriding the template at send time instead of only using the saved default
     const { metaTemplateName: overrideTemplateName, metaTemplateLanguage, templateVariableMapping: overrideMapping } = req.body || {};
 
-    // Get the invoice
-    const invoice = await Invoice.findById(invoiceId).populate('customerId', 'name phone email whatsappConsent');
+    // Get the invoice — the scope doubles as the ownership check
+    const invoice = await Invoice.findOne({ _id: invoiceId, ...staffScopeQuery(req.user) })
+      .populate('customerId', 'name phone email whatsappConsent');
     if (!invoice) {
       return res.status(404).json({ status: 'error', message: 'Invoice not found' });
-    }
-
-    // Verify ownership
-    if (dataScope && invoice.dataScope !== dataScope) {
-      return res.status(403).json({ status: 'error', message: 'Access denied' });
-    }
-    if (!dataScope && invoice.userId.toString() !== userId.toString()) {
-      return res.status(403).json({ status: 'error', message: 'Access denied' });
     }
 
     // Check if balance exists
@@ -449,7 +442,7 @@ router.post('/send-bulk', protect, async (req, res) => {
     const reminderInterval = reminderConfig.reminderInterval || 3;
 
     // Build query
-    const invoiceQuery = dataScope ? { dataScope } : { userId };
+    const invoiceQuery = staffScopeQuery(req.user);
 
     // Find eligible invoices
     const invoices = await Invoice.find({

@@ -116,7 +116,7 @@ class PDFService {
     const addressLines = (companyInfo.address || '').split(',').map(s => s.trim()).filter(Boolean).join('<br>');
     const vendorAddressLines = (bill.vendorAddress || '').split(',').map(s => s.trim()).filter(Boolean).join('<br>');
 
-    return `<!DOCTYPE html>
+    return this.enlargeBodyText(`<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
@@ -223,7 +223,16 @@ class PDFService {
 
 </div>
 </body>
-</html>`;
+</html>`);
+  }
+
+  // Body copy on this document printed too small to read comfortably. Every size
+  // below the ceiling is lifted; the big headings keep the size they were given.
+  static enlargeBodyText(html, factor = 1.2, ceilingPt = 12) {
+    return html.replace(/font-size:\s*([\d.]+)pt/g, (match, size) => {
+      const pt = parseFloat(size);
+      return pt < ceilingPt ? `font-size:${(pt * factor).toFixed(1)}pt` : match;
+    });
   }
 
   static formatPhone(phone) {
@@ -1349,19 +1358,42 @@ class PDFService {
 
     const items = [];
     (invoice.items || []).forEach(item => {
-      const qty = item.quantity || item.totalSquareFeet || 0;
+      // Area items are priced per sq ft/m off the measured area; everything else
+      // is priced per copy. The two live in separate columns on the document.
+      const isArea = item.itemType === 'Square Feet'
+        || (!item.quantity && (item.totalSquareFeet || 0) > 0); // older items carry no itemType
+      const area = isArea ? (item.totalSquareFeet || 0) : 0;
+      const copies = item.quantity || (area ? 1 : 0);
       const rate = item.unitPrice || 0;
-      const amount = qty * rate;
+      const amount = (area || copies) * rate;
       const gst = item.gstAmount || (amount * ((item.gstRate || 0) / 100));
       const total = item.itemTotal || (amount + gst);
-      const sub = item.description || '';
-      const code = item.hsnCode ? 'HSN: ' + item.hsnCode : '';
-      items.push({ description: item.itemName || '', sub, code, rate, qty, total });
+
+      items.push({
+        description: item.itemName || '',
+        sub: item.description || '',
+        hsn: item.hsnCode || '',
+        taxRate: item.gstRate,
+        area,
+        copies,
+        unit: area ? null : item.unit,
+        rate,
+        total
+      });
     });
     if (invoice.designCharge && invoice.designCharge.amount > 0) {
       const amt = invoice.designCharge.amount;
       const gst = amt * ((invoice.designCharge.gstRate || 18) / 100);
-      items.push({ description: 'Design Charge', sub: '', code: '', rate: amt, qty: 1, total: amt + gst });
+      items.push({
+        description: 'Design Charge',
+        sub: '',
+        hsn: '9983',
+        taxRate: invoice.designCharge.gstRate || 18,
+        area: 0,
+        copies: 1,
+        rate: amt,
+        total: amt + gst
+      });
     }
 
     const bankLines = [];
@@ -1422,15 +1454,22 @@ class PDFService {
 
     const billing = this.splitAddress(customer.address);
 
-    const items = (quotation.items || []).map(item => ({
-      description: item.item_name || '',
-      sub: item.description || '',
-      code: '',
-      rate: item.unit_price || 0,
-      qty: item.quantity || 0,
-      unit: item.unit,
-      total: item.total_amount != null ? item.total_amount : ((item.quantity || 0) * (item.unit_price || 0))
-    }));
+    // A quotation priced in sq ft/m counts its quantity as the area, so it is
+    // shown in the Area column rather than as copies.
+    const items = (quotation.items || []).map(item => {
+      const isArea = ['sqft', 'sqm'].includes(item.unit);
+      return {
+        description: item.item_name || '',
+        sub: item.description || '',
+        hsn: '',
+        taxRate: quotation.gst_type === 'gst' ? item.tax_rate : null,
+        area: isArea ? (item.quantity || 0) : 0,
+        copies: isArea ? 1 : (item.quantity || 0),
+        unit: isArea ? null : item.unit,
+        rate: item.unit_price || 0,
+        total: item.total_amount != null ? item.total_amount : ((item.quantity || 0) * (item.unit_price || 0))
+      };
+    });
 
     const bankLines = [];
     if (companyInfo.bankName) bankLines.push('Bank Name: ' + companyInfo.bankName);
@@ -1487,27 +1526,27 @@ class PDFService {
     const headerTop = y;
 
     // ---------- LEFT: company block ----------
-    doc.fontSize(13).font('Helvetica-Bold').fillColor(C.ink)
+    doc.fontSize(15).font('Helvetica-Bold').fillColor(C.ink)
        .text((d.company.name || 'COMPANY').toUpperCase(), margin, y, { width: 300 });
     let ly = doc.y + 2;
-    doc.fontSize(8).font('Helvetica').fillColor(C.text);
+    doc.fontSize(9.5).font('Helvetica').fillColor(C.text);
     (d.company.addressLines || []).forEach(line => { doc.text(line, margin, ly, { width: 290 }); ly = doc.y; });
     if (d.company.email) { doc.text('Email: ' + d.company.email, margin, ly, { width: 290 }); ly = doc.y; }
     if (d.company.phone) { doc.text('Mobile: ' + d.company.phone, margin, ly, { width: 290 }); ly = doc.y; }
     if (d.company.gstNumber) { doc.text('GSTIN: ' + d.company.gstNumber, margin, ly, { width: 290 }); ly = doc.y; }
 
     // ---------- RIGHT: doc type + meta ----------
-    doc.fontSize(18).font('Helvetica-Bold').fillColor(C.ink)
+    doc.fontSize(20).font('Helvetica-Bold').fillColor(C.ink)
        .text(d.type, margin, headerTop, { width: contentWidth, align: 'right' });
-    let ry = headerTop + 24;
-    doc.fontSize(8.5).font('Helvetica').fillColor(C.text);
-    doc.text('Number: ' + d.number, margin, ry, { width: contentWidth, align: 'right' }); ry += 13;
-    (d.meta || []).forEach(m => { doc.text(m.label + ': ' + m.value, margin, ry, { width: contentWidth, align: 'right' }); ry += 13; });
+    let ry = headerTop + 26;
+    doc.fontSize(10).font('Helvetica').fillColor(C.text);
+    doc.text('Number: ' + d.number, margin, ry, { width: contentWidth, align: 'right' }); ry += 15;
+    (d.meta || []).forEach(m => { doc.text(m.label + ': ' + m.value, margin, ry, { width: contentWidth, align: 'right' }); ry += 15; });
 
     if (d.badge) {
       const bw = 110, bh = 22, bx = right - bw, by = ry + 2;
       doc.roundedRect(bx, by, bw, bh, 3).lineWidth(1).strokeColor(d.badge.color).stroke();
-      doc.fontSize(9).font('Helvetica-Bold').fillColor(d.badge.color)
+      doc.fontSize(10).font('Helvetica-Bold').fillColor(d.badge.color)
          .text(d.badge.text, bx, by + 7, { width: bw, align: 'center' });
       ry = by + bh;
     }
@@ -1522,20 +1561,20 @@ class PDFService {
     const third = contentWidth / 3;
     const colX = [margin, margin + third, margin + 2 * third];
     const colW = third - 10;
-    doc.fontSize(9.5).font('Helvetica-Bold').fillColor(C.ink);
+    doc.fontSize(11).font('Helvetica-Bold').fillColor(C.ink);
     doc.text('Customer', colX[0], y);
     doc.text('Billing Address', colX[1], y);
     doc.text('Shipping Address', colX[2], y);
-    const blockTop = y + 14;
+    const blockTop = y + 17;
 
     // Customer column
-    doc.fontSize(8).font('Helvetica-Bold').fillColor(C.text).text(d.customer.name || 'N/A', colX[0], blockTop, { width: colW });
+    doc.fontSize(9.5).font('Helvetica-Bold').fillColor(C.text).text(d.customer.name || 'N/A', colX[0], blockTop, { width: colW });
     let cy = doc.y;
     doc.font('Helvetica').fillColor(C.muted);
     (d.customer.lines || []).forEach(l => { doc.text(l, colX[0], cy, { width: colW }); cy = doc.y; });
 
     // Billing column
-    doc.fontSize(8).font('Helvetica').fillColor(C.muted);
+    doc.fontSize(9.5).font('Helvetica').fillColor(C.muted);
     let byc = blockTop;
     (d.billingLines && d.billingLines.length ? d.billingLines : ['N/A']).forEach(l => { doc.text(l, colX[1], byc, { width: colW }); byc = doc.y; });
 
@@ -1546,33 +1585,48 @@ class PDFService {
     y = Math.max(cy, byc, bys) + 12;
 
     // ---------- ITEMS TABLE ----------
-    const cols = { sno: margin, desc: margin + 32, rate: margin + 300, qty: margin + 372, total: margin + 432 };
-    const colsW = { sno: 28, desc: 262, rate: 64, qty: 54, total: right - cols.total };
+    const colsW = { sno: 26, desc: 159, hsn: 46, tax: 34, area: 52, copies: 58, rate: 58, total: 82 };
+    const cols = { sno: margin };
+    cols.desc = cols.sno + colsW.sno;
+    cols.hsn = cols.desc + colsW.desc;
+    cols.tax = cols.hsn + colsW.hsn;
+    cols.area = cols.tax + colsW.tax;
+    cols.copies = cols.area + colsW.area;
+    cols.rate = cols.copies + colsW.copies;
+    cols.total = cols.rate + colsW.rate;
 
-    doc.rect(margin, y, contentWidth, 20).fill(C.light);
-    doc.fillColor(C.ink).fontSize(8.5).font('Helvetica-Bold');
-    doc.text('Sno.', cols.sno + 3, y + 6, { width: colsW.sno });
-    doc.text('Description', cols.desc, y + 6, { width: colsW.desc });
-    doc.text('Rate', cols.rate, y + 6, { width: colsW.rate, align: 'right' });
-    doc.text('Qty', cols.qty, y + 6, { width: colsW.qty, align: 'right' });
-    doc.text('Total', cols.total, y + 6, { width: colsW.total, align: 'right' });
-    y += 24;
+    const headerH = 30;
+    doc.rect(margin, y, contentWidth, headerH).fill(C.light);
+    doc.fillColor(C.ink).fontSize(9).font('Helvetica-Bold');
+    doc.text('Sl. No.', cols.sno + 2, y + 5, { width: colsW.sno - 2 });
+    doc.text('Description of Items', cols.desc, y + 10, { width: colsW.desc });
+    doc.text('HSN', cols.hsn, y + 10, { width: colsW.hsn, align: 'center' });
+    doc.text('Tax%', cols.tax, y + 10, { width: colsW.tax, align: 'center' });
+    doc.text('Area', cols.area, y + 5, { width: colsW.area, align: 'right' });
+    doc.fontSize(7.5).text('Total SQ.FT', cols.area, y + 17, { width: colsW.area, align: 'right' });
+    doc.fontSize(9);
+    doc.text('Copies', cols.copies, y + 10, { width: colsW.copies, align: 'right' });
+    doc.text('Rate', cols.rate, y + 10, { width: colsW.rate, align: 'right' });
+    doc.text('Total Amt', cols.total, y + 10, { width: colsW.total, align: 'right' });
+    y += headerH + 4;
 
     d.items.forEach((it, idx) => {
       if (y > pageHeight - 180) { doc.addPage(); y = margin; }
       const startY = y;
-      doc.font('Helvetica').fillColor(C.text).fontSize(8.5);
-      doc.text(String(idx + 1), cols.sno + 3, startY, { width: colsW.sno });
+      doc.font('Helvetica').fillColor(C.text).fontSize(9.5);
+      doc.text(String(idx + 1), cols.sno + 2, startY, { width: colsW.sno - 2 });
       doc.text(it.description || '', cols.desc, startY, { width: colsW.desc });
       const descH = doc.heightOfString(it.description || ' ', { width: colsW.desc });
+      doc.text(it.hsn || '-', cols.hsn, startY, { width: colsW.hsn, align: 'center' });
+      doc.text(it.taxRate != null ? this.fmtQty(it.taxRate) + '%' : '-', cols.tax, startY, { width: colsW.tax, align: 'center' });
+      doc.text(it.area ? this.fmtNum(it.area) : '-', cols.area, startY, { width: colsW.area, align: 'right' });
+      doc.text(it.copies ? this.formatQtyWithUnit(it.copies, it.unit) : '-', cols.copies, startY, { width: colsW.copies, align: 'right' });
       doc.text(this.fmtNum(it.rate), cols.rate, startY, { width: colsW.rate, align: 'right' });
-      doc.text(this.formatQtyWithUnit(it.qty, it.unit), cols.qty, startY, { width: colsW.qty, align: 'right' });
       doc.text(this.fmtNum(it.total), cols.total, startY, { width: colsW.total, align: 'right' });
 
       let subY = startY + descH;
-      if (it.sub) { doc.fontSize(7.5).font('Helvetica-Oblique').fillColor(C.muted).text(it.sub, cols.desc, subY, { width: colsW.desc }); subY = doc.y; }
-      if (it.code) { doc.fontSize(7.5).font('Helvetica-Oblique').fillColor(C.muted).text(it.code, cols.desc, subY, { width: colsW.desc }); subY = doc.y; }
-      y = Math.max(subY, startY + 14) + 6;
+      if (it.sub) { doc.fontSize(8.5).font('Helvetica-Oblique').fillColor(C.muted).text(it.sub, cols.desc, subY, { width: colsW.desc }); subY = doc.y; }
+      y = Math.max(subY, startY + 15) + 6;
       doc.moveTo(margin, y - 3).lineTo(right, y - 3).strokeColor('#eeeeee').lineWidth(0.5).stroke();
     });
 
@@ -1583,21 +1637,21 @@ class PDFService {
     const sumLabelX = margin + 300, sumValueX = margin + 372;
     let bankY = y, sumY = y;
     if (d.bankLines && d.bankLines.length) {
-      doc.fontSize(8).font('Helvetica').fillColor(C.text);
-      d.bankLines.forEach(l => { doc.text(l, margin, bankY, { width: 290 }); bankY += 13; });
+      doc.fontSize(9.5).font('Helvetica').fillColor(C.text);
+      d.bankLines.forEach(l => { doc.text(l, margin, bankY, { width: 290 }); bankY += 15; });
     }
     d.summary.forEach(s => {
-      doc.fontSize(s.bold ? 10 : 8.5).font(s.bold ? 'Helvetica-Bold' : 'Helvetica').fillColor(s.bold ? C.ink : C.text);
+      doc.fontSize(s.bold ? 11.5 : 10).font(s.bold ? 'Helvetica-Bold' : 'Helvetica').fillColor(s.bold ? C.ink : C.text);
       doc.text(s.label, sumLabelX, sumY, { width: 70 });
       doc.text(s.value, sumValueX, sumY, { width: right - sumValueX, align: 'right' });
-      sumY += s.bold ? 16 : 14;
+      sumY += s.bold ? 18 : 16;
     });
     y = Math.max(bankY, sumY) + 6;
 
     // ---------- AMOUNT IN WORDS ----------
     doc.moveTo(margin, y).lineTo(right, y).strokeColor(C.line).lineWidth(0.7).stroke();
     y += 7;
-    doc.fontSize(9).font('Helvetica-Bold').fillColor(C.ink)
+    doc.fontSize(10.5).font('Helvetica-Bold').fillColor(C.ink)
        .text('Total in Words: ' + d.amountWords, margin, y, { width: contentWidth, align: 'right' });
     y = doc.y + 6;
     doc.moveTo(margin, y).lineTo(right, y).strokeColor(C.line).lineWidth(0.7).stroke();
@@ -1609,47 +1663,47 @@ class PDFService {
     const footY = y;
 
     // Left: Terms & Conditions
-    doc.fontSize(9).font('Helvetica-Bold').fillColor(C.ink).text('Terms & Conditions', margin, footY, { width: 200 });
-    let ty = footY + 14;
+    doc.fontSize(10.5).font('Helvetica-Bold').fillColor(C.ink).text('Terms & Conditions', margin, footY, { width: 200 });
+    let ty = footY + 16;
     if (d.footerNote) {
-      doc.fontSize(8).font('Helvetica').fillColor(C.muted).text(d.footerNote, margin, ty, { width: 200 });
+      doc.fontSize(9.5).font('Helvetica').fillColor(C.muted).text(d.footerNote, margin, ty, { width: 200 });
       ty = doc.y + 4;
     }
-    doc.fontSize(8).font('Helvetica').fillColor(C.muted).text(d.terms, margin, ty, { width: 200 });
+    doc.fontSize(9.5).font('Helvetica').fillColor(C.muted).text(d.terms, margin, ty, { width: 200 });
 
     // Middle: Payment (QR code + UPI + link)
     if (hasPayment) {
       const payX = margin + 215;
       const payW = 150;
       let payY = footY;
-      doc.fontSize(9).font('Helvetica-Bold').fillColor(C.ink).text('Payment', payX, payY, { width: payW });
-      payY += 14;
+      doc.fontSize(10.5).font('Helvetica-Bold').fillColor(C.ink).text('Payment', payX, payY, { width: payW });
+      payY += 16;
 
       const qrBuf = this.decodeLogo(d.qrCode);
       if (qrBuf) {
         try {
           doc.image(qrBuf, payX, payY, { fit: [72, 72] });
-          doc.fontSize(7).font('Helvetica').fillColor(C.muted).text('Scan to Pay', payX, payY + 74, { width: 72, align: 'center' });
+          doc.fontSize(8.5).font('Helvetica').fillColor(C.muted).text('Scan to Pay', payX, payY + 74, { width: 72, align: 'center' });
           payY += 88;
         } catch (e) { /* ignore bad QR */ }
       }
       if (d.upiId) {
-        doc.fontSize(8).font('Helvetica').fillColor(C.text).text('UPI: ' + d.upiId, payX, payY, { width: payW });
+        doc.fontSize(9.5).font('Helvetica').fillColor(C.text).text('UPI: ' + d.upiId, payX, payY, { width: payW });
         payY = doc.y + 2;
       }
       if (d.paymentLink) {
-        doc.fontSize(8).font('Helvetica-Bold').fillColor(C.ink).text('Payment Link:', payX, payY, { width: payW });
+        doc.fontSize(9.5).font('Helvetica-Bold').fillColor(C.ink).text('Payment Link:', payX, payY, { width: payW });
         payY = doc.y;
-        doc.fontSize(7.5).font('Helvetica').fillColor('#8b2fc9')
+        doc.fontSize(8.5).font('Helvetica').fillColor('#8b2fc9')
            .text(d.paymentLink, payX, payY, { width: payW, link: d.paymentLink, underline: true });
       }
     }
 
     // Right: signatory
     const sigX = margin + 375;
-    doc.fontSize(9).font('Helvetica-Bold').fillColor(C.ink)
+    doc.fontSize(10.5).font('Helvetica-Bold').fillColor(C.ink)
        .text('For ' + (d.company.name || 'Company'), sigX, footY, { width: right - sigX, align: 'right' });
-    doc.fontSize(8).font('Helvetica').fillColor(C.muted)
+    doc.fontSize(9.5).font('Helvetica').fillColor(C.muted)
        .text('Authorised Signatory', sigX, footY + 60, { width: right - sigX, align: 'right' });
   }
 

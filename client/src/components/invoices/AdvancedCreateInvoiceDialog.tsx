@@ -35,7 +35,8 @@ interface InvoiceItem {
 interface AdvancedCreateInvoiceDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onInvoiceCreated: () => void;
+  /** Receives the created invoice, so a caller can act on it (e.g. download the PDF). */
+  onInvoiceCreated: (invoice?: any) => void;
   preselectedJob?: any;
   preselectedCustomer?: any;
 }
@@ -85,6 +86,7 @@ export function AdvancedCreateInvoiceDialog({
     invoiceDate: new Date().toISOString().split('T')[0],
     dueDate: getDefaultDueDate(),
     items: [] as InvoiceItem[],
+    designCharge: null as { amount: number; sacCode?: string; gstRate: number; totalAmount?: number } | null,
     discountAmount: 0,
     isInterState: false,
     noGst: false,
@@ -101,57 +103,88 @@ export function AdvancedCreateInvoiceDialog({
     }
   }, [open]);
 
-  // Separate useEffect for pre-filling data after customers and jobs are loaded
+  // Pre-fill once per opening. The callers rebuild preselectedCustomer on every
+  // render, so an effect that re-ran on it would throw away edits made to the
+  // rows in the meantime.
+  const prefilledFor = useRef<string | null>(null);
+
   useEffect(() => {
-    if (open && customers.length > 0 && jobs.length > 0) {
-      // Pre-fill form with preselected data
-      if (preselectedJob) {
-        // Debug: Log preselected job data
-        console.log('🔍 AdvancedCreateInvoiceDialog - preselectedJob:', preselectedJob);
-        console.log('🔍 AdvancedCreateInvoiceDialog - dueDate:', preselectedJob.dueDate);
-        console.log('🔍 AdvancedCreateInvoiceDialog - dueDate type:', typeof preselectedJob.dueDate);
-        console.log('🔍 AdvancedCreateInvoiceDialog - customers loaded:', customers.length);
-        console.log('🔍 AdvancedCreateInvoiceDialog - jobs loaded:', jobs.length);
-
-        // Safe date formatting for dueDate
-        const formatDateForInput = (dateValue: any) => {
-          if (!dateValue) return "";
-          const date = new Date(dateValue);
-          if (isNaN(date.getTime())) return "";
-          return date.toISOString().split('T')[0];
-        };
-
-        // Always start with empty items for manual addition
-        // User can add items manually like in regular invoice creation
-        // Customer and Job are pre-filled, but items are empty
-        const items: InvoiceItem[] = [];
-
-        const newFormData = {
-          customerId: preselectedJob.customerId || "",
-          jobId: preselectedJob.id || "",
-          dueDate: formatDateForInput(preselectedJob.dueDate),
-          items: items
-        };
-
-        console.log('🔍 AdvancedCreateInvoiceDialog - Starting with empty items for manual addition');
-        console.log('🔍 AdvancedCreateInvoiceDialog - Items count:', items.length);
-        console.log('🔍 AdvancedCreateInvoiceDialog - Setting form data:', newFormData);
-        console.log('🔍 AdvancedCreateInvoiceDialog - Customer ID:', newFormData.customerId);
-        console.log('🔍 AdvancedCreateInvoiceDialog - Job ID:', newFormData.jobId);
-        console.log('🔍 AdvancedCreateInvoiceDialog - Customer and Job pre-filled, items empty for manual addition');
-
-        setFormData(prev => ({
-          ...prev,
-          ...newFormData
-        }));
-      } else if (preselectedCustomer) {
-        setFormData(prev => ({
-          ...prev,
-          customerId: preselectedCustomer._id || preselectedCustomer.id || ""
-        }));
-      }
+    if (!open) {
+      prefilledFor.current = null;
+      return;
     }
-  }, [open, customers, jobs, preselectedJob, preselectedCustomer]);
+
+    const target = preselectedJob
+      ? `job:${preselectedJob.id || preselectedJob._id}`
+      : preselectedCustomer
+        ? `customer:${preselectedCustomer._id || preselectedCustomer.id}`
+        : null;
+
+    if (!target || prefilledFor.current === target) return;
+    prefilledFor.current = target;
+
+    if (preselectedJob) {
+      // Safe date formatting for dueDate
+      const formatDateForInput = (dateValue: any) => {
+        if (!dateValue) return "";
+        const date = new Date(dateValue);
+        if (isNaN(date.getTime())) return "";
+        return date.toISOString().split('T')[0];
+      };
+
+      // The job already carries its priced items — bring them in so the
+      // totals are filled in. Rows stay editable, and a job with no items
+      // still opens empty for manual entry.
+      const items: InvoiceItem[] = (preselectedJob.items || []).map((item: any) => {
+        const itemType = item.itemType === 'Square Feet' ? 'Square Feet' : 'Numbers';
+        const unitPrice = item.unitPrice || 0;
+        const gstRate = item.gstRate ?? 18;
+        const totalAmount = itemType === 'Square Feet'
+          ? (item.totalSquareFeet || 0) * unitPrice
+          : (item.quantity || 0) * unitPrice;
+        const gstAmount = totalAmount * (gstRate / 100);
+
+        return {
+          itemName: item.itemName || '',
+          description: item.description || '',
+          quantity: item.quantity || 0,
+          unitPrice,
+          totalAmount,
+          hsnCode: item.hsnCode || '',
+          gstRate,
+          gstAmount,
+          itemTotal: totalAmount + gstAmount,
+          itemType,
+          unit: item.unit || 'pieces',
+          length: item.length || undefined,
+          width: item.width || undefined,
+          totalSquareFeet: item.totalSquareFeet || 0
+        };
+      });
+
+      const newFormData = {
+        customerId: preselectedJob.customerId?._id || preselectedJob.customerId || "",
+        jobId: preselectedJob.id || preselectedJob._id || "",
+        // A job without a due date must not blank out the field — the invoice
+        // falls back to the same 30-day default it starts with.
+        dueDate: formatDateForInput(preselectedJob.dueDate) || getDefaultDueDate(),
+        items,
+        designCharge: preselectedJob.designCharge?.amount ? preselectedJob.designCharge : null
+      };
+
+      console.log('🔍 AdvancedCreateInvoiceDialog - pre-filled from job:', newFormData.jobId, 'items:', items.length);
+
+      setFormData(prev => ({
+        ...prev,
+        ...newFormData
+      }));
+    } else if (preselectedCustomer) {
+      setFormData(prev => ({
+        ...prev,
+        customerId: preselectedCustomer._id || preselectedCustomer.id || ""
+      }));
+    }
+  }, [open, preselectedJob, preselectedCustomer]);
 
   const fetchCustomers = async () => {
     try {
@@ -301,16 +334,25 @@ export function AdvancedCreateInvoiceDialog({
   const calculateTotals = () => {
     const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
-    const subtotal = round2(formData.items.reduce((sum, item) => sum + item.totalAmount, 0));
+    // The server treats the design charge as one more taxable line (SAC 9983),
+    // so it is folded in here the same way.
+    const lines = [
+      ...formData.items.map((item) => ({ totalAmount: item.totalAmount, gstRate: item.gstRate || 0 })),
+      ...(formData.designCharge?.amount
+        ? [{ totalAmount: formData.designCharge.amount, gstRate: formData.designCharge.gstRate || 0 }]
+        : [])
+    ];
+
+    const subtotal = round2(lines.reduce((sum, line) => sum + line.totalAmount, 0));
     const discount = round2(Math.min(formData.discountAmount || 0, subtotal));
     const taxable = round2(subtotal - discount);
 
     const totalGst = formData.noGst
       ? 0
       : round2(
-          formData.items.reduce((sum, item) => {
-            const share = subtotal > 0 ? discount * (item.totalAmount / subtotal) : 0;
-            return sum + (item.totalAmount - share) * ((item.gstRate || 0) / 100);
+          lines.reduce((sum, line) => {
+            const share = subtotal > 0 ? discount * (line.totalAmount / subtotal) : 0;
+            return sum + (line.totalAmount - share) * (line.gstRate / 100);
           }, 0)
         );
 
@@ -320,7 +362,7 @@ export function AdvancedCreateInvoiceDialog({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!formData.customerId || formData.items.length === 0) {
+    if (!formData.customerId || (formData.items.length === 0 && !formData.designCharge)) {
       toast({
         title: "Invalid Input",
         description: "Please select a customer and add at least one item",
@@ -347,7 +389,7 @@ export function AdvancedCreateInvoiceDialog({
         })
       };
 
-      const response = await apiClient.createInvoice(invoiceData);
+      const response: any = await apiClient.createInvoice(invoiceData);
       console.log('📄 Advanced invoice created:', response);
 
       toast({
@@ -355,7 +397,7 @@ export function AdvancedCreateInvoiceDialog({
         description: "Advanced invoice has been created successfully",
       });
 
-      onInvoiceCreated();
+      onInvoiceCreated(response?.invoice || response);
       onOpenChange(false);
 
       // Reset form
@@ -365,6 +407,7 @@ export function AdvancedCreateInvoiceDialog({
         invoiceDate: new Date().toISOString().split('T')[0],
         dueDate: getDefaultDueDate(),
         items: [],
+        designCharge: null,
         discountAmount: 0,
         isInterState: false,
         noGst: false,
@@ -401,9 +444,11 @@ export function AdvancedCreateInvoiceDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Create Invoice</DialogTitle>
+          <DialogTitle>{preselectedJob ? 'Generate Invoice' : 'Create Invoice'}</DialogTitle>
           <DialogDescription>
-            Create a comprehensive invoice with line items, HSN codes, and GST calculations.
+            {preselectedJob
+              ? 'Generate an invoice for this job — its items are filled in below and stay editable.'
+              : 'Create a comprehensive invoice with line items, HSN codes, and GST calculations.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -424,10 +469,12 @@ export function AdvancedCreateInvoiceDialog({
                 // Fixed customer display when job is preselected
                 <div className="p-3 bg-gray-50 border rounded-md">
                   <div className="font-medium text-gray-900">
-                    {customers.find(c => (c._id || c.id) === formData.customerId)?.name || 'Loading...'}
+                    {customers.find(c => (c._id || c.id) === formData.customerId)?.name
+                      || preselectedCustomer?.name || 'Loading...'}
                   </div>
                   <div className="text-sm text-gray-600">
-                    {customers.find(c => (c._id || c.id) === formData.customerId)?.email || ''}
+                    {customers.find(c => (c._id || c.id) === formData.customerId)?.email
+                      || preselectedCustomer?.email || ''}
                   </div>
                   <div className="text-xs text-gray-500 mt-1">
                     (Fixed - Cannot be changed)
@@ -486,10 +533,14 @@ export function AdvancedCreateInvoiceDialog({
                 // Fixed job display when job is preselected
                 <div className="p-3 bg-gray-50 border rounded-md">
                   <div className="font-medium text-gray-900">
-                    {jobs.find(j => (j._id || j.id) === formData.jobId)?.title || 'Loading...'}
+                    {jobs.find(j => (j._id || j.id) === formData.jobId)?.title
+                      || preselectedJob?.title || 'Loading...'}
                   </div>
                   <div className="text-sm text-gray-600">
-                    Customer: {jobs.find(j => (j._id || j.id) === formData.jobId)?.customer || 'Unknown Customer'}
+                    Customer: {(() => {
+                      const j = jobs.find(job => (job._id || job.id) === formData.jobId);
+                      return j?.customerId?.name || j?.customer || preselectedCustomer?.name || 'Unknown Customer';
+                    })()}
                   </div>
                   <div className="text-xs text-gray-500 mt-1">
                     (Fixed - Cannot be changed)
@@ -511,14 +562,14 @@ export function AdvancedCreateInvoiceDialog({
                     <SelectValue placeholder="Select job (optional)">
                       {(() => {
                         const j = jobs.find((job) => (job._id || job.id) === formData.jobId);
-                        return j ? `${j.title} - ${j.customer || 'Unknown Customer'}` : "";
+                        return j ? `${j.title} - ${j.customerId?.name || j.customer || 'Unknown Customer'}` : "";
                       })()}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {jobs.map((job) => (
                       <SelectItem key={job._id || job.id} value={job._id || job.id}>
-                        {job.title} - {job.customer || 'Unknown Customer'}
+                        {job.title} - {job.customerId?.name || job.customer || 'Unknown Customer'}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -796,6 +847,26 @@ export function AdvancedCreateInvoiceDialog({
                   <span>Subtotal:</span>
                   <span>₹{totals.subtotal.toFixed(2)}</span>
                 </div>
+                {formData.designCharge?.amount ? (
+                  <div className="flex justify-between text-sm text-muted-foreground">
+                    <span>
+                      Includes design charge (SAC {formData.designCharge.sacCode || '9983'}
+                      {formData.noGst ? '' : `, GST ${formData.designCharge.gstRate || 0}%`}):
+                    </span>
+                    <span className="flex items-center gap-2">
+                      ₹{formData.designCharge.amount.toFixed(2)}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-2"
+                        onClick={() => setFormData(prev => ({ ...prev, designCharge: null }))}
+                      >
+                        Remove
+                      </Button>
+                    </span>
+                  </div>
+                ) : null}
                 <div className="flex justify-between">
                   <span>Discount:</span>
                   <span>-₹{totals.discount.toFixed(2)}</span>
@@ -858,7 +929,9 @@ export function AdvancedCreateInvoiceDialog({
               Cancel
             </Button>
             <Button type="submit" disabled={loading}>
-              {loading ? "Creating..." : "Create Invoice"}
+              {loading
+                ? (preselectedJob ? "Generating..." : "Creating...")
+                : (preselectedJob ? "Generate Invoice" : "Create Invoice")}
             </Button>
           </DialogFooter>
         </form>

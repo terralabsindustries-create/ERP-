@@ -7,6 +7,7 @@ import {
   DollarSign,
   Clock,
   FileText,
+  FileEdit,
   TrendingUp,
   CheckCircle2,
   MoreHorizontal,
@@ -36,6 +37,7 @@ import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
 import { AssignTaskDialog } from "@/components/staff/AssignTaskDialog";
 import { UpdateStatusDialog } from "@/components/jobs/UpdateStatusDialog";
 import { AdvancedCreateInvoiceDialog } from "@/components/invoices/AdvancedCreateInvoiceDialog";
+import { EditInvoiceDialog } from "@/components/invoices/EditInvoiceDialog";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
@@ -74,6 +76,8 @@ export default function Jobs() {
   const [updateStatusDialog, setUpdateStatusDialog] = useState({ open: false, jobId: "", currentStatus: "" });
   const [showInvoiceDialog, setShowInvoiceDialog] = useState(false);
   const [selectedJob, setSelectedJob] = useState<any>(null);
+  const [invoiceToEdit, setInvoiceToEdit] = useState<any>(null);
+  const [showEditInvoiceDialog, setShowEditInvoiceDialog] = useState(false);
   const { toast } = useToast();
   const { user } = useAuth();
 
@@ -154,6 +158,64 @@ export default function Jobs() {
   const handleGenerateInvoice = (job: any) => {
     setSelectedJob(job);
     setShowInvoiceDialog(true);
+  };
+
+  // Generating an invoice from a job hands the PDF straight to the person who
+  // asked for it, the same way the quick-job flow does.
+  const downloadInvoice = async (invoice: any) => {
+    const invoiceId = invoice?._id || invoice?.id;
+    if (!invoiceId) return;
+
+    try {
+      await apiClient.downloadInvoicePDF(invoiceId);
+    } catch (error: any) {
+      console.error('Error downloading invoice PDF:', error);
+      toast({
+        title: "Download failed",
+        description: error?.message || "The invoice was created, but its PDF could not be downloaded.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // The job list only carries the invoice's id, so the invoice itself is
+  // fetched before the edit dialog opens on it. The row's id can also be stale
+  // or missing — an invoice raised from the Invoices page is only linked to the
+  // job if one was picked there — so the invoice is looked up by job as well.
+  const handleEditInvoice = async (job: any) => {
+    try {
+      let invoiceId = job.invoiceId;
+
+      if (!invoiceId) {
+        const list: any = await apiClient.getInvoices({ jobId: job.id, limit: '1' });
+        invoiceId = list?.invoices?.[0]?._id;
+      }
+
+      if (!invoiceId) {
+        toast({
+          title: "No invoice yet",
+          description: "This job has no invoice to edit. Use Generate Invoice first.",
+        });
+        return;
+      }
+
+      const response: any = await apiClient.getInvoice(invoiceId);
+      const invoice = response?.invoice || response;
+
+      if (!invoice?._id) {
+        throw new Error('Invoice not found');
+      }
+
+      setInvoiceToEdit(invoice);
+      setShowEditInvoiceDialog(true);
+    } catch (error: any) {
+      console.error('Error loading invoice for job:', error);
+      toast({
+        title: "Error",
+        description: error?.message || "Failed to load this job's invoice",
+        variant: "destructive",
+      });
+    }
   };
 
   // Filter jobs
@@ -330,8 +392,8 @@ export default function Jobs() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">
-                    <th className="text-left px-4 py-3 font-medium">Job Details</th>
                     <th className="text-left px-4 py-3 font-medium">Customer</th>
+                    <th className="text-left px-4 py-3 font-medium">Job Details</th>
                     <th className="text-left px-4 py-3 font-medium">Status</th>
                     <th className="text-left px-4 py-3 font-medium">Priority</th>
                     <th className="text-left px-4 py-3 font-medium">Due Date</th>
@@ -343,18 +405,17 @@ export default function Jobs() {
                   {filteredJobs.map((job) => (
                     <tr key={job.id} className="border-b hover:bg-muted/30 transition-colors">
                       <td className="px-4 py-3">
+                        <div className="font-medium">{job.customer}</div>
+                        {job.customerCompany && (
+                          <div className="text-xs text-muted-foreground">{job.customerCompany}</div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
                         <div className="font-medium">{job.title}</div>
-                        <div className="text-xs text-muted-foreground font-mono">ID: {job.id}</div>
                         {job.createdBy?.fullName && (
                           <div className="text-xs text-muted-foreground">
                             Created by: {job.createdBy.fullName}
                           </div>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div>{job.customer}</div>
-                        {job.customerCompany && (
-                          <div className="text-xs text-muted-foreground">{job.customerCompany}</div>
                         )}
                       </td>
                       <td className="px-4 py-3">
@@ -386,7 +447,11 @@ export default function Jobs() {
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem onClick={() => handleGenerateInvoice(job)}>
                               <FileText className="h-4 w-4 mr-2" />
-                              {job.invoiceId ? 'Edit Invoice' : 'Generate Invoice'}
+                              Generate Invoice
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleEditInvoice(job)}>
+                              <FileEdit className="h-4 w-4 mr-2" />
+                              Edit Invoice
                             </DropdownMenuItem>
                             <DropdownMenuItem onClick={() => handleUpdateStatus(job.id)}>
                               <Edit className="h-4 w-4 mr-2" />
@@ -444,9 +509,10 @@ export default function Jobs() {
         <AdvancedCreateInvoiceDialog
           open={showInvoiceDialog}
           onOpenChange={setShowInvoiceDialog}
-          onInvoiceCreated={() => {
+          onInvoiceCreated={(invoice) => {
             fetchJobs();
             setShowInvoiceDialog(false);
+            downloadInvoice(invoice);
           }}
           preselectedJob={selectedJob}
           preselectedCustomer={{
@@ -458,6 +524,16 @@ export default function Jobs() {
           }}
         />
       )}
+
+      <EditInvoiceDialog
+        open={showEditInvoiceDialog}
+        onOpenChange={(open) => {
+          setShowEditInvoiceDialog(open);
+          if (!open) setInvoiceToEdit(null);
+        }}
+        invoice={invoiceToEdit}
+        onInvoiceUpdated={fetchJobs}
+      />
     </div>
   );
 }

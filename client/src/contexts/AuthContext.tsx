@@ -18,6 +18,7 @@ interface User {
   companyName?: string;
   preferences: any;
   permissions?: string[]; // Array of permission strings
+  canViewAllData?: boolean; // Sees every team member's invoices, not just their own
   subscription?: {
     isActive: boolean;
     plan: string;

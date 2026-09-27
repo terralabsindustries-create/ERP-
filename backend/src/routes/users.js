@@ -5,6 +5,7 @@ const ActivityLog = require('../models/ActivityLog');
 const { protect, authorize } = require('../middleware/auth');
 const bcrypt = require('bcryptjs');
 const { ALL_PERMISSIONS, pruneOrphanedActions } = require('../config/permissions');
+const { canViewAllStaffData } = require('../utils/dataScopeHelper');
 const {
   syncEmployeeForUser,
   syncEmployeeStatusForUser,
@@ -24,6 +25,10 @@ const router = express.Router();
 // hand out a limited number of manager/staff logins.
 const MAX_STAFF_LOGINS = parseInt(process.env.MAX_STAFF_LOGINS, 10) || 20;
 
+// Roles that can be given "Can view all staff data". Staff always see only
+// their own records.
+const VIEW_ALL_ROLES = ['manager', 'accountant'];
+
 // Everyone in the admin's dataScope except the admins themselves occupies a seat.
 const staffSeatQuery = (user) => ({
   ...(user.dataScope ? { dataScope: user.dataScope } : { createdBy: user._id }),
@@ -35,7 +40,7 @@ const userValidation = [
   body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
   body('fullName').notEmpty().withMessage('Full name is required').trim(),
   body('phone').optional({ checkFalsy: true }).isMobilePhone().withMessage('Valid phone number required'),
-  body('role').optional().isIn(['admin', 'manager', 'staff', 'viewer']).withMessage('Invalid role'),
+  body('role').optional().isIn(['admin', 'manager', 'accountant', 'staff', 'viewer']).withMessage('Invalid role'),
   body('department').optional().trim(),
   body('isActive').optional().isBoolean().withMessage('isActive must be boolean')
 ];
@@ -44,7 +49,7 @@ const updateUserValidation = [
   body('email').optional({ checkFalsy: true }).isEmail().normalizeEmail().withMessage('Valid email is required'),
   body('fullName').optional().notEmpty().withMessage('Full name is required').trim(),
   body('phone').optional({ checkFalsy: true }).isMobilePhone().withMessage('Valid phone number required'),
-  body('role').optional().isIn(['admin', 'manager', 'staff']).withMessage('Role must be admin, manager, or staff'),
+  body('role').optional().isIn(['admin', 'manager', 'accountant', 'staff']).withMessage('Role must be admin, manager, accountant or staff'),
   body('isActive').optional().isBoolean().withMessage('isActive must be boolean')
 ];
 
@@ -52,7 +57,7 @@ const updateUserValidation = [
 // @desc    Get all users in the same dataScope (admin/manager only)
 // @access  Private
 router.get('/', protect, authorize('admin', 'manager'), [
-  query('role').optional().isIn(['admin', 'manager', 'staff', 'viewer']),
+  query('role').optional().isIn(['admin', 'manager', 'accountant', 'staff', 'viewer']),
   query('isActive').optional().isBoolean(),
   query('search').optional().trim(),
   query('page').optional().isInt({ min: 1 }),
@@ -174,7 +179,7 @@ router.get('/:id', protect, async (req, res) => {
 // @access  Private
 router.post('/', protect, authorize('admin', 'manager'), userValidation, async (req, res) => {
   try {
-    const { email, fullName, phone, role = 'staff', department, companyName, isActive = true, permissions = [] } = req.body;
+    const { email, fullName, phone, role = 'staff', department, companyName, isActive = true, permissions = [], canViewAllData = false } = req.body;
 
     // An address that is still sitting on an unaccepted invitation isn't really
     // taken — inviting it again should replace that invitation rather than be
@@ -195,7 +200,7 @@ router.post('/', protect, authorize('admin', 'manager'), userValidation, async (
     if (role === 'admin') {
       return res.status(403).json({
         status: 'error',
-        message: 'Admin accounts can only be created through signup. Choose the manager or staff role.'
+        message: 'Admin accounts can only be created through signup. Choose the manager, accountant or staff role.'
       });
     }
 
@@ -217,6 +222,14 @@ router.post('/', protect, authorize('admin', 'manager'), userValidation, async (
     // Drop any action whose module was not granted.
     finalPermissions = pruneOrphanedActions(finalPermissions);
 
+    // Only someone who already sees every team member's data can hand that on.
+    if (canViewAllData === true && !canViewAllStaffData(req.user)) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only the admin can allow a login to view all staff data.'
+      });
+    }
+
     // An invitation that can't be delivered is useless, so fail before writing
     // anything if the mail transport isn't usable.
     const transporter = createTransporter();
@@ -234,6 +247,7 @@ router.post('/', protect, authorize('admin', 'manager'), userValidation, async (
       companyName: companyName || req.user.companyName,
       isActive,
       permissions: finalPermissions,
+      canViewAllData: canViewAllData === true && VIEW_ALL_ROLES.includes(role),
       // No password: the invitee sets one through their one-time link.
       status: 'invited',
       invitation: {
@@ -410,7 +424,7 @@ router.post('/:id/resend-invitation', protect, authorize('admin', 'manager'), as
 // @access  Private
 router.put('/:id', protect, updateUserValidation, async (req, res) => {
   try {
-    const { email, fullName, phone, role, companyName, isActive, permissions } = req.body;
+    const { email, fullName, phone, role, companyName, isActive, permissions, canViewAllData } = req.body;
 
     // Users can only update their own profile unless they're admin/manager
     const canUpdate = req.user.role === 'admin' || req.user.role === 'manager' || req.user._id.toString() === req.params.id;
@@ -447,6 +461,14 @@ router.put('/:id', protect, updateUserValidation, async (req, res) => {
       });
     }
 
+    // Only someone who already sees every team member's data can hand that on.
+    if (canViewAllData === true && user.canViewAllData !== true && !canViewAllStaffData(req.user)) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only the admin can allow a login to view all staff data.'
+      });
+    }
+
     // Check if email is being changed and if it already exists
     if (email && email !== user.email) {
       const existingUser = await User.findOne({ email });
@@ -480,6 +502,11 @@ router.put('/:id', protect, updateUserValidation, async (req, res) => {
           }
           updateData.permissions = pruneOrphanedActions(finalPerms);
         }
+      }
+      // Re-checked on a role change too, so a login moved to staff loses it.
+      if (canViewAllData !== undefined || role) {
+        const wanted = canViewAllData !== undefined ? canViewAllData === true : user.canViewAllData === true;
+        updateData.canViewAllData = wanted && VIEW_ALL_ROLES.includes(role || user.role);
       }
     }
 

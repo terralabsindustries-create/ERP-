@@ -10,6 +10,7 @@ const PDFService = require('../services/PDFService');
 const InventoryService = require('../services/InventoryService');
 const { protect } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/requirePermission');
+const { staffScopeQuery } = require('../utils/dataScopeHelper');
 const { sendWhatsAppMessage, buildTemplateVariables } = require('../utils/metaWhatsApp');
 
 const router = express.Router();
@@ -91,6 +92,7 @@ router.get('/', protect, [
     return statuses.every(s => valid.includes(s));
   }),
   query('search').optional().trim(),
+  query('jobId').optional().isMongoId().withMessage('jobId must be a valid id'),
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
   query('noGst').optional().isBoolean()
@@ -100,6 +102,7 @@ router.get('/', protect, [
       status,
       paymentStatus,
       search,
+      jobId,
       page = 1,
       limit = 10,
       sortBy = 'invoiceDate',
@@ -107,15 +110,9 @@ router.get('/', protect, [
       noGst
     } = req.query;
 
-    // Build query - filter by dataScope or userId (fallback for migration)
-    const queryConditions = [];
-
-    // Add dataScope filter
-    if (req.user.dataScope) {
-      queryConditions.push({ dataScope: req.user.dataScope });
-    } else {
-      queryConditions.push({ userId: req.user._id });
-    }
+    // Build query - staff see only the invoices they created; the admin and
+    // view-all logins see every invoice in the dataScope
+    const queryConditions = [staffScopeQuery(req.user)];
 
     // Apply noGst filter if specified
     // NOTE: Existing invoices may not have noGst field set (undefined)
@@ -130,6 +127,14 @@ router.get('/', protect, [
         // Use $ne (not equal) to match both false and undefined
         queryConditions.push({ noGst: { $ne: true } });
       }
+    }
+
+    // Used to find a job's invoices, e.g. when opening one for editing from
+    // the job list.
+    // Nothing in this file calls validationResult(), so the id is checked here
+    // rather than letting a bad one fail the query as a cast error.
+    if (jobId && /^[0-9a-fA-F]{24}$/.test(jobId)) {
+      queryConditions.push({ jobId });
     }
 
     if (status && status !== 'all') {
@@ -216,9 +221,7 @@ router.get('/', protect, [
 // @access  Private
 router.get('/:id', protect, async (req, res) => {
   try {
-    const findQuery = req.user.dataScope
-      ? { _id: req.params.id, dataScope: req.user.dataScope }
-      : { _id: req.params.id, userId: req.user._id };
+    const findQuery = { _id: req.params.id, ...staffScopeQuery(req.user) };
 
     const invoice = await Invoice.findOne(findQuery)
       .populate('customerId', 'name email phone gstNumber address')
@@ -501,9 +504,7 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
 router.put('/:id', protect, requirePermission('Invoicing: Create & Edit'), async (req, res) => {
   try {
     // Check if invoice exists and belongs to user's dataScope
-    const findQuery = req.user.dataScope
-      ? { _id: req.params.id, dataScope: req.user.dataScope }
-      : { _id: req.params.id, userId: req.user._id };
+    const findQuery = { _id: req.params.id, ...staffScopeQuery(req.user) };
 
     const existingInvoice = await Invoice.findOne(findQuery);
 
@@ -601,9 +602,7 @@ router.put('/:id', protect, requirePermission('Invoicing: Create & Edit'), async
 // @access  Private
 router.delete('/:id', protect, requirePermission('Invoicing: Delete'), async (req, res) => {
   try {
-    const findQuery = req.user.dataScope
-      ? { _id: req.params.id, dataScope: req.user.dataScope }
-      : { _id: req.params.id, userId: req.user._id };
+    const findQuery = { _id: req.params.id, ...staffScopeQuery(req.user) };
 
     const invoice = await Invoice.findOne(findQuery);
     
@@ -650,7 +649,7 @@ router.delete('/:id', protect, requirePermission('Invoicing: Delete'), async (re
 // @access  Private
 router.get('/stats/summary', protect, async (req, res) => {
   try {
-    const stats = await Invoice.getInvoiceStats(req.user._id, req.user.dataScope);
+    const stats = await Invoice.getInvoiceStats(staffScopeQuery(req.user));
     
     res.status(200).json({
       status: 'success',
@@ -679,9 +678,7 @@ router.get('/stats/summary', protect, async (req, res) => {
 // @access  Private
 router.patch('/:id/cancel', protect, async (req, res) => {
   try {
-    const findQuery = req.user.dataScope
-      ? { _id: req.params.id, dataScope: req.user.dataScope }
-      : { _id: req.params.id, userId: req.user._id };
+    const findQuery = { _id: req.params.id, ...staffScopeQuery(req.user) };
 
     const invoice = await Invoice.findOne(findQuery);
     
@@ -768,10 +765,7 @@ router.patch('/:id/payment-status', protect, requirePermission('Invoicing: Recor
   try {
     const { paymentStatus, amountPaid } = req.body;
 
-    // Build query - support both dataScope and userId for backward compatibility
-    const query = req.user.dataScope
-      ? { _id: req.params.id, dataScope: req.user.dataScope }
-      : { _id: req.params.id, userId: req.user._id };
+    const query = { _id: req.params.id, ...staffScopeQuery(req.user) };
 
     const invoice = await Invoice.findOne(query);
 
@@ -873,10 +867,7 @@ router.patch('/:id/no-gst', protect, [
   try {
     const { noGst } = req.body;
 
-    // Build query - support both dataScope and userId for backward compatibility
-    const query = req.user.dataScope
-      ? { _id: req.params.id, dataScope: req.user.dataScope }
-      : { _id: req.params.id, userId: req.user._id };
+    const query = { _id: req.params.id, ...staffScopeQuery(req.user) };
 
     const invoice = await Invoice.findOne(query);
 
@@ -976,7 +967,7 @@ router.get('/:id/pdf', protect, async (req, res) => {
 
     const invoice = await Invoice.findOne({
       _id: invoiceId,
-      userId: userId
+      ...staffScopeQuery(req.user)
     })
     .populate('customerId', 'name email phone address gstNumber')
     .populate('jobId', 'title');
@@ -1042,13 +1033,7 @@ router.post('/:id/send-email', protect, requirePermission('Invoicing: Send Email
     const invoiceId = req.params.id;
     const { email, message } = req.body;
 
-    // Build query - filter by dataScope or userId (fallback for migration)
-    const query = { _id: invoiceId };
-    if (req.user.dataScope) {
-      query.dataScope = req.user.dataScope;
-    } else {
-      query.userId = req.user._id;
-    }
+    const query = { _id: invoiceId, ...staffScopeQuery(req.user) };
 
     const invoice = await Invoice.findOne(query)
       .populate('customerId', 'name email phone address gstNumber')
@@ -1127,13 +1112,7 @@ router.post('/:id/send-whatsapp', protect, requirePermission('WhatsApp: Send Mes
     const invoiceId = req.params.id;
     const { phone, metaTemplateName, metaTemplateLanguage, templateVariableMapping } = req.body;
 
-    // Build query - filter by dataScope or userId (fallback for migration)
-    const query = { _id: invoiceId };
-    if (req.user.dataScope) {
-      query.dataScope = req.user.dataScope;
-    } else {
-      query.userId = req.user._id;
-    }
+    const query = { _id: invoiceId, ...staffScopeQuery(req.user) };
 
     const invoice = await Invoice.findOne(query)
       .populate('customerId', 'name email phone address gstNumber')
@@ -1272,7 +1251,7 @@ router.get('/:id/print-data', protect, async (req, res) => {
 
     const invoice = await Invoice.findOne({
       _id: invoiceId,
-      userId: userId
+      ...staffScopeQuery(req.user)
     })
     .populate('customerId', 'name email phone address gstNumber')
     .populate('jobId', 'title');

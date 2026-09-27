@@ -21,12 +21,14 @@ import apiClient from "@/lib/apiClient";
 import { useAuth } from "@/contexts/AuthContext";
 import { PermissionSelector } from "@/components/users/PermissionSelector";
 import { EditUserPermissionsDialog } from "@/components/users/EditUserPermissionsDialog";
+import { ViewAllDataOption, VIEW_ALL_ROLES, canGrantViewAll } from "@/components/users/ViewAllDataOption";
 
 export default function CreateLogin() {
   const { user: currentUser } = useAuth();
   // Only an admin may remove a login — the backend enforces the same rule, so
   // showing the button to a manager would only produce a 403.
   const canDelete = currentUser?.role === "admin";
+  const canGrantViewAllData = canGrantViewAll(currentUser);
 
   const [formData, setFormData] = useState({
     role: "",
@@ -36,6 +38,7 @@ export default function CreateLogin() {
   });
 
   const [permissions, setPermissions] = useState(["Dashboard"]);
+  const [canViewAllData, setCanViewAllData] = useState(false);
   const [message, setMessage] = useState({ type: "", text: "" });
   const [isLoading, setIsLoading] = useState(false);
   const [seats, setSeats] = useState(null);
@@ -153,6 +156,7 @@ export default function CreateLogin() {
         fullName: formData.fullName.trim(),
         department: formData.department.trim(),
         permissions: permissions,
+        canViewAllData: canGrantViewAllData && VIEW_ALL_ROLES.includes(formData.role) && canViewAllData,
         isActive: true,
       };
 
@@ -200,6 +204,7 @@ export default function CreateLogin() {
   const handleReset = () => {
     setFormData({ role: "", email: "", fullName: "", department: "" });
     setPermissions(["Dashboard"]);
+    setCanViewAllData(false);
     setMessage({ type: "", text: "" });
   };
 
@@ -270,14 +275,23 @@ export default function CreateLogin() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="manager">Manager - Custom Permissions</SelectItem>
+                      <SelectItem value="accountant">Accountant - Custom Permissions</SelectItem>
                       <SelectItem value="staff">Staff - Custom Permissions</SelectItem>
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
-                    Logins created here are manager or staff accounts. Admin accounts are created
-                    through signup only.
+                    Logins created here are manager, accountant or staff accounts. Admin accounts
+                    are created through signup only.
                   </p>
                 </div>
+
+                {canGrantViewAllData && VIEW_ALL_ROLES.includes(formData.role) && (
+                  <ViewAllDataOption
+                    id="invite-view-all"
+                    checked={canViewAllData}
+                    onChange={setCanViewAllData}
+                  />
+                )}
 
                 <div className="space-y-2">
                   <Label htmlFor="email" className="font-semibold">
@@ -414,6 +428,7 @@ export default function CreateLogin() {
                       <p className="flex items-center gap-1 text-xs text-muted-foreground">
                         <ShieldCheck className="h-3 w-3" />
                         {(member.permissions || []).length} permissions
+                        {member.canViewAllData && " · views all staff data"}
                       </p>
                     </div>
 

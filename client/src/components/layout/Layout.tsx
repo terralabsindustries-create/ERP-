@@ -19,7 +19,7 @@ export function Layout({ children }: LayoutProps) {
             </main>
             <footer className="bg-muted/50 border-t px-4 py-2">
               <p className="text-center text-xs text-muted-foreground">
-                Created by Synx Automation
+                Created by Print Arts
               </p>
             </footer>
           </div>

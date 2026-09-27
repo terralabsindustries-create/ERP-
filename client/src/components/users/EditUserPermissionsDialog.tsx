@@ -13,7 +13,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
+import { useAuth } from "@/contexts/AuthContext";
 import { PermissionSelector } from "./PermissionSelector";
+import { ViewAllDataOption, VIEW_ALL_ROLES, canGrantViewAll } from "./ViewAllDataOption";
 
 interface EditUserPermissionsDialogProps {
   user: any | null;
@@ -33,8 +35,11 @@ export function EditUserPermissionsDialog({
   onOpenChange,
   onSaved,
 }: EditUserPermissionsDialogProps) {
+  const { user: currentUser } = useAuth();
+  const canGrantViewAllData = canGrantViewAll(currentUser);
   const [role, setRole] = useState("staff");
   const [permissions, setPermissions] = useState<string[]>(["Dashboard"]);
+  const [canViewAllData, setCanViewAllData] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -45,6 +50,7 @@ export function EditUserPermissionsDialog({
     setRole(user.role || "staff");
     const current = Array.isArray(user.permissions) ? user.permissions : [];
     setPermissions(current.includes("Dashboard") ? current : ["Dashboard", ...current]);
+    setCanViewAllData(user.canViewAllData === true);
     setError("");
   }, [open, user]);
 
@@ -54,7 +60,15 @@ export function EditUserPermissionsDialog({
     setIsSaving(true);
 
     try {
-      await apiClient.updateUser(user._id || user.id, { role, permissions });
+      await apiClient.updateUser(user._id || user.id, {
+        role,
+        permissions,
+        // Left out when this login can't grant it, so the backend keeps the
+        // current value (and still clears it if the role changes to staff).
+        ...(canGrantViewAllData && {
+          canViewAllData: VIEW_ALL_ROLES.includes(role) && canViewAllData,
+        }),
+      });
       onSaved();
       onOpenChange(false);
     } catch (e: any) {
@@ -86,10 +100,19 @@ export function EditUserPermissionsDialog({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="manager">Manager</SelectItem>
+                <SelectItem value="accountant">Accountant</SelectItem>
                 <SelectItem value="staff">Staff</SelectItem>
               </SelectContent>
             </Select>
           </div>
+
+          {canGrantViewAllData && VIEW_ALL_ROLES.includes(role) && (
+            <ViewAllDataOption
+              id="edit-view-all"
+              checked={canViewAllData}
+              onChange={setCanViewAllData}
+            />
+          )}
 
           <PermissionSelector value={permissions} onChange={setPermissions} />
 

@@ -406,13 +406,9 @@ invoiceSchema.statics.generateInvoiceNumber = async function(userId, dataScope) 
   return invoiceNumber;
 };
 
-// Static method to get invoice statistics
-invoiceSchema.statics.getInvoiceStats = function(userId, dataScope) {
-  // Use dataScope if available, fallback to userId for migration
-  const matchQuery = dataScope
-    ? { dataScope }
-    : { userId: new mongoose.Types.ObjectId(userId) };
-
+// Static method to get invoice statistics. matchQuery decides whose invoices
+// are counted — see staffScopeQuery in utils/dataScopeHelper.js.
+invoiceSchema.statics.getInvoiceStats = function(matchQuery) {
   return this.aggregate([
     { $match: matchQuery },
     {
