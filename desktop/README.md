@@ -99,7 +99,9 @@ desktop/build/embed-config.cjs
 
 In CI those four values come from repository secrets (set once, see
 `.github/workflows/desktop-build.yml`). For a manual local release build,
-export them in your shell first:
+`desktop/build/embed-config.cjs` reads missing values from the existing
+`backend/.env` file. Shell environment variables take precedence. You can also
+export them explicitly:
 
 ```bash
 export MONGODB_URI='mongodb+srv://user:password@cluster.mongodb.net/serpy'
@@ -108,7 +110,8 @@ npm run dist:mac   # or dist:win
 ```
 
 `npm run dist*` fails fast with a clear message if `MONGODB_URI` or
-`JWT_SECRET` isn't set — it will not silently ship a build with no database.
+`JWT_SECRET` is missing from both the environment and `backend/.env` — it will
+not silently ship a build with no database.
 
 The CI workflow builds macOS and Windows installers even when `RELEASES_TOKEN`
 is absent, and attaches them to the workflow run. Automatic publishing to

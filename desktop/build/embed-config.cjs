@@ -11,17 +11,20 @@
  * This script runs right before electron-builder packages the app (see the
  * `dist*` scripts in package.json). It reads the real credentials from the
  * environment — GitHub Actions secrets in CI, or a maintainer's own shell for
- * a local release build — and writes build/app.env, which `extraResources`
+ * a local release build. Locally, missing values are read from backend/.env.
+ * It writes build/app.env, which `extraResources`
  * then bundles into resources/app.env inside the installer.
  *
  * build/app.env is gitignored. It must never be committed — the values only
- * ever live as CI secrets or in a maintainer's shell.
+ * ever live as CI secrets or in a maintainer's local .env file.
  */
 
 const fs = require('fs');
 const path = require('path');
+const { parseEnvFile } = require('../backend-runner.cjs');
 
 const OUTPUT_FILE = path.join(__dirname, 'app.env');
+const LOCAL_ENV_FILE = path.resolve(__dirname, '../../backend/.env');
 
 // Without these the app has no database to talk to at all.
 const REQUIRED_KEYS = ['MONGODB_URI', 'JWT_SECRET'];
@@ -31,19 +34,23 @@ const REQUIRED_KEYS = ['MONGODB_URI', 'JWT_SECRET'];
 const OPTIONAL_KEYS = ['EMAIL_USER', 'EMAIL_PASS'];
 
 function main() {
-  const missing = REQUIRED_KEYS.filter((key) => !process.env[key]);
+  const localEnv = parseEnvFile(LOCAL_ENV_FILE);
+  const config = Object.fromEntries(
+    [...REQUIRED_KEYS, ...OPTIONAL_KEYS].map((key) => [key, process.env[key] || localEnv[key]])
+  );
+  const missing = REQUIRED_KEYS.filter((key) => !config[key]);
   if (missing.length > 0) {
     console.error(
-      `\nembed-config: missing ${missing.join(', ')} in the environment.\n\n` +
+      `\nembed-config: missing ${missing.join(', ')} in the environment and backend/.env.\n\n` +
       'These are the company\'s own system credentials, set once as GitHub Actions\n' +
-      'secrets (or exported locally for a manual release build) — never entered by\n' +
+      'secrets (or stored in backend/.env for a local build) — never entered by\n' +
       'an end user. See desktop/README.md → "Database configuration".\n'
     );
     process.exit(1);
   }
 
-  const keys = [...REQUIRED_KEYS, ...OPTIONAL_KEYS].filter((key) => process.env[key]);
-  const body = keys.map((key) => `${key}=${process.env[key]}`).join('\n');
+  const keys = [...REQUIRED_KEYS, ...OPTIONAL_KEYS].filter((key) => config[key]);
+  const body = keys.map((key) => `${key}=${config[key]}`).join('\n');
 
   fs.writeFileSync(OUTPUT_FILE, `${body}\n`, { mode: 0o600 });
   console.log(`embed-config: wrote ${OUTPUT_FILE} (${keys.length} keys: ${keys.join(', ')})`);
