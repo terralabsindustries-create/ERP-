@@ -12,6 +12,12 @@
  * keeps working so BrowserRouter needs no changes, requests carry a real Origin
  * ("app://serpy") that the API can allow-list rather than the wildcard `null`
  * that file:// sends, and the page counts as a secure context.
+ *
+ * The app was called SerpY before the rename. "serpy" is kept only where no one
+ * sees it and changing it would cost something: the app:// host (the page's
+ * origin — renaming it would sign every user out and needs the backend's CORS
+ * list changed), the window.serpyDesktop bridge the client reads, and the
+ * appId, which lets a new Windows installer upgrade an existing install.
  */
 
 const { app, BrowserWindow, shell, protocol, net, Menu, dialog, ipcMain } = require('electron');
@@ -21,6 +27,32 @@ const { pathToFileURL } = require('url');
 const { resolveRequestPath } = require('./resolve-request-path.cjs');
 const { startBackend } = require('./backend-runner.cjs');
 const { checkForUpdates } = require('./updater.cjs');
+
+/**
+ * Builds named SerpY kept their data (login session, preferences) in
+ * Application Support/SerpY (%APPDATA%\SerpY on Windows). The product is now
+ * Terralabs ERP, so Electron looks in a new folder; copy the old one across
+ * once so nobody is signed out by the rename. Caches and lock files are left
+ * behind — they are rebuilt — and an existing new folder is never touched.
+ * Runs before anything (the single-instance lock included) opens userData.
+ */
+function migrateUserData() {
+  try {
+    const current = app.getPath('userData');
+    const previous = path.join(app.getPath('appData'), 'SerpY');
+    if (fs.existsSync(current) || !fs.existsSync(previous)) return;
+    const skip = /^(Singleton|Cache$|Code Cache$|GPUCache$|DawnGraphiteCache$|DawnWebGPUCache$|GraphiteDawnCache$|GPUPersistentCache$)/;
+    fs.cpSync(previous, current, {
+      recursive: true,
+      filter: (src) => !skip.test(path.basename(src))
+    });
+    console.log(`[terralabs] carried app data over from ${previous}`);
+  } catch (error) {
+    // A failed copy only means signing in again; never block startup over it.
+    console.warn('[terralabs] could not carry over data from the SerpY build:', error.message);
+  }
+}
+migrateUserData();
 
 const APP_SCHEME = 'app';
 const APP_HOST = 'serpy';
@@ -218,9 +250,9 @@ if (!app.requestSingleInstanceLock()) {
     }
     apiBase = backend.apiBase;
     stopBackend = backend.stop;
-    console.log(`[serpy] backend ready on ${backend.apiBase}`);
+    console.log(`[terralabs] backend ready on ${backend.apiBase}`);
     if (!backend.chromium) {
-      console.warn('[serpy] no Chrome/Edge found — PDF downloads will not work on this machine');
+      console.warn('[terralabs] no Chrome/Edge found — PDF downloads will not work on this machine');
     }
 
     const mainWindow = createWindow();

@@ -1,7 +1,7 @@
 /**
  * Bakes the system database credentials into the packaged app.
  *
- * SerpY desktop is a single-database product: every installation talks to the
+ * Terralabs ERP desktop is a single-database product: every installation talks to the
  * one company-controlled Atlas cluster. Multi-tenancy is handled in the app
  * layer, by the existing dataScope/userId fields already on every model (see
  * backend/src/models/Settings.js and friends) — not by giving each shop its

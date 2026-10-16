@@ -1,6 +1,6 @@
-# SerpY Desktop
+# Terralabs ERP Desktop
 
-An Electron app that runs the **whole** SerpY system on the user's computer:
+An Electron app that runs the **whole** Terralabs ERP system on the user's computer:
 the React UI *and* the Express backend. Only the database stays remote, in
 MongoDB Atlas.
 
@@ -80,7 +80,7 @@ The server is stopped on quit, and the app refuses to open a window until
 
 ### Configuration — read this before distributing
 
-SerpY desktop is a **single-database product**. Every installation — every
+Terralabs ERP desktop is a **single-database product**. Every installation — every
 shop, every machine — talks to the same company-owned Atlas cluster.
 Multi-tenancy is handled in the app layer by the `dataScope`/`userId` fields
 already on every model (see `backend/src/models/Settings.js` and the rest of
@@ -139,23 +139,27 @@ shop to source or manage their own database.
 
 ## Installing on macOS
 
-Open the `.dmg` and drag SerpY to Applications. The `-mac.zip` beside it is the
+Open the `.dmg` and drag Terralabs ERP to Applications. The `-mac.zip` beside it is the
 updater's download format, not a second installer.
 
 Builds are unsigned — there is no Apple Developer certificate — so the first
 launch must be **right-click → Open → Open**. A plain double-click is refused.
 
 `build/adhoc-sign.cjs` runs after packaging and ad-hoc signs the bundle. Without
-it macOS reports *"SerpY is damaged and can't be opened"*, because electron-builder
+it macOS reports *"Terralabs ERP is damaged and can't be opened"*, because electron-builder
 skips signing entirely when no certificate is found and the app is left with only
 Electron's linker signature — not valid for a bundle on Apple Silicon. "Damaged"
 is misleading; nothing is corrupt.
 
+A copy installed under the old name, SerpY, can be deleted once Terralabs ERP
+is installed — its login session and preferences are copied across on first
+launch (see `migrateUserData` in `main.cjs`).
+
 If a copy built before that hook existed is already installed:
 
 ```sh
-xattr -dr com.apple.quarantine /Applications/SerpY.app
-codesign --force --deep --sign - /Applications/SerpY.app
+xattr -dr com.apple.quarantine "/Applications/Terralabs ERP.app"
+codesign --force --deep --sign - "/Applications/Terralabs ERP.app"
 ```
 
 Ad-hoc signing only makes the app openable. Getting rid of the warning entirely

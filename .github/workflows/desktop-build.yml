@@ -1,4 +1,4 @@
-# Builds and publishes the SerpY desktop app.
+# Builds and publishes the Terralabs ERP desktop app.
 #
 # Every push to main produces a new version and publishes the installers to the
 # public releases repository. Installed copies check that feed on launch, tell
@@ -37,10 +37,10 @@ jobs:
         include:
           - os: macos-latest
             target: --mac
-            artifact: SerpY-macOS
+            artifact: Terralabs-ERP-macOS
           - os: windows-latest
             target: --win
-            artifact: SerpY-Windows
+            artifact: Terralabs-ERP-Windows
 
     runs-on: ${{ matrix.os }}
 
@@ -52,10 +52,12 @@ jobs:
           node-version: 20
 
       # One version per push, so every build is newer than the last and the
-      # updater has something to compare against.
+      # updater has something to compare against. 1.1.x: the feed already holds
+      # SerpY builds up to 1.0.27 from the previous repository, whose run numbers
+      # this repository does not continue — 1.0.<run> here would rank below them.
       - name: Set version from run number
         working-directory: desktop
-        run: npm version 1.0.${{ github.run_number }} --no-git-tag-version --allow-same-version
+        run: npm version 1.1.${{ github.run_number }} --no-git-tag-version --allow-same-version
 
       # The installer carries the backend and its dependencies. Puppeteer's
       # Chromium is skipped — the app uses the Chrome/Edge already on the machine.

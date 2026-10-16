@@ -5,7 +5,7 @@
  * entirely, which leaves the app carrying only the linker-generated signature
  * Electron ships with: `Sealed Resources=none`, `Info.plist=not bound`. On
  * Apple Silicon that is not a valid bundle signature, and Gatekeeper reports
- * the download as *"SerpY is damaged and can't be opened"* — which reads like
+ * the download as *"Terralabs ERP is damaged and can't be opened"* — which reads like
  * a corrupt file rather than a signing problem, so it sends people hunting in
  * the wrong direction.
  *

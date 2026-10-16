@@ -25,7 +25,7 @@ autoUpdater.autoInstallOnAppQuit = true;
 function isSigned() {
   // A macOS build that was never signed cannot self-apply an update.
   if (process.platform !== 'darwin') return true;
-  return process.mas || process.env.SERPY_SIGNED === 'true';
+  return process.mas || process.env.TERRALABS_SIGNED === 'true' || process.env.SERPY_SIGNED === 'true';
 }
 
 /**
