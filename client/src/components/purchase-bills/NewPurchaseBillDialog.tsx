@@ -24,13 +24,15 @@ interface NewPurchaseBillDialogProps {
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
   bill?: any | null;
+  /** Supplier to start a new bill with, e.g. when opened from the Suppliers list. */
+  defaultVendorId?: string;
 }
 
 const emptyItem = (): LineItem => ({ description: "", hsnCode: "", rate: "", quantity: "1", gstRate: "18" });
 
 const round2 = (n: number) => Math.round((n || 0) * 100) / 100;
 
-export function NewPurchaseBillDialog({ open, onOpenChange, onSaved, bill }: NewPurchaseBillDialogProps) {
+export function NewPurchaseBillDialog({ open, onOpenChange, onSaved, bill, defaultVendorId }: NewPurchaseBillDialogProps) {
   const { toast } = useToast();
   const [vendors, setVendors] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -52,8 +54,7 @@ export function NewPurchaseBillDialog({ open, onOpenChange, onSaved, bill }: New
     if (!open) return;
     (async () => {
       try {
-        const res: any = await apiClient.getVendors({ limit: 200 });
-        setVendors(res?.data?.vendors || res?.vendors || []);
+        setVendors(await apiClient.listAll('/vendors', 'vendors'));
       } catch (e) {
         console.error("Failed to load vendors", e);
       }
@@ -92,7 +93,7 @@ export function NewPurchaseBillDialog({ open, onOpenChange, onSaved, bill }: New
       );
     } else {
       const today = new Date().toISOString().substring(0, 10);
-      setVendorId("");
+      setVendorId(defaultVendorId || "");
       setVendorInvoiceNumber("");
       setBillDate(today);
       setDueDate(today);
@@ -101,7 +102,7 @@ export function NewPurchaseBillDialog({ open, onOpenChange, onSaved, bill }: New
       setNotes("");
       setItems([emptyItem()]);
     }
-  }, [bill, open]);
+  }, [bill, open, defaultVendorId]);
 
   const updateItem = (index: number, field: keyof LineItem, value: string) => {
     setItems((prev) => prev.map((it, i) => (i === index ? { ...it, [field]: value } : it)));

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import apiClient, { ApiResponse } from '@/lib/apiClient';
 import { useToast } from '@/hooks/use-toast';
 import { SubscriptionModal } from '@/components/subscription/SubscriptionModal';
@@ -19,6 +19,8 @@ interface User {
   preferences: any;
   permissions?: string[]; // Array of permission strings
   canViewAllData?: boolean; // Sees every team member's invoices, not just their own
+  accessRole?: string | null; // The named role their permissions come from (User Management → Roles)
+  accessRoleName?: string | null;
   subscription?: {
     isActive: boolean;
     plan: string;
@@ -97,18 +99,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     checkAuthStatus();
   }, []);
 
+  // apiClient fires this when the server answers 401 to a signed-in request
+  // (expired token, deactivated or deleted login): drop the session so the
+  // routes send the person back to the sign-in page.
+  const signedInRef = useRef(false);
+  useEffect(() => {
+    signedInRef.current = !!user;
+  }, [user]);
+  useEffect(() => {
+    const onExpired = () => {
+      // Several requests can fail at once; tell the person only once.
+      if (!signedInRef.current) return;
+      signedInRef.current = false;
+      setUser(null);
+      setSession(null);
+      toast({ title: "You've been signed out", description: "Your session ended. Please sign in again.", variant: "destructive" });
+    };
+    window.addEventListener("auth:expired", onExpired);
+    return () => window.removeEventListener("auth:expired", onExpired);
+  }, [toast]);
+
   const signIn = async (email: string, password: string) => {
     try {
       const response = await apiClient.login(email, password);
       
-      console.log(' AuthContext signIn response:', response);
-      console.log('🔑 AuthContext signIn response:', response);
       
       setUser(response.user);
       setSession({ user: response.user });
       checkSubscriptionStatus(response.user);
       
-      console.log('🔑 User set in AuthContext:', response.user);
       
       toast({
         title: "Welcome back!",
@@ -136,7 +155,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       toast({
         title: "Account Created!",
-        description: "Welcome to SerpY ERP System.",
+        description: "Welcome to Terralabs ERP.",
       });
 
       return { error: null };
@@ -237,6 +256,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         onClose={() => setShowSubscriptionModal(false)}
         userPlan={user?.subscription?.plan}
         onPaymentSuccess={refreshUser}
+        payer={user}
       />
     </AuthContext.Provider>
   );

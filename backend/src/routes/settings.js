@@ -1,6 +1,8 @@
 const express = require('express');
 const { body } = require('express-validator');
+const { validate } = require('../middleware/validate');
 const Settings = require('../models/Settings');
+const { settingsOwnerId, businessSettings } = require('../utils/businessSettings');
 const ActivityLog = require('../models/ActivityLog');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -8,14 +10,14 @@ const router = express.Router();
 
 // Validation rules
 const settingsValidation = [
-  body('companyName').optional().notEmpty().withMessage('Company name cannot be empty').trim(),
-  body('currency').optional().isIn(['INR', 'USD', 'EUR', 'GBP']).withMessage('Invalid currency'),
-  body('timezone').optional().notEmpty().withMessage('Timezone cannot be empty'),
-  body('dateFormat').optional().isIn(['DD/MM/YYYY', 'MM/DD/YYYY', 'YYYY-MM-DD']).withMessage('Invalid date format'),
-  body('timeFormat').optional().isIn(['12', '24']).withMessage('Invalid time format'),
-  body('defaultPaymentTerms').optional().isInt({ min: 0, max: 365 }).withMessage('Payment terms must be between 0 and 365 days'),
-  body('defaultJobPriority').optional().isIn(['low', 'medium', 'high', 'urgent']).withMessage('Invalid job priority'),
-  body('sessionTimeout').optional().isInt({ min: 1, max: 24 }).withMessage('Session timeout must be between 1 and 24 hours')
+  body('companyName').optional({ values: 'falsy' }).notEmpty().withMessage('Company name cannot be empty').trim(),
+  body('currency').optional({ values: 'falsy' }).isIn(['INR', 'USD', 'EUR', 'GBP']).withMessage('Invalid currency'),
+  body('timezone').optional({ values: 'falsy' }).notEmpty().withMessage('Timezone cannot be empty'),
+  body('dateFormat').optional({ values: 'falsy' }).isIn(['DD/MM/YYYY', 'MM/DD/YYYY', 'YYYY-MM-DD']).withMessage('Invalid date format'),
+  body('timeFormat').optional({ values: 'falsy' }).isIn(['12', '24']).withMessage('Invalid time format'),
+  body('defaultPaymentTerms').optional({ values: 'falsy' }).isInt({ min: 0, max: 365 }).withMessage('Payment terms must be between 0 and 365 days'),
+  body('defaultJobPriority').optional({ values: 'falsy' }).isIn(['low', 'medium', 'high', 'urgent']).withMessage('Invalid job priority'),
+  body('sessionTimeout').optional({ values: 'falsy' }).isInt({ min: 1, max: 24 }).withMessage('Session timeout must be between 1 and 24 hours')
 ];
 
 // @route   GET /api/settings
@@ -23,7 +25,7 @@ const settingsValidation = [
 // @access  Private
 router.get('/', protect, async (req, res) => {
   try {
-    const settings = await Settings.getOrCreateSettings(req.user._id);
+    const settings = await businessSettings(req.user);
 
     res.status(200).json({
       status: 'success',
@@ -42,7 +44,7 @@ router.get('/', protect, async (req, res) => {
 // @route   PUT /api/settings
 // @desc    Update user settings
 // @access  Private
-router.put('/', protect, settingsValidation, async (req, res) => {
+router.put('/', protect, settingsValidation, validate, async (req, res) => {
   try {
     const updateData = { ...req.body };
     
@@ -52,7 +54,7 @@ router.put('/', protect, settingsValidation, async (req, res) => {
     delete updateData.createdAt;
     delete updateData.updatedAt;
 
-    const settings = await Settings.updateSettings(req.user._id, updateData);
+    const settings = await Settings.updateSettings(await settingsOwnerId(req.user), updateData);
 
     // Log activity
     await ActivityLog.logActivity({
@@ -90,12 +92,12 @@ router.put('/', protect, settingsValidation, async (req, res) => {
 // @access  Private
 router.put('/company', protect, [
   body('companyName').notEmpty().withMessage('Company name is required').trim(),
-  body('companyPhone').optional().isMobilePhone().withMessage('Valid phone number required'),
-  body('companyEmail').optional().isEmail().withMessage('Valid email required'),
-  body('companyWebsite').optional().isURL().withMessage('Valid website URL required'),
-  body('gstNumber').optional().matches(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/).withMessage('Invalid GST number format'),
-  body('panNumber').optional().matches(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/).withMessage('Invalid PAN number format')
-], async (req, res) => {
+  body('companyPhone').optional({ values: 'falsy' }).matches(/^\+?[\d\s()-]{7,20}$/).withMessage('Enter a valid phone number'),
+  body('companyEmail').optional({ values: 'falsy' }).isEmail().withMessage('Valid email required'),
+  body('companyWebsite').optional({ values: 'falsy' }).isURL().withMessage('Valid website URL required'),
+  body('gstNumber').optional({ values: 'falsy' }).matches(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/).withMessage('Invalid GST number format'),
+  body('panNumber').optional({ values: 'falsy' }).matches(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/).withMessage('Invalid PAN number format')
+], validate, async (req, res) => {
   try {
     const {
       companyName,
@@ -131,7 +133,7 @@ router.put('/company', protect, [
       upiId
     };
 
-    const settings = await Settings.updateSettings(req.user._id, updateData);
+    const settings = await Settings.updateSettings(await settingsOwnerId(req.user), updateData);
 
     // Log activity
     await ActivityLog.logActivity({
@@ -172,7 +174,7 @@ router.put('/business', protect, [
   body('timezone').notEmpty().withMessage('Timezone is required'),
   body('dateFormat').isIn(['DD/MM/YYYY', 'MM/DD/YYYY', 'YYYY-MM-DD']).withMessage('Invalid date format'),
   body('timeFormat').isIn(['12', '24']).withMessage('Invalid time format')
-], async (req, res) => {
+], validate, async (req, res) => {
   try {
     const {
       currency,
@@ -204,7 +206,7 @@ router.put('/business', protect, [
       defaultJobPriority
     };
 
-    const settings = await Settings.updateSettings(req.user._id, updateData);
+    const settings = await Settings.updateSettings(await settingsOwnerId(req.user), updateData);
 
     // Log activity
     await ActivityLog.logActivity({
@@ -249,6 +251,7 @@ router.put('/notifications', protect, async (req, res) => {
       smsNotifications
     };
 
+    // Personal preference: kept on the login's own settings.
     const settings = await Settings.updateSettings(req.user._id, updateData);
 
     // Log activity
@@ -285,10 +288,10 @@ router.put('/notifications', protect, async (req, res) => {
 // @route   PUT /api/settings/security
 // @desc    Update security settings (admin only)
 // @access  Private
-router.put('/security', protect, authorize(['admin']), [
+router.put('/security', protect, authorize('admin'), [
   body('sessionTimeout').isInt({ min: 1, max: 24 }).withMessage('Session timeout must be between 1 and 24 hours'),
   body('passwordPolicy.minLength').isInt({ min: 6, max: 20 }).withMessage('Password minimum length must be between 6 and 20')
-], async (req, res) => {
+], validate, async (req, res) => {
   try {
     const {
       sessionTimeout,
@@ -302,7 +305,7 @@ router.put('/security', protect, authorize(['admin']), [
       twoFactorAuth
     };
 
-    const settings = await Settings.updateSettings(req.user._id, updateData);
+    const settings = await Settings.updateSettings(await settingsOwnerId(req.user), updateData);
 
     // Log activity
     await ActivityLog.logActivity({
@@ -345,12 +348,18 @@ router.put('/integrations', protect, async (req, res) => {
       emailIntegration
     } = req.body;
 
-    const updateData = {
-      whatsappIntegration,
-      emailIntegration
-    };
+    // Merge field by field; an empty secret keeps the saved one (the page never receives it).
+    const updateData = {};
+    for (const [group, value] of [['whatsappIntegration', whatsappIntegration], ['emailIntegration', emailIntegration]]) {
+      if (!value || typeof value !== 'object') continue;
+      for (const [key, v] of Object.entries(value)) {
+        if (key.startsWith('has')) continue;
+        if ((key === 'accessToken' || key === 'smtpPassword') && !v) continue;
+        updateData[`${group}.${key}`] = v;
+      }
+    }
 
-    const settings = await Settings.updateSettings(req.user._id, updateData);
+    const settings = await Settings.updateSettings(await settingsOwnerId(req.user), { $set: updateData });
 
     // Log activity
     await ActivityLog.logActivity({
@@ -392,7 +401,7 @@ router.put('/custom-fields', protect, async (req, res) => {
 
     const updateData = { customFields };
 
-    const settings = await Settings.updateSettings(req.user._id, updateData);
+    const settings = await Settings.updateSettings(await settingsOwnerId(req.user), updateData);
 
     // Log activity
     await ActivityLog.logActivity({
@@ -434,6 +443,7 @@ router.put('/theme', protect, async (req, res) => {
 
     const updateData = { theme };
 
+    // Personal preference: kept on the login's own settings.
     const settings = await Settings.updateSettings(req.user._id, updateData);
 
     // Log activity
@@ -470,7 +480,7 @@ router.put('/theme', protect, async (req, res) => {
 // @route   POST /api/settings/reset
 // @desc    Reset settings to default (admin only)
 // @access  Private
-router.post('/reset', protect, authorize(['admin']), async (req, res) => {
+router.post('/reset', protect, authorize('admin'), async (req, res) => {
   try {
     const { section } = req.body; // Optional: specific section to reset
 
@@ -528,7 +538,7 @@ router.post('/reset', protect, authorize(['admin']), async (req, res) => {
       };
     }
 
-    const settings = await Settings.updateSettings(req.user._id, updateData);
+    const settings = await Settings.updateSettings(await settingsOwnerId(req.user), updateData);
 
     // Log activity
     await ActivityLog.logActivity({

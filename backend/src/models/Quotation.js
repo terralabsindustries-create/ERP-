@@ -10,8 +10,17 @@ const quotationItemSchema = new mongoose.Schema({
     enum: ['pieces', 'boxes', 'reams', 'kg', 'grams', 'liters', 'meters', 'sqft', 'sqm', 'rolls', 'sheets'],
     default: 'pieces'
   },
+  // Area pricing (unit sqft/sqm): one piece is length × width, and the rate is
+  // charged on area_per_piece × quantity = total_area. See utils/billing.js.
+  // An older sq ft line has no dimensions; its quantity is the area.
+  length: { type: Number, default: 0, min: 0 },
+  width: { type: Number, default: 0, min: 0 },
+  area_per_piece: { type: Number, default: 0 },
+  total_area: { type: Number, default: 0 },
+  // GST is no longer charged; kept for quotations written with it (0 on new ones).
   tax_rate: { type: Number, default: 0, min: 0, max: 100 },
   tax_amount: { type: Number, default: 0 },
+  // The line amount: quantity (or total area) × unit price.
   total_amount: { type: Number, required: true, min: 0 }
 });
 
@@ -22,13 +31,15 @@ const quotationSchema = new mongoose.Schema({
     trim: true
     // Uniqueness is enforced per-tenant below, not globally — see the
     // dataScope/userId compound indexes. A bare `unique: true` here would make
-    // it a single shared numbering sequence across every business on SerpY.
+    // it a single shared numbering sequence across every business on Terralabs ERP.
   },
   customer_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Customer',
     required: [true, 'Customer is required']
   },
+  // Quotations written before GST was removed say whether they carried it.
+  // New ones are always 'non_gst'.
   gst_type: {
     type: String,
     enum: ['gst', 'non_gst'],
@@ -42,8 +53,13 @@ const quotationSchema = new mongoose.Schema({
     type: Date
   },
   items: [quotationItemSchema],
+  // Sum of the line amounts.
   subtotal: { type: Number, default: 0 },
+  // Design & pre-press work, shown as its own line in the totals. Carried onto
+  // the invoice unchanged when the quotation is converted.
+  design_charge: { type: Number, default: 0, min: [0, 'Design charge cannot be negative'] },
   tax_amount: { type: Number, default: 0 },
+  // subtotal + design_charge (+ tax_amount on older GST quotations).
   total_amount: { type: Number, default: 0 },
   status: {
     type: String,

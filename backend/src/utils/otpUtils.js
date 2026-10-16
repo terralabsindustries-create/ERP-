@@ -49,7 +49,7 @@ const getOTPEmailTemplate = (otp, fullName) => {
       <html>
       <head>
         <meta charset="utf-8">
-        <title>Verify Your Email - SerpY ERP</title>
+        <title>Verify Your Email - Terralabs ERP</title>
         <style>
           body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
           .container { max-width: 600px; margin: 0 auto; padding: 20px; }
@@ -65,12 +65,12 @@ const getOTPEmailTemplate = (otp, fullName) => {
         <div class="container">
           <div class="header">
             <h1>Verify Your Email</h1>
-            <p>SerpY ERP - Enterprise Resource Planning System</p>
+            <p>Terralabs ERP - Enterprise Resource Planning System</p>
           </div>
           
           <div class="content">
             <h2>Dear ${fullName},</h2>
-            <p>Thank you for signing up for SerpY ERP! To complete your registration, please verify your email address using the OTP code below:</p>
+            <p>Thank you for signing up for Terralabs ERP! To complete your registration, please verify your email address using the OTP code below:</p>
             
             <div class="otp-box">
               <h3>Your Verification Code:</h3>
@@ -95,11 +95,11 @@ const getOTPEmailTemplate = (otp, fullName) => {
       </html>
     `,
     text: `
-      Verify Your Email - SerpY ERP
+      Verify Your Email - Terralabs ERP
       
       Dear ${fullName},
       
-      Thank you for signing up for SerpY ERP! To complete your registration, please verify your email address using the OTP code below:
+      Thank you for signing up for Terralabs ERP! To complete your registration, please verify your email address using the OTP code below:
       
       Your Verification Code: ${otp}
       

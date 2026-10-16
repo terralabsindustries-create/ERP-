@@ -29,13 +29,24 @@ const costSchema = new mongoose.Schema({
   },
   quantity: {
     type: Number,
-    min: [1, 'Quantity must be at least 1'],
+    min: [0, 'Quantity cannot be negative'],
     default: 1
   },
   unit: {
     type: String,
-    enum: ['pieces', 'kg', 'meters', 'liters', 'hours', 'days'],
+    enum: ['pieces', 'sheets', 'reams', 'boxes', 'rolls', 'kg', 'grams', 'meters', 'sqft', 'sqm', 'liters', 'hours', 'days'],
     default: 'pieces'
+  },
+  // When the cost was incurred (defaults to when it was recorded).
+  date: {
+    type: Date,
+    default: Date.now,
+    index: true
+  },
+  // The business it belongs to.
+  dataScope: {
+    type: String,
+    index: true
   },
   unitCost: {
     type: Number,

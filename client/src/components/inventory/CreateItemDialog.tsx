@@ -16,6 +16,24 @@ interface CreateItemDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onItemCreated: () => void;
+  /** An existing item to edit; leave out to add a new one. */
+  item?: EditableItem | null;
+}
+
+interface EditableItem {
+  _id: string;
+  name: string;
+  sku?: string;
+  category?: string;
+  quantity?: number;
+  unit?: string;
+  unitCost?: number;
+  minStockLevel?: number;
+  supplier?: string;
+  hsnCode?: string;
+  gstRate?: number;
+  isFreeItem?: boolean;
+  description?: string;
 }
 
 // Business categories (not data types!)
@@ -55,7 +73,8 @@ const GST_RATES = [
   { value: "28", label: "28%" }
 ];
 
-export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateItemDialogProps) {
+export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: CreateItemDialogProps) {
+  const isEdit = Boolean(item?._id);
   const [formData, setFormData] = useState({
     name: "",
     sku: "",
@@ -99,10 +118,28 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
     }
   }, [open]);
 
+  // Editing: start from the item each time the dialog opens.
+  useEffect(() => {
+    if (!open || !item) return;
+    setFormData({
+      name: item.name || "",
+      sku: item.sku || "",
+      category: item.category || "",
+      quantity: String(item.quantity ?? ""),
+      unit: item.unit || "",
+      unitCost: String(item.unitCost ?? ""),
+      minStockLevel: String(item.minStockLevel ?? ""),
+      vendor: item.supplier || "",
+      hsnCode: item.hsnCode || "",
+      gstRate: String(item.gstRate ?? "18"),
+      isFreeItem: Boolean(item.isFreeItem),
+      notes: item.description || ""
+    });
+  }, [open, item]);
+
   const fetchHsnCodes = async () => {
     try {
-      const response = await apiClient.getHsnCodes();
-      setHsnCodes(response.hsnCodes || []);
+      setHsnCodes(await apiClient.listAll('/hsn-codes', 'hsnCodes'));
     } catch (error) {
       console.error('Error fetching HSN codes:', error);
     }
@@ -110,8 +147,8 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
 
   const fetchSuppliers = async () => {
     try {
-      const response = await apiClient.getVendors();
-      const vendorNames = response.vendors?.map((v: any) => v.name) || [];
+      const vendors = await apiClient.listAll<{ name: string }>('/vendors', 'vendors');
+      const vendorNames = vendors.map((v) => v.name);
       setSuppliers(vendorNames);
     } catch (error) {
       console.error('Error fetching suppliers:', error);
@@ -211,6 +248,8 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
         unitCost: parseFloat(formData.unitCost),
         minStockLevel: parseFloat(formData.minStockLevel) || 0,
         vendor: formData.vendor || undefined,
+        // The item model stores the supplier's name as `supplier`.
+        supplier: formData.vendor || undefined,
         hsnCode: formData.hsnCode || undefined,
         gstRate: parseFloat(formData.gstRate),
         status: 'active', // Backend status (active/inactive)
@@ -219,12 +258,18 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
         isFreeItem: formData.isFreeItem
       };
 
-      await apiClient.createInventoryItem(inventoryData);
-
-      toast({
-        title: "Item Created",
-        description: `${formData.name} has been added to inventory`,
-      });
+      if (isEdit) {
+        // Stock levels change through Adjust stock, which keeps the movement log.
+        const { quantity: _quantity, stockStatus: _stockStatus, status: _status, ...changes } = inventoryData;
+        await apiClient.updateInventoryItem(item!._id, changes);
+        toast({ title: "Item updated", description: `${formData.name} was saved` });
+      } else {
+        await apiClient.createInventoryItem(inventoryData);
+        toast({
+          title: "Item Created",
+          description: `${formData.name} has been added to inventory`,
+        });
+      }
 
       onItemCreated();
       onOpenChange(false);
@@ -260,7 +305,7 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[95vw] max-w-[600px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Add New Inventory Item</DialogTitle>
+          <DialogTitle>{isEdit ? `Edit ${item?.name}` : "Add New Inventory Item"}</DialogTitle>
           <DialogDescription>
             Fill in the details below. Fields marked with * are required.
           </DialogDescription>
@@ -268,8 +313,8 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Basic Information */}
-          <div className="space-y-4 p-4 bg-slate-50 rounded-lg border border-slate-200">
-            <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wide">Basic Information</h3>
+          <div className="space-y-4 p-4 bg-muted/50 rounded-lg border border-border">
+            <h3 className="text-sm font-semibold text-foreground/80 uppercase tracking-wide">Basic Information</h3>
 
             <div className="space-y-2">
               <Label htmlFor="name">Item Name *</Label>
@@ -290,7 +335,7 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
                   onChange={(e) => setFormData(prev => ({ ...prev, sku: e.target.value }))}
                   placeholder="Auto-generated if empty"
                 />
-                <p className="text-xs text-slate-500">Unique identifier</p>
+                <p className="text-xs text-muted-foreground">Unique identifier</p>
               </div>
 
               <div className="space-y-2">
@@ -312,8 +357,8 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
           </div>
 
           {/* Quantity & Pricing */}
-          <div className="space-y-4 p-4 bg-slate-50 rounded-lg border border-slate-200">
-            <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wide">Quantity & Pricing</h3>
+          <div className="space-y-4 p-4 bg-muted/50 rounded-lg border border-border">
+            <h3 className="text-sm font-semibold text-foreground/80 uppercase tracking-wide">Quantity & Pricing</h3>
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
@@ -323,6 +368,8 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
                   type="number"
                   step="0.01"
                   min="0"
+                  disabled={isEdit}
+                  title={isEdit ? "Change stock with Adjust stock" : undefined}
                   value={formData.quantity}
                   onChange={(e) => setFormData(prev => ({ ...prev, quantity: e.target.value }))}
                   placeholder="0"
@@ -339,7 +386,7 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
                     className="h-6 px-2 text-xs text-primary"
                     onClick={() => setShowUnitConverter(true)}
                   >
-                    <Calculator className="h-3 w-3 mr-1" />
+                    <Calculator className="h-3 w-3" />
                     Convert
                   </Button>
                 </div>
@@ -405,10 +452,10 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
             </div>
 
             {/* Auto-calculated Status */}
-            <div className="flex items-center justify-between p-3 bg-white rounded border border-slate-200">
+            <div className="flex items-center justify-between p-3 bg-card rounded border border-border">
               <div className="flex items-center gap-2">
-                <Info className="h-4 w-4 text-slate-500" />
-                <span className="text-sm text-slate-600">Stock Status (Auto-calculated):</span>
+                <Info className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm text-muted-foreground">Stock Status (Auto-calculated):</span>
               </div>
               <Badge variant={status === "Adequate" ? "default" : status === "Low Stock" ? "secondary" : "destructive"}>
                 {status}
@@ -417,14 +464,14 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
           </div>
 
           {/* Vendor */}
-          <div className="space-y-4 p-4 bg-slate-50 rounded-lg border border-slate-200">
-            <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wide">Vendor</h3>
+          <div className="space-y-4 p-4 bg-muted/50 rounded-lg border border-border">
+            <h3 className="text-sm font-semibold text-foreground/80 uppercase tracking-wide">Vendor</h3>
 
             <div className="space-y-2">
               <Label htmlFor="vendor">Vendor</Label>
               {suppliers.length === 0 ? (
-                <div className="flex items-center justify-center p-4 border-2 border-dashed border-slate-300 rounded-lg bg-slate-50">
-                  <span className="text-sm text-slate-500">No vendor available</span>
+                <div className="flex items-center justify-center p-4 border-2 border-dashed border-input rounded-lg bg-muted/50">
+                  <span className="text-sm text-muted-foreground">No vendor available</span>
                 </div>
               ) : (
                 <Select value={formData.vendor} onValueChange={(value) => {
@@ -444,8 +491,8 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
           </div>
 
           {/* Tax & Compliance */}
-          <div className="space-y-4 p-4 bg-slate-50 rounded-lg border border-slate-200">
-            <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wide">Tax & Compliance</h3>
+          <div className="space-y-4 p-4 bg-muted/50 rounded-lg border border-border">
+            <h3 className="text-sm font-semibold text-foreground/80 uppercase tracking-wide">Tax & Compliance</h3>
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
@@ -507,7 +554,7 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated }: CreateIt
             Cancel
           </Button>
           <Button type="submit" disabled={loading} className="w-full sm:w-auto">
-            {loading ? "Creating..." : "Create Item"}
+            {loading ? (isEdit ? "Saving..." : "Creating...") : isEdit ? "Save changes" : "Create Item"}
           </Button>
         </DialogFooter>
         </form>

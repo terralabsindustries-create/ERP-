@@ -1,17 +1,32 @@
 const express = require('express');
 const { body, query, validationResult } = require('express-validator');
+const { validate } = require('../middleware/validate');
 const PurchaseBill = require('../models/PurchaseBill');
 const Vendor = require('../models/Vendor');
 const Settings = require('../models/Settings');
+const { settingsOwnerId, businessSettings } = require('../utils/businessSettings');
 const PDFService = require('../services/PDFService');
 const { protect } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/requirePermission');
+const { orgUserFilter } = require('../utils/accessScope');
+const { canViewAllStaffData } = require('../utils/dataScopeHelper');
+
+// Bills, like invoices: everyone's in the business for the admin and logins
+// that see all staff data, otherwise the ones this login recorded. Suppliers
+// are shared by the whole business.
+const startOfToday = () => {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
+const billScope = async (user) => (canViewAllStaffData(user) ? orgUserFilter(user) : { userId: user._id });
 
 const router = express.Router();
 
 // Build company info block for the PDF header (mirrors invoices.js getCompanyInfo)
-async function getCompanyInfo(userId) {
-  const settings = await Settings.getOrCreateSettings(userId);
+async function getCompanyInfo(user) {
+  const settings = await businessSettings(user);
 
   if (!settings.companyName || settings.companyName === 'My Company') {
     return {
@@ -68,14 +83,16 @@ const billValidation = [
 // @desc    List purchase bills for the authenticated user
 // @access  Private
 router.get('/', protect, [
-  query('paymentStatus').optional().isIn(['all', 'pending', 'partial', 'paid']),
-  query('search').optional().trim(),
-  query('page').optional().isInt({ min: 1 }),
-  query('limit').optional().isInt({ min: 1, max: 100 })
-], async (req, res) => {
+  query('paymentStatus').optional({ values: 'falsy' }).isIn(['all', 'pending', 'partial', 'paid', 'overdue']),
+  query('vendorId').optional({ values: 'falsy' }).isMongoId(),
+  query('search').optional({ values: 'falsy' }).trim(),
+  query('page').optional({ values: 'falsy' }).isInt({ min: 1 }),
+  query('limit').optional({ values: 'falsy' }).isInt({ min: 1, max: 100 })
+], validate, async (req, res) => {
   try {
     const {
       paymentStatus,
+      vendorId,
       search,
       page = 1,
       limit = 20,
@@ -83,11 +100,16 @@ router.get('/', protect, [
       sortOrder = 'desc'
     } = req.query;
 
-    const queryObj = { userId: req.user._id };
+    const queryObj = { ...(await billScope(req.user)) };
 
-    if (paymentStatus && paymentStatus !== 'all') {
+    // "overdue" = still owed and past its due date.
+    if (paymentStatus === 'overdue') {
+      Object.assign(queryObj, { paymentStatus: { $ne: 'paid' }, dueDate: { $lt: startOfToday() } });
+    } else if (paymentStatus && paymentStatus !== 'all') {
       queryObj.paymentStatus = paymentStatus;
     }
+
+    if (vendorId) queryObj.vendorId = vendorId;
 
     if (search) {
       queryObj.$or = [
@@ -135,12 +157,23 @@ router.get('/', protect, [
 // @access  Private
 router.get('/stats/summary', protect, async (req, res) => {
   try {
-    const result = await PurchaseBill.getPurchaseBillStats(req.user._id);
-    const stats = result[0] || {
-      totalBills: 0,
-      totalAmount: 0,
-      paidAmount: 0,
-      outstandingAmount: 0
+    const scope = await billScope(req.user);
+    const [result, byStatus, overdue] = await Promise.all([
+      PurchaseBill.getPurchaseBillStats(scope),
+      PurchaseBill.aggregate([{ $match: scope }, { $group: { _id: '$paymentStatus', count: { $sum: 1 } } }]),
+      PurchaseBill.aggregate([
+        { $match: { ...scope, paymentStatus: { $ne: 'paid' }, dueDate: { $lt: startOfToday() } } },
+        { $group: { _id: null, count: { $sum: 1 }, amount: { $sum: '$balanceAmount' } } }
+      ])
+    ]);
+    const stats = {
+      ...(result[0] || { totalBills: 0, totalAmount: 0, paidAmount: 0, outstandingAmount: 0 }),
+      // Bills per payment status, for the list's views.
+      counts: {
+        ...Object.fromEntries(byStatus.map((r) => [r._id, r.count])),
+        overdue: overdue[0]?.count || 0
+      },
+      overdueAmount: overdue[0]?.amount || 0
     };
 
     res.status(200).json({
@@ -161,7 +194,7 @@ router.get('/stats/summary', protect, async (req, res) => {
 // @access  Private
 router.get('/:id', protect, async (req, res) => {
   try {
-    const bill = await PurchaseBill.findOne({ _id: req.params.id, userId: req.user._id })
+    const bill = await PurchaseBill.findOne({ _id: req.params.id, ...(await billScope(req.user)) })
       .populate('vendorId', 'name email phone gstNumber');
 
     if (!bill) {
@@ -193,22 +226,32 @@ router.post('/', protect, requirePermission('Purchase Bills: Create & Edit'), bi
     }
 
     // Snapshot vendor details
-    const vendor = await Vendor.findOne({ _id: req.body.vendorId, userId: req.user._id });
+    const vendor = await Vendor.findOne({ _id: req.body.vendorId, ...(await orgUserFilter(req.user)) });
     if (!vendor) {
       return res.status(404).json({ status: 'error', message: 'Vendor not found' });
     }
 
-    const billNumber = await PurchaseBill.generateBillNumber(req.user._id);
-
-    const bill = await PurchaseBill.create({
-      ...req.body,
-      billNumber,
-      vendorName: vendor.name,
-      vendorGstNumber: req.body.vendorGstNumber || vendor.gstNumber || '',
-      vendorAddress: req.body.vendorAddress || vendor.fullAddress || '',
-      vendorState: req.body.vendorState || vendor.address?.state || '',
-      userId: req.user._id
-    });
+    const businessId = await settingsOwnerId(req.user);
+    const businessFilter = await orgUserFilter(req.user);
+    let bill;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        const billNumber = await PurchaseBill.generateBillNumber(businessFilter, businessId);
+        bill = await PurchaseBill.create({
+          ...req.body,
+          billNumber,
+          vendorName: vendor.name,
+          vendorGstNumber: req.body.vendorGstNumber || vendor.gstNumber || '',
+          vendorAddress: req.body.vendorAddress || vendor.fullAddress || '',
+          vendorState: req.body.vendorState || vendor.address?.state || '',
+          userId: req.user._id,
+          businessId
+        });
+        break;
+      } catch (error) {
+        if (error.code !== 11000 || !error.keyPattern?.billNumber || attempt === 4) throw error;
+      }
+    }
 
     const populated = await PurchaseBill.findById(bill._id)
       .populate('vendorId', 'name email phone gstNumber');
@@ -236,7 +279,7 @@ router.post('/', protect, requirePermission('Purchase Bills: Create & Edit'), bi
 // @access  Private
 router.put('/:id', protect, requirePermission('Purchase Bills: Create & Edit'), async (req, res) => {
   try {
-    const bill = await PurchaseBill.findOne({ _id: req.params.id, userId: req.user._id });
+    const bill = await PurchaseBill.findOne({ _id: req.params.id, ...(await billScope(req.user)) });
     if (!bill) {
       return res.status(404).json({ status: 'error', message: 'Purchase bill not found' });
     }
@@ -251,7 +294,7 @@ router.put('/:id', protect, requirePermission('Purchase Bills: Create & Edit'), 
 
     // Re-snapshot vendor if changed
     if (req.body.vendorId && req.body.vendorId !== String(bill.vendorId)) {
-      const vendor = await Vendor.findOne({ _id: req.body.vendorId, userId: req.user._id });
+      const vendor = await Vendor.findOne({ _id: req.body.vendorId, ...(await orgUserFilter(req.user)) });
       if (!vendor) {
         return res.status(404).json({ status: 'error', message: 'Vendor not found' });
       }
@@ -291,7 +334,7 @@ router.put('/:id', protect, requirePermission('Purchase Bills: Create & Edit'), 
 // @access  Private
 router.delete('/:id', protect, requirePermission('Purchase Bills: Delete'), async (req, res) => {
   try {
-    const bill = await PurchaseBill.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
+    const bill = await PurchaseBill.findOneAndDelete({ _id: req.params.id, ...(await billScope(req.user)) });
     if (!bill) {
       return res.status(404).json({ status: 'error', message: 'Purchase bill not found' });
     }
@@ -310,14 +353,14 @@ router.delete('/:id', protect, requirePermission('Purchase Bills: Delete'), asyn
 // @access  Private
 router.get('/:id/pdf', protect, async (req, res) => {
   try {
-    const bill = await PurchaseBill.findOne({ _id: req.params.id, userId: req.user._id })
+    const bill = await PurchaseBill.findOne({ _id: req.params.id, ...(await billScope(req.user)) })
       .populate('vendorId', 'name email phone gstNumber');
 
     if (!bill) {
       return res.status(404).json({ status: 'error', message: 'Purchase bill not found' });
     }
 
-    const companyInfoResult = await getCompanyInfo(req.user._id);
+    const companyInfoResult = await getCompanyInfo(req.user);
     if (!companyInfoResult.isConfigured) {
       return res.status(400).json({
         status: 'error',

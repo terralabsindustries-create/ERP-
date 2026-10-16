@@ -259,7 +259,22 @@ const settingsSchema = new mongoose.Schema({
   // flattenMaps: without this, Map fields (like paymentReminders.templateVariableMapping)
   // serialize to "{}" in every JSON response — the data is fine in the DB, but API responses
   // (and therefore the Settings UI) would show it as empty.
-  toJSON: { virtuals: true, flattenMaps: true },
+  toJSON: {
+    virtuals: true,
+    flattenMaps: true,
+    // Secrets stay on the server: API responses only say whether one is saved.
+    transform: (doc, ret) => {
+      if (ret.whatsappIntegration) {
+        ret.whatsappIntegration.hasAccessToken = !!ret.whatsappIntegration.accessToken;
+        delete ret.whatsappIntegration.accessToken;
+      }
+      if (ret.emailIntegration) {
+        ret.emailIntegration.hasSmtpPassword = !!ret.emailIntegration.smtpPassword;
+        delete ret.emailIntegration.smtpPassword;
+      }
+      return ret;
+    }
+  },
   toObject: { virtuals: true, flattenMaps: true }
 });
 

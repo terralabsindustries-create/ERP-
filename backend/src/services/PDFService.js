@@ -1,5 +1,6 @@
 const PDFDocument = require('pdfkit');
 const { createTransporter } = require('../utils/mailer');
+const { AREA_UNITS, round4, sizeLabel, areaLabel } = require('../utils/billing');
 
 // Puppeteer ships as ES-module only. require() of ESM is unsupported on Node 20
 // (which is what Electron bundles), so it is imported on demand instead. That
@@ -275,377 +276,6 @@ class PDFService {
     return phone;
   }
 
-  static generateInvoiceHTML(invoice, companyInfo) {
-    const invoiceDate = invoice.invoiceDate
-      ? new Date(invoice.invoiceDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' })
-      : 'N/A';
-    const dueDate = invoice.dueDate
-      ? new Date(invoice.dueDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' })
-      : 'N/A';
-
-    const companyPhone = this.formatPhone(companyInfo.phone);
-    const customerPhone = invoice.customerId?.phone ? this.formatPhone(invoice.customerId.phone) : '';
-
-    const isInterState = invoice.isInterState;
-
-    // Label the tax rate only when every line carries the same one. A mixed-rate
-    // invoice has no single rate, and printing a blended average would be wrong,
-    // so those show the amounts without a rate suffix.
-    const itemRates = [...new Set((invoice.items || [])
-      .filter((i) => (i.totalAmount || 0) > 0)
-      .map((i) => i.gstRate || 0))];
-    const uniformRate = itemRates.length === 1 ? itemRates[0] : null;
-    const gstRateLabel = uniformRate ? ` @ ${uniformRate}%` : '';
-    const halfRateLabel = uniformRate ? ` @ ${uniformRate / 2}%` : '';
-
-    const amountInWords = this.numberToWords(Math.floor(invoice.totalAmount || 0));
-    const isFullyPaid = (invoice.amountPaid || 0) >= (invoice.totalAmount || 0) && (invoice.amountPaid || 0) > 0;
-    const balanceDue = Math.max(0, (invoice.totalAmount || 0) - (invoice.amountPaid || 0));
-
-    const itemsRows = invoice.items.map((item, index) => {
-      const hsnLabel = item.hsnCode ? `SAC: ${item.hsnCode}` : '';
-      const dimensions = (item.itemType === 'Square Feet' && item.length && item.width)
-        ? `${item.length} × ${item.width} sq.ft` : '';
-      const subDesc = [dimensions].filter(Boolean).join(' ');
-      return `
-      <tr>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:center;color:#666;font-size:9pt;">${index + 1}</td>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;font-size:9.5pt;">
-          <div style="font-weight:600;">${item.itemName}</div>
-          ${subDesc ? `<div style="font-style:italic;color:#888;font-size:8.5pt;margin-top:2px;">${subDesc}</div>` : ''}
-          ${hsnLabel ? `<div style="color:#888;font-size:8pt;margin-top:1px;">${hsnLabel}</div>` : ''}
-        </td>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${(item.unitPrice || 0).toFixed(2)}</td>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${(item.itemType === 'Square Feet' ? (item.totalSquareFeet || 0) : (item.quantity || 0))}</td>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${(item.totalAmount || 0).toFixed(2)}</td>
-      </tr>`;
-    }).join('');
-
-    const designChargeRow = invoice.designCharge?.amount > 0 ? `
-      <tr>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:center;color:#666;font-size:9pt;">${invoice.items.length + 1}</td>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;font-size:9.5pt;font-weight:600;">Design Charge</td>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${(invoice.designCharge.amount || 0).toFixed(2)}</td>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">1</td>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${(invoice.designCharge.amount || 0).toFixed(2)}</td>
-      </tr>` : '';
-
-    const gstBreakdown = !invoice.noGst && (invoice.totalGstAmount || 0) > 0
-      ? (isInterState
-          ? `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>IGST${gstRateLabel}</span><span>₹ ${(invoice.totalIgstAmount || invoice.totalGstAmount || 0).toFixed(2)}</span></div>`
-          : `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>CGST${halfRateLabel}</span><span>₹ ${(invoice.totalCgstAmount || 0).toFixed(2)}</span></div>
-             <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>SGST${halfRateLabel}</span><span>₹ ${(invoice.totalSgstAmount || 0).toFixed(2)}</span></div>`)
-      : '';
-
-    const paidRows = (invoice.amountPaid || 0) > 0 ? `
-      <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#16a34a;">
-        <span>Amount Paid</span><span>₹ ${(invoice.amountPaid).toFixed(2)}</span>
-      </div>
-      ${balanceDue > 0 ? `<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:10.5pt;font-weight:700;border-top:1px solid #ccc;margin-top:4px;color:#dc2626;">
-        <span>Balance Due</span><span>₹ ${balanceDue.toFixed(2)}</span>
-      </div>` : ''}` : '';
-
-    const addressLines = (companyInfo.address || '').split(',').map(s => s.trim()).filter(Boolean).join('<br>');
-
-    return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Invoice ${invoice.invoiceNumber}</title>
-  <style>
-    * { margin:0; padding:0; box-sizing:border-box; }
-    body { font-family: Arial, Helvetica, sans-serif; color:#333; background:white; font-size:10pt; line-height:1.5; }
-    .page { max-width:210mm; margin:0 auto; padding:14mm 18mm; }
-  </style>
-</head>
-<body>
-<div class="page">
-
-  <!-- HEADER -->
-  <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:10px;">
-    <tr>
-      <td style="vertical-align:top;">
-        <div style="font-size:26pt;font-weight:900;color:#8b2fc9;letter-spacing:-1px;line-height:1;">${companyInfo.name || 'Company'}</div>
-        <div style="margin-top:8px;">
-          <div style="font-weight:700;font-size:10.5pt;">${(companyInfo.name || '').toUpperCase()}</div>
-          ${companyInfo.address ? `<div style="font-size:9pt;color:#555;margin-top:3px;">${addressLines}</div>` : ''}
-          ${companyInfo.email ? `<div style="font-size:9pt;color:#555;margin-top:2px;">Email: ${companyInfo.email}</div>` : ''}
-          ${companyInfo.phone ? `<div style="font-size:9pt;color:#555;margin-top:2px;">Mobile: ${companyPhone}</div>` : ''}
-          ${companyInfo.gstNumber ? `<div style="font-size:9pt;color:#555;margin-top:2px;">GSTIN: ${companyInfo.gstNumber}</div>` : ''}
-          ${companyInfo.panNumber ? `<div style="font-size:9pt;color:#555;margin-top:2px;">PAN: ${companyInfo.panNumber}</div>` : ''}
-        </div>
-      </td>
-      <td style="vertical-align:top;text-align:right;">
-        <div style="font-size:28pt;font-weight:900;color:#222;letter-spacing:2px;line-height:1;">INVOICE</div>
-        <div style="font-size:9.5pt;color:#555;margin-top:8px;line-height:2.2;">
-          <div>Number: <strong style="color:#222;">${invoice.invoiceNumber}</strong></div>
-          <div>Date: <strong style="color:#222;">${invoiceDate}</strong></div>
-          <div>Due Date: <strong style="color:#222;">${dueDate}</strong></div>
-        </div>
-        ${isFullyPaid ? `<div style="display:inline-block;border:2px solid #16a34a;color:#16a34a;font-weight:700;padding:3px 12px;font-size:9pt;margin-top:8px;letter-spacing:0.5px;">FULLY PAID</div>` : ''}
-      </td>
-    </tr>
-  </table>
-
-  <hr style="border:none;border-top:1px solid #ccc;margin:10px 0 14px 0;">
-
-  <!-- CUSTOMER / BILLING / SHIPPING -->
-  <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;">
-    <tr>
-      <td style="width:33%;vertical-align:top;padding-right:12px;">
-        <div style="font-weight:700;font-size:10pt;margin-bottom:5px;">Customer</div>
-        <div style="font-weight:600;font-size:9.5pt;">${invoice.customerId?.name || 'N/A'}</div>
-        ${customerPhone ? `<div style="font-size:9pt;color:#555;">Mobile: ${customerPhone}</div>` : ''}
-        ${invoice.customerId?.email ? `<div style="font-size:9pt;color:#555;">${invoice.customerId.email}</div>` : ''}
-        ${invoice.customerId?.gstNumber ? `<div style="font-size:9pt;color:#555;">GSTIN: ${invoice.customerId.gstNumber}</div>` : ''}
-      </td>
-      <td style="width:33%;vertical-align:top;padding:0 12px;border-left:1px solid #e5e5e5;">
-        <div style="font-weight:700;font-size:10pt;margin-bottom:5px;">Billing Address</div>
-        <div style="font-weight:600;font-size:9.5pt;">${invoice.customerId?.name || ''}</div>
-        ${invoice.customerId?.address ? `<div style="font-size:9pt;color:#555;">${invoice.customerId.address}</div>` : ''}
-      </td>
-      <td style="width:33%;vertical-align:top;padding-left:12px;border-left:1px solid #e5e5e5;">
-        <div style="font-weight:700;font-size:10pt;margin-bottom:5px;">Shipping Address</div>
-        <div style="font-weight:600;font-size:9.5pt;">${invoice.customerId?.name || ''}</div>
-        ${invoice.customerId?.address ? `<div style="font-size:9pt;color:#555;">${invoice.customerId.address}</div>` : ''}
-        ${invoice.jobId ? `<div style="font-size:9pt;color:#888;margin-top:4px;">Job Ref: ${invoice.jobId.title || ''}</div>` : ''}
-      </td>
-    </tr>
-  </table>
-
-  <!-- ITEMS TABLE -->
-  <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:6px;">
-    <thead>
-      <tr style="background:#f5f5f5;border-top:1px solid #ddd;border-bottom:1px solid #ddd;">
-        <th style="padding:9px 6px;text-align:center;font-size:9pt;width:6%;font-weight:700;">Sno.</th>
-        <th style="padding:9px 6px;text-align:left;font-size:9pt;font-weight:700;">Description</th>
-        <th style="padding:9px 6px;text-align:right;font-size:9pt;width:13%;font-weight:700;">Rate</th>
-        <th style="padding:9px 6px;text-align:right;font-size:9pt;width:8%;font-weight:700;">Qty</th>
-        <th style="padding:9px 6px;text-align:right;font-size:9pt;width:14%;font-weight:700;">Total</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${itemsRows}
-      ${designChargeRow}
-    </tbody>
-  </table>
-
-  <!-- BANK DETAILS + TOTALS -->
-  <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">
-    <tr>
-      <td style="vertical-align:top;padding-right:20px;">
-        ${companyInfo.bankName ? `<div style="font-size:9.5pt;margin:3px 0;"><span style="color:#555;display:inline-block;min-width:128px;">Bank Name:</span> <strong>${companyInfo.bankName}</strong></div>` : ''}
-        ${companyInfo.accountName ? `<div style="font-size:9.5pt;margin:3px 0;"><span style="color:#555;display:inline-block;min-width:128px;">Account Name:</span> ${companyInfo.accountName}</div>` : ''}
-        ${companyInfo.accountNumber ? `<div style="font-size:9.5pt;margin:3px 0;"><span style="color:#555;display:inline-block;min-width:128px;">Account Number:</span> ${companyInfo.accountNumber}</div>` : ''}
-        ${companyInfo.ifscCode ? `<div style="font-size:9.5pt;margin:3px 0;"><span style="color:#555;display:inline-block;min-width:128px;">IFSC Code:</span> ${companyInfo.ifscCode}</div>` : ''}
-        ${companyInfo.upiId ? `<div style="font-size:9.5pt;margin:3px 0;"><span style="color:#555;display:inline-block;min-width:128px;">UPI ID:</span> ${companyInfo.upiId}</div>` : ''}
-      </td>
-      <td style="vertical-align:top;text-align:right;white-space:nowrap;min-width:210px;">
-        ${(invoice.discountAmount || 0) > 0 ? `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>Discount</span><span style="color:#dc2626;">-₹ ${(invoice.discountAmount).toFixed(2)}</span></div>` : ''}
-        <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>Taxable</span><span>₹ ${(invoice.taxableAmount || invoice.subtotal || 0).toFixed(2)}</span></div>
-        ${gstBreakdown}
-        <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:11pt;font-weight:700;border-top:1px solid #ccc;margin-top:4px;"><span>Total</span><span>₹ ${(invoice.totalAmount || 0).toFixed(2)}</span></div>
-        ${paidRows}
-      </td>
-    </tr>
-  </table>
-
-  <!-- AMOUNT IN WORDS -->
-  <div style="border-top:1px solid #ddd;border-bottom:1px solid #ddd;padding:8px 0;font-size:9.5pt;margin:12px 0;">
-    <strong>Total in Words:</strong> Indian Rupees ${amountInWords} Only
-  </div>
-
-  <!-- FOOTER -->
-  <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:18px;padding-top:14px;border-top:1px solid #ccc;">
-    <tr>
-      <td style="vertical-align:top;padding-right:30px;">
-        <div style="font-weight:700;font-size:10pt;margin-bottom:6px;">Terms &amp; Conditions</div>
-        <div style="font-size:9pt;color:#555;line-height:1.8;">
-          ${invoice.termsAndConditions ||
-            '1. Payment is due as per agreed terms.<br>2. All disputes subject to local jurisdiction.<br>3. This is a computer generated document.'}
-        </div>
-      </td>
-      <td style="vertical-align:top;text-align:right;min-width:210px;">
-        <div style="font-weight:700;font-size:10pt;">For ${companyInfo.name || 'Company'}</div>
-        ${companyInfo.paymentQRCode ? `<img src="${companyInfo.paymentQRCode}" style="width:80px;height:80px;margin:8px 0;" alt="QR">` : '<div style="height:55px;"></div>'}
-        <div style="font-size:9.5pt;color:#555;">Authorised Signatory</div>
-      </td>
-    </tr>
-  </table>
-
-</div>
-</body>
-</html>`;
-  }
-
-  static generateQuotationHTML(quotation, companyInfo) {
-    const quotationDate = new Date(quotation.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
-    const validUntil = quotation.valid_until
-      ? new Date(quotation.valid_until).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' })
-      : 'N/A';
-
-    const companyPhone = this.formatPhone(companyInfo.phone);
-    const customerPhone = quotation.customer_id?.phone ? this.formatPhone(quotation.customer_id.phone) : '';
-    const amountInWords = this.numberToWords(Math.floor(quotation.total_amount || 0));
-
-    const isInterState = quotation.is_interstate;
-    // Derived the same way as the invoice, so an identical order shows an
-    // identical tax breakdown on both documents.
-    const gstRate = (quotation.tax_amount || 0) > 0 && (quotation.subtotal || 0) > 0
-      ? (quotation.tax_amount / quotation.subtotal * 100).toFixed(0)
-      : 0;
-
-    const itemsRows = quotation.items.map((item, index) => {
-      return `
-      <tr>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:center;color:#666;font-size:9pt;">${index + 1}</td>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;font-size:9.5pt;">
-          <div style="font-weight:600;">${item.item_name}</div>
-          ${item.description ? `<div style="font-style:italic;color:#888;font-size:8.5pt;margin-top:2px;">${item.description}</div>` : ''}
-        </td>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${(item.unit_price || 0).toFixed(2)}</td>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${item.quantity}</td>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${((item.unit_price || 0) * item.quantity).toFixed(2)}</td>
-      </tr>`;
-    }).join('');
-
-    const gstBreakdown = quotation.gst_type === 'gst' && Number(gstRate) > 0
-      ? (isInterState
-          ? `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>IGST @ ${gstRate}%</span><span>₹ ${(quotation.tax_amount || 0).toFixed(2)}</span></div>`
-          : `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>CGST @ ${(gstRate / 2).toFixed(0)}%</span><span>₹ ${((quotation.tax_amount || 0) / 2).toFixed(2)}</span></div>
-             <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>SGST @ ${(gstRate / 2).toFixed(0)}%</span><span>₹ ${((quotation.tax_amount || 0) / 2).toFixed(2)}</span></div>`)
-      : '';
-
-    const addressLines = (companyInfo.address || '').split(',').map(s => s.trim()).filter(Boolean).join('<br>');
-
-    return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Quotation ${quotation.quotationNumber}</title>
-  <style>
-    * { margin:0; padding:0; box-sizing:border-box; }
-    body { font-family: Arial, Helvetica, sans-serif; color:#333; background:white; font-size:10pt; line-height:1.5; }
-    .page { max-width:210mm; margin:0 auto; padding:14mm 18mm; }
-  </style>
-</head>
-<body>
-<div class="page">
-
-  <!-- HEADER -->
-  <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:10px;">
-    <tr>
-      <td style="vertical-align:top;">
-        <div style="font-size:26pt;font-weight:900;color:#8b2fc9;letter-spacing:-1px;line-height:1;">${companyInfo.name || 'Company'}</div>
-        <div style="margin-top:8px;">
-          <div style="font-weight:700;font-size:10.5pt;">${(companyInfo.name || '').toUpperCase()}</div>
-          ${companyInfo.address ? `<div style="font-size:9pt;color:#555;margin-top:3px;">${addressLines}</div>` : ''}
-          ${companyInfo.email ? `<div style="font-size:9pt;color:#555;margin-top:2px;">Email: ${companyInfo.email}</div>` : ''}
-          ${companyInfo.phone ? `<div style="font-size:9pt;color:#555;margin-top:2px;">Mobile: ${companyPhone}</div>` : ''}
-          ${companyInfo.gstNumber ? `<div style="font-size:9pt;color:#555;margin-top:2px;">GSTIN: ${companyInfo.gstNumber}</div>` : ''}
-          ${companyInfo.panNumber ? `<div style="font-size:9pt;color:#555;margin-top:2px;">PAN: ${companyInfo.panNumber}</div>` : ''}
-        </div>
-      </td>
-      <td style="vertical-align:top;text-align:right;">
-        <div style="font-size:28pt;font-weight:900;color:#222;letter-spacing:2px;line-height:1;">QUOTATION</div>
-        <div style="font-size:9.5pt;color:#555;margin-top:8px;line-height:2.2;">
-          <div>Number: <strong style="color:#222;">${quotation.quotationNumber}</strong></div>
-          <div>Date: <strong style="color:#222;">${quotationDate}</strong></div>
-          <div>Valid Until: <strong style="color:#222;">${validUntil}</strong></div>
-        </div>
-      </td>
-    </tr>
-  </table>
-
-  <hr style="border:none;border-top:1px solid #ccc;margin:10px 0 14px 0;">
-
-  <!-- CUSTOMER / BILLING / CONTACT -->
-  <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;">
-    <tr>
-      <td style="width:33%;vertical-align:top;padding-right:12px;">
-        <div style="font-weight:700;font-size:10pt;margin-bottom:5px;">Customer</div>
-        <div style="font-weight:600;font-size:9.5pt;">${quotation.customer_id?.name || 'N/A'}</div>
-        ${customerPhone ? `<div style="font-size:9pt;color:#555;">Mobile: ${customerPhone}</div>` : ''}
-        ${quotation.customer_id?.email ? `<div style="font-size:9pt;color:#555;">${quotation.customer_id.email}</div>` : ''}
-        ${quotation.customer_id?.gstNumber ? `<div style="font-size:9pt;color:#555;">GSTIN: ${quotation.customer_id.gstNumber}</div>` : ''}
-      </td>
-      <td style="width:33%;vertical-align:top;padding:0 12px;border-left:1px solid #e5e5e5;">
-        <div style="font-weight:700;font-size:10pt;margin-bottom:5px;">Billing Address</div>
-        <div style="font-weight:600;font-size:9.5pt;">${quotation.customer_id?.name || ''}</div>
-        ${quotation.customer_id?.address ? `<div style="font-size:9pt;color:#555;">${quotation.customer_id.address}</div>` : ''}
-      </td>
-      <td style="width:33%;vertical-align:top;padding-left:12px;border-left:1px solid #e5e5e5;">
-        <div style="font-weight:700;font-size:10pt;margin-bottom:5px;">Shipping Address</div>
-        <div style="font-weight:600;font-size:9.5pt;">${quotation.customer_id?.name || ''}</div>
-        ${quotation.customer_id?.address ? `<div style="font-size:9pt;color:#555;">${quotation.customer_id.address}</div>` : ''}
-        ${quotation.notes ? `<div style="font-size:9pt;color:#888;margin-top:4px;">${quotation.notes}</div>` : ''}
-      </td>
-    </tr>
-  </table>
-
-  <!-- ITEMS TABLE -->
-  <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:6px;">
-    <thead>
-      <tr style="background:#f5f5f5;border-top:1px solid #ddd;border-bottom:1px solid #ddd;">
-        <th style="padding:9px 6px;text-align:center;font-size:9pt;width:6%;font-weight:700;">Sno.</th>
-        <th style="padding:9px 6px;text-align:left;font-size:9pt;font-weight:700;">Description</th>
-        <th style="padding:9px 6px;text-align:right;font-size:9pt;width:13%;font-weight:700;">Rate</th>
-        <th style="padding:9px 6px;text-align:right;font-size:9pt;width:8%;font-weight:700;">Qty</th>
-        <th style="padding:9px 6px;text-align:right;font-size:9pt;width:14%;font-weight:700;">Total</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${itemsRows}
-    </tbody>
-  </table>
-
-  <!-- BANK DETAILS + TOTALS -->
-  <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">
-    <tr>
-      <td style="vertical-align:top;padding-right:20px;">
-        ${companyInfo.bankName ? `<div style="font-size:9.5pt;margin:3px 0;"><span style="color:#555;display:inline-block;min-width:128px;">Bank Name:</span> <strong>${companyInfo.bankName}</strong></div>` : ''}
-        ${companyInfo.accountName ? `<div style="font-size:9.5pt;margin:3px 0;"><span style="color:#555;display:inline-block;min-width:128px;">Account Name:</span> ${companyInfo.accountName}</div>` : ''}
-        ${companyInfo.accountNumber ? `<div style="font-size:9.5pt;margin:3px 0;"><span style="color:#555;display:inline-block;min-width:128px;">Account Number:</span> ${companyInfo.accountNumber}</div>` : ''}
-        ${companyInfo.ifscCode ? `<div style="font-size:9.5pt;margin:3px 0;"><span style="color:#555;display:inline-block;min-width:128px;">IFSC Code:</span> ${companyInfo.ifscCode}</div>` : ''}
-        ${companyInfo.upiId ? `<div style="font-size:9.5pt;margin:3px 0;"><span style="color:#555;display:inline-block;min-width:128px;">UPI ID:</span> ${companyInfo.upiId}</div>` : ''}
-        ${quotation.payment_link ? `<div style="font-size:9pt;color:#555;margin-top:6px;"><strong>Payment Link:</strong> <a href="${quotation.payment_link}" style="color:#8b2fc9;">${quotation.payment_link}</a></div>` : ''}
-      </td>
-      <td style="vertical-align:top;text-align:right;white-space:nowrap;min-width:210px;">
-        <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>Taxable</span><span>₹ ${(quotation.subtotal || 0).toFixed(2)}</span></div>
-        ${gstBreakdown}
-        <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:11pt;font-weight:700;border-top:1px solid #ccc;margin-top:4px;"><span>Total</span><span>₹ ${(quotation.total_amount || 0).toFixed(2)}</span></div>
-      </td>
-    </tr>
-  </table>
-
-  <!-- AMOUNT IN WORDS -->
-  <div style="border-top:1px solid #ddd;border-bottom:1px solid #ddd;padding:8px 0;font-size:9.5pt;margin:12px 0;">
-    <strong>Total in Words:</strong> Indian Rupees ${amountInWords} Only
-  </div>
-
-  <!-- FOOTER -->
-  <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:18px;padding-top:14px;border-top:1px solid #ccc;">
-    <tr>
-      <td style="vertical-align:top;padding-right:30px;">
-        <div style="font-weight:700;font-size:10pt;margin-bottom:6px;">Terms &amp; Conditions</div>
-        <div style="font-size:9pt;color:#555;line-height:1.8;">
-          ${quotation.terms_conditions ||
-            '1. This quotation is valid for the period mentioned above.<br>2. Prices are subject to change without prior notice after validity.<br>3. All disputes subject to local jurisdiction.'}
-        </div>
-      </td>
-      <td style="vertical-align:top;text-align:right;min-width:210px;">
-        <div style="font-weight:700;font-size:10pt;">For ${companyInfo.name || 'Company'}</div>
-        ${companyInfo.paymentQRCode ? `<img src="${companyInfo.paymentQRCode}" style="width:80px;height:80px;margin:8px 0;" alt="QR">` : '<div style="height:55px;"></div>'}
-        <div style="font-size:9.5pt;color:#555;">Authorised Signatory</div>
-      </td>
-    </tr>
-  </table>
-
-</div>
-</body>
-</html>`;
-  }
-
   // Same shared PDFKit layout as the invoice — see generateInvoicePDFFromHTML.
   static async generateQuotationPDFFromHTML(quotation, companyInfo) {
     return this.generateQuotationPDF(quotation, companyInfo);
@@ -678,171 +308,6 @@ class PDFService {
 
   static createSimpleQuotation(doc, quotation, companyInfo) {
     return this.renderSynxQuotation(doc, quotation, companyInfo);
-  }
-
-  static createSimpleQuotationLegacy(doc, quotation, companyInfo) {
-    const margin = 40;
-    const pageWidth = doc.page.width;
-    const pageHeight = doc.page.height;
-    const contentWidth = pageWidth - (margin * 2);
-    let yPos = margin;
-
-    const colors = { primary: '#000000', secondary: '#333333', text: '#2d3748', lightGray: '#e2e8f0', accent: '#8b2fc9' };
-
-    // ======================== HEADER ========================
-    doc.fontSize(20).font('Helvetica-Bold').fillColor(colors.accent)
-       .text(companyInfo.name || 'COMPANY NAME', margin, yPos, { width: contentWidth - 150 });
-
-    doc.fontSize(22).font('Helvetica-Bold').fillColor(colors.primary)
-       .text('QUOTATION', margin, yPos, { width: contentWidth, align: 'right' });
-    yPos += 30;
-
-    doc.fontSize(8).font('Helvetica').fillColor(colors.secondary);
-    if (companyInfo.address) { doc.text(companyInfo.address, margin, yPos, { width: contentWidth - 200 }); yPos += 14; }
-    doc.text(`Phone: ${companyInfo.phone || 'N/A'} | Email: ${companyInfo.email || 'N/A'}`, margin, yPos, { width: contentWidth - 200 });
-    yPos += 12;
-    if (companyInfo.gstNumber) {
-      doc.text(`GST: ${companyInfo.gstNumber}${companyInfo.stateName ? ' | State: ' + companyInfo.stateName : ''}`, margin, yPos, { width: contentWidth - 200 });
-      yPos += 14;
-    }
-
-    // Quotation number + dates on the right
-    doc.fontSize(9).font('Helvetica-Bold').fillColor(colors.secondary)
-       .text(`Quotation #${quotation.quotationNumber}`, margin, yPos - 26, { width: contentWidth, align: 'right' });
-    doc.fontSize(8).font('Helvetica').fillColor(colors.text)
-       .text(`Date: ${new Date(quotation.createdAt || Date.now()).toLocaleDateString('en-IN')}`, margin, yPos - 13, { width: contentWidth, align: 'right' });
-    if (quotation.valid_until) {
-      doc.text(`Valid Until: ${new Date(quotation.valid_until).toLocaleDateString('en-IN')}`, margin, yPos, { width: contentWidth, align: 'right' });
-    }
-
-    yPos += 8;
-    doc.moveTo(margin, yPos).lineTo(pageWidth - margin, yPos).strokeColor(colors.lightGray).lineWidth(1).stroke();
-    yPos += 18;
-
-    // ======================== CUSTOMER / GST INFO ========================
-    const customer = quotation.customer_id || {};
-    doc.fontSize(9).font('Helvetica-Bold').fillColor(colors.primary).text('QUOTE TO', margin, yPos);
-    const gstTypeLabel = quotation.gst_type === 'gst'
-      ? `GST (${quotation.is_interstate ? 'Interstate / IGST' : 'Intrastate / CGST+SGST'})`
-      : 'Non-GST';
-    doc.text('GST TYPE', margin + 300, yPos);
-    yPos += 14;
-
-    doc.fontSize(9).font('Helvetica-Bold').fillColor(colors.text).text(customer.name || 'N/A', margin, yPos, { width: 260 });
-    doc.fontSize(9).font('Helvetica').fillColor(colors.text).text(gstTypeLabel, margin + 300, yPos, { width: 175 });
-    yPos += 14;
-
-    doc.fontSize(8).font('Helvetica').fillColor(colors.secondary);
-    if (customer.address) { doc.text(customer.address, margin, yPos, { width: 260 }); yPos += doc.heightOfString(customer.address, { width: 260 }) + 2; }
-    if (customer.email) { doc.text(customer.email, margin, yPos, { width: 260 }); yPos += 12; }
-    if (customer.phone) { doc.text(customer.phone, margin, yPos, { width: 260 }); yPos += 12; }
-    if (customer.gstNumber) { doc.text(`GST: ${customer.gstNumber}`, margin, yPos, { width: 260 }); yPos += 12; }
-    yPos += 12;
-
-    // ======================== ITEMS TABLE ========================
-    const cols = {
-      slNo: margin, slNoW: 22,
-      item: margin + 22, itemW: 200,
-      qty: margin + 222, qtyW: 50,
-      rate: margin + 272, rateW: 70,
-      tax: margin + 342, taxW: 55,
-      total: margin + 397, totalW: contentWidth - 397
-    };
-
-    doc.rect(margin, yPos, contentWidth, 22).fillAndStroke('#f5f5f5', colors.lightGray);
-    doc.fontSize(8).font('Helvetica-Bold').fillColor(colors.primary);
-    const hY = yPos + 7;
-    doc.text('#', cols.slNo + 4, hY, { width: cols.slNoW });
-    doc.text('Description', cols.item, hY, { width: cols.itemW });
-    doc.text('Qty', cols.qty, hY, { width: cols.qtyW, align: 'right' });
-    doc.text('Rate', cols.rate, hY, { width: cols.rateW, align: 'right' });
-    doc.text('GST', cols.tax, hY, { width: cols.taxW, align: 'right' });
-    doc.text('Total', cols.total, hY, { width: cols.totalW, align: 'right' });
-    yPos += 26;
-
-    let rowNum = 1;
-    if (Array.isArray(quotation.items)) {
-      quotation.items.forEach((item) => {
-        if (yPos > pageHeight - 160) { doc.addPage(); yPos = margin; }
-        const qty = item.quantity || 0;
-        const rate = item.unit_price || 0;
-        const taxAmount = item.tax_amount || 0;
-        const lineTotal = item.total_amount != null ? item.total_amount : (qty * rate + taxAmount);
-
-        const nameH = doc.heightOfString(item.item_name || '', { width: cols.itemW });
-        const rowY = yPos;
-        doc.fontSize(8).font('Helvetica').fillColor(colors.text);
-        doc.text(String(rowNum), cols.slNo + 4, rowY, { width: cols.slNoW });
-        doc.text(item.item_name || '', cols.item, rowY, { width: cols.itemW });
-        if (item.description) {
-          doc.fontSize(7).fillColor(colors.secondary).text(item.description, cols.item, rowY + nameH, { width: cols.itemW });
-          doc.fontSize(8).fillColor(colors.text);
-        }
-        doc.text(qty.toFixed(2), cols.qty, rowY, { width: cols.qtyW, align: 'right' });
-        doc.text('₹' + rate.toFixed(2), cols.rate, rowY, { width: cols.rateW, align: 'right' });
-        doc.text('₹' + taxAmount.toFixed(2), cols.tax, rowY, { width: cols.taxW, align: 'right' });
-        doc.text('₹' + lineTotal.toFixed(2), cols.total, rowY, { width: cols.totalW, align: 'right' });
-
-        const descH = item.description ? doc.heightOfString(item.description, { width: cols.itemW }) : 0;
-        yPos += Math.max(nameH + descH, 14) + 6;
-        doc.moveTo(margin, yPos - 3).lineTo(pageWidth - margin, yPos - 3).strokeColor(colors.lightGray).lineWidth(0.5).stroke();
-        rowNum++;
-      });
-    }
-
-    yPos += 6;
-
-    // ======================== TOTALS ========================
-    const sumLabelX = margin + 300;
-    const sumValueX = margin + 410;
-    doc.fontSize(8).font('Helvetica').fillColor(colors.text);
-    doc.text('Taxable:', sumLabelX, yPos, { width: 100 });
-    doc.text(`₹ ${(quotation.subtotal || 0).toFixed(2)}`, sumValueX, yPos, { width: contentWidth - 410, align: 'right' });
-    yPos += 14;
-
-    if (quotation.gst_type === 'gst') {
-      doc.text('GST Amount:', sumLabelX, yPos, { width: 100 });
-      doc.text(`₹ ${(quotation.tax_amount || 0).toFixed(2)}`, sumValueX, yPos, { width: contentWidth - 410, align: 'right' });
-      yPos += 14;
-    }
-
-    doc.moveTo(sumLabelX, yPos).lineTo(pageWidth - margin, yPos).strokeColor(colors.primary).lineWidth(1).stroke();
-    yPos += 8;
-    doc.fontSize(10).font('Helvetica-Bold').fillColor(colors.primary);
-    doc.text('Total:', sumLabelX, yPos, { width: 100 });
-    doc.text(`₹ ${(quotation.total_amount || 0).toFixed(2)}`, sumValueX, yPos, { width: contentWidth - 410, align: 'right' });
-    yPos += 24;
-
-    // ======================== AMOUNT IN WORDS ========================
-    const amountInWords = this.numberToWords(Math.floor(quotation.total_amount || 0));
-    doc.moveTo(margin, yPos).lineTo(pageWidth - margin, yPos).strokeColor(colors.lightGray).lineWidth(0.5).stroke();
-    yPos += 8;
-    doc.fontSize(8).font('Helvetica-Bold').fillColor(colors.primary).text('Total in Words: ', margin, yPos, { continued: true })
-       .font('Helvetica').fillColor(colors.text).text(`Indian Rupees ${amountInWords} Only`);
-    yPos += 16;
-    doc.moveTo(margin, yPos).lineTo(pageWidth - margin, yPos).strokeColor(colors.lightGray).lineWidth(0.5).stroke();
-    yPos += 16;
-
-    // Payment link
-    if (quotation.payment_link) {
-      doc.fontSize(8).font('Helvetica-Bold').fillColor(colors.primary).text('Payment Link: ', margin, yPos, { continued: true })
-         .font('Helvetica').fillColor(colors.accent).text(quotation.payment_link, { link: quotation.payment_link, underline: true });
-      yPos += 18;
-    }
-
-    // ======================== FOOTER ========================
-    if (yPos > pageHeight - 120) { doc.addPage(); yPos = margin; }
-    const footerY = yPos + 10;
-    doc.fontSize(9).font('Helvetica-Bold').fillColor(colors.primary).text('Terms & Conditions', margin, footerY);
-    doc.fontSize(7.5).font('Helvetica').fillColor(colors.secondary)
-       .text(quotation.terms_conditions ||
-         '1. This quotation is valid for the period mentioned above.\n2. Prices are subject to change without prior notice after validity.\n3. All disputes subject to local jurisdiction.',
-         margin, footerY + 14, { width: 280 });
-
-    doc.fontSize(9).font('Helvetica-Bold').fillColor(colors.primary)
-       .text(`For ${companyInfo.name || 'Company'}`, margin + 300, footerY, { width: contentWidth - 300, align: 'right' });
-    doc.fontSize(8).font('Helvetica').fillColor(colors.secondary)
-       .text('Authorised Signatory', margin + 300, footerY + 60, { width: contentWidth - 300, align: 'right' });
   }
 
   static async generateInvoicePDF(invoice, companyInfo) {
@@ -882,413 +347,6 @@ class PDFService {
 
   static createSimpleInvoice(doc, invoice, companyInfo) {
     return this.renderSynxInvoice(doc, invoice, companyInfo);
-  }
-
-  static createSimpleInvoiceLegacy(doc, invoice, companyInfo) {
-    const margin = 40;
-    const pageWidth = doc.page.width;
-    const pageHeight = doc.page.height;
-    const contentWidth = pageWidth - (margin * 2);
-
-    let yPos = margin;
-
-    // Colors
-    const colors = {
-      primary: '#000000',
-      secondary: '#333333',
-      text: '#2d3748',
-      lightGray: '#e2e8f0'
-    };
-
-    // ======================== HEADER ========================
-    // Company Name
-    doc.fontSize(20)
-       .font('Helvetica-Bold')
-       .fillColor(colors.primary)
-       .text(companyInfo.name || 'COMPANY NAME', margin, yPos, { width: contentWidth });
-    yPos += 28;
-
-    // Company Info
-    doc.fontSize(8)
-       .font('Helvetica')
-       .fillColor(colors.secondary);
-
-    if (companyInfo.address) {
-      doc.text(companyInfo.address, margin, yPos, { width: contentWidth - 150 });
-      yPos += 14;
-    }
-
-    doc.text(`Phone: ${companyInfo.phone || 'N/A'} | Email: ${companyInfo.email || 'N/A'}`, margin, yPos, { width: contentWidth - 150 });
-    yPos += 12;
-
-    doc.text(`GST: ${companyInfo.gstNumber} | State: ${companyInfo.stateName}`, margin, yPos, { width: contentWidth - 150 });
-    yPos += 18;
-
-    // Invoice Number on the right
-    doc.fontSize(10)
-       .font('Helvetica-Bold')
-       .fillColor(colors.secondary)
-       .text(`Invoice #${invoice.invoiceNumber}`, margin, yPos - 44, { width: contentWidth, align: 'right' });
-
-    // Separator
-    doc.moveTo(margin, yPos)
-       .lineTo(pageWidth - margin, yPos)
-       .strokeColor(colors.lightGray)
-       .lineWidth(1)
-       .stroke();
-
-    yPos += 20;
-
-    // ======================== INVOICE DETAILS ========================
-    doc.fontSize(9)
-       .font('Helvetica-Bold')
-       .fillColor(colors.primary);
-
-    const col1 = margin;
-    const col2 = margin + 120;
-    const col3 = margin + 240;
-    const col4 = margin + contentWidth - 100;
-
-    doc.text('INVOICE DATE', col1, yPos);
-    doc.text('DUE DATE', col2, yPos);
-    doc.text('JOB REFERENCE', col3, yPos);
-
-    yPos += 14;
-
-    doc.fontSize(9)
-       .font('Helvetica')
-       .fillColor(colors.text);
-
-    doc.text(new Date(invoice.invoiceDate).toLocaleDateString('en-IN'), col1, yPos);
-    doc.text(new Date(invoice.dueDate).toLocaleDateString('en-IN'), col2, yPos);
-    doc.text((invoice.jobId?.title || 'N/A').substring(0, 30), col3, yPos, { width: 100 });
-
-    yPos += 24;
-
-    // ======================== BILL TO & SHIP TO ========================
-    doc.fontSize(9)
-       .font('Helvetica-Bold')
-       .fillColor(colors.primary)
-       .text('BILL TO', col1, yPos);
-
-    doc.text('SHIP TO', col3, yPos);
-
-    yPos += 14;
-
-    const customer = invoice.customerId;
-    doc.fontSize(9)
-       .font('Helvetica-Bold')
-       .fillColor(colors.text)
-       .text(customer.name || 'N/A', col1, yPos, { width: 150 });
-
-    doc.text(customer.name || 'N/A', col3, yPos, { width: 150 });
-
-    yPos += 14;
-
-    doc.fontSize(8)
-       .font('Helvetica')
-       .fillColor(colors.secondary);
-
-    if (customer.address) {
-      doc.text(customer.address, col1, yPos, { width: 180 });
-      const addressHeight = doc.heightOfString(customer.address, { width: 180 });
-      doc.text(customer.address || 'Same as billing', col3, yPos, { width: 180 });
-      yPos += Math.max(addressHeight, 12) + 4;
-    }
-
-    if (customer.email) {
-      doc.text(customer.email, col1, yPos, { width: 180 });
-      yPos += 12;
-    }
-
-    if (customer.phone) {
-      doc.text(customer.phone, col1, yPos, { width: 180 });
-      yPos += 12;
-    }
-
-    if (customer.gstNumber) {
-      doc.text(`GST: ${customer.gstNumber}`, col1, yPos, { width: 180 });
-      yPos += 12;
-    }
-
-    yPos += 10;
-
-    // ======================== ITEMS TABLE ========================
-    // Define table column positions for A4 page (595pt width)
-    // Margin: 40pt on each side = 515pt content width
-    // Column distribution: 20 + 250 + 50 + 40 + 50 + 35 + 70 = 515pt
-    const tableColPositions = {
-      slNo: margin,                    // 40
-      slNoWidth: 18,
-      item: margin + 18,               // 58
-      itemWidth: 85,
-      length: margin + 103,            // 143
-      lengthWidth: 35,
-      width: margin + 138,             // 178
-      widthWidth: 35,
-      qty: margin + 173,               // 213
-      qtyWidth: 38,
-      rate: margin + 211,              // 251
-      rateWidth: 52,
-      amount: margin + 263,            // 303
-      amountWidth: 52,
-      hsn: margin + 315,               // 355
-      hsnWidth: 38,
-      tax: margin + 353,               // 393
-      taxWidth: 30,
-      gst: margin + 383,               // 423
-      gstWidth: 50,
-      total: margin + 433              // 473
-    };
-
-    // Table Header
-    doc.rect(margin, yPos, contentWidth, 26)
-       .fillAndStroke('#f0f0f0', colors.lightGray);
-
-    doc.fontSize(6.5)
-       .font('Helvetica-Bold')
-       .fillColor(colors.primary);
-
-    const headerY = yPos + 8;
-    doc.text('#', tableColPositions.slNo, headerY, { width: tableColPositions.slNoWidth });
-    doc.text('Item', tableColPositions.item, headerY, { width: tableColPositions.itemWidth });
-    doc.text('Length', tableColPositions.length, headerY, { width: tableColPositions.lengthWidth, align: 'center' });
-    doc.text('Width', tableColPositions.width, headerY, { width: tableColPositions.widthWidth, align: 'center' });
-    doc.text('Qty', tableColPositions.qty, headerY, { width: tableColPositions.qtyWidth, align: 'right' });
-    doc.text('Rate', tableColPositions.rate, headerY, { width: tableColPositions.rateWidth, align: 'right' });
-    doc.text('Amount', tableColPositions.amount, headerY, { width: tableColPositions.amountWidth, align: 'right' });
-    doc.text('HSN', tableColPositions.hsn, headerY, { width: tableColPositions.hsnWidth, align: 'center' });
-    doc.text('GST%', tableColPositions.tax, headerY, { width: tableColPositions.taxWidth, align: 'right' });
-    doc.text('GST', tableColPositions.gst, headerY, { width: tableColPositions.gstWidth, align: 'right' });
-    doc.text('Total', tableColPositions.total, headerY, { width: 60, align: 'right' });
-
-    yPos += 30;
-
-    // Table Rows
-    let rowNum = 1;
-    let subtotal = 0;
-    let totalTax = 0;
-
-    doc.fontSize(7.5)
-       .font('Helvetica')
-       .fillColor(colors.text);
-
-    if (invoice.items && Array.isArray(invoice.items)) {
-      invoice.items.forEach((item) => {
-        if (yPos > pageHeight - 150) {
-          doc.addPage();
-          yPos = margin;
-        }
-
-        const qty = item.quantity || item.totalSquareFeet || 0;
-        const rate = item.unitPrice || 0;
-        const itemAmount = qty * rate;
-        const taxRate = item.gstRate || 0;
-        const gstAmount = item.gstAmount || (itemAmount * (taxRate / 100));
-        const itemTotal = item.itemTotal || (itemAmount + gstAmount);
-
-        subtotal += itemAmount;
-        totalTax += gstAmount;
-
-        // Row line
-        doc.moveTo(margin, yPos)
-           .lineTo(pageWidth - margin, yPos)
-           .strokeColor(colors.lightGray)
-           .lineWidth(0.5)
-           .stroke();
-
-        yPos += 5;
-        const rowY = yPos;
-
-        // Get item name (without dimensions - we have separate columns)
-        const itemName = item.itemName;
-        const lengthDisplay = (item.itemType === 'Square Feet' && item.length) ? item.length.toFixed(0) : '-';
-        const widthDisplay = (item.itemType === 'Square Feet' && item.width) ? item.width.toFixed(0) : '-';
-
-        doc.fontSize(7)
-           .font('Helvetica')
-           .fillColor(colors.text);
-
-        doc.text(rowNum.toString(), tableColPositions.slNo, rowY, { width: tableColPositions.slNoWidth });
-        doc.text(itemName.substring(0, 30), tableColPositions.item, rowY, { width: tableColPositions.itemWidth });
-        doc.text(lengthDisplay, tableColPositions.length, rowY, { width: tableColPositions.lengthWidth, align: 'center' });
-        doc.text(widthDisplay, tableColPositions.width, rowY, { width: tableColPositions.widthWidth, align: 'center' });
-        doc.text(qty.toFixed(2), tableColPositions.qty, rowY, { width: tableColPositions.qtyWidth, align: 'right' });
-        doc.text('₹' + rate.toFixed(2), tableColPositions.rate, rowY, { width: tableColPositions.rateWidth, align: 'right' });
-        doc.text('₹' + itemAmount.toFixed(2), tableColPositions.amount, rowY, { width: tableColPositions.amountWidth, align: 'right' });
-        doc.text(item.hsnCode || 'N/A', tableColPositions.hsn, rowY, { width: tableColPositions.hsnWidth, align: 'center' });
-        doc.text(taxRate.toFixed(0) + '%', tableColPositions.tax, rowY, { width: tableColPositions.taxWidth, align: 'right' });
-        doc.text('₹' + gstAmount.toFixed(2), tableColPositions.gst, rowY, { width: tableColPositions.gstWidth, align: 'right' });
-        doc.text('₹' + itemTotal.toFixed(2), tableColPositions.total, rowY, { width: 60, align: 'right' });
-
-        yPos += 18;
-        rowNum++;
-      });
-
-      // Design Charge Row
-      if (invoice.designCharge && invoice.designCharge.amount > 0) {
-        if (yPos > pageHeight - 150) {
-          doc.addPage();
-          yPos = margin;
-        }
-
-        doc.moveTo(margin, yPos)
-           .lineTo(pageWidth - margin, yPos)
-           .strokeColor(colors.lightGray)
-           .lineWidth(0.5)
-           .stroke();
-
-        yPos += 5;
-        const designRowY = yPos;
-
-        const designAmount = invoice.designCharge.amount || 0;
-        const designGstRate = invoice.designCharge.gstRate || 18;
-        const designTax = designAmount * (designGstRate / 100);
-        const designTotal = designAmount + designTax;
-
-        subtotal += designAmount;
-        totalTax += designTax;
-
-        doc.fontSize(7)
-           .font('Helvetica')
-           .fillColor(colors.text);
-
-        doc.text(rowNum.toString(), tableColPositions.slNo, designRowY, { width: tableColPositions.slNoWidth });
-        doc.text('Design Charge', tableColPositions.item, designRowY, { width: tableColPositions.itemWidth });
-        doc.text('-', tableColPositions.length, designRowY, { width: tableColPositions.lengthWidth, align: 'center' });
-        doc.text('-', tableColPositions.width, designRowY, { width: tableColPositions.widthWidth, align: 'center' });
-        doc.text('1', tableColPositions.qty, designRowY, { width: tableColPositions.qtyWidth, align: 'right' });
-        doc.text('₹' + designAmount.toFixed(2), tableColPositions.rate, designRowY, { width: tableColPositions.rateWidth, align: 'right' });
-        doc.text('₹' + designAmount.toFixed(2), tableColPositions.amount, designRowY, { width: tableColPositions.amountWidth, align: 'right' });
-        doc.text('', tableColPositions.hsn, designRowY, { width: tableColPositions.hsnWidth, align: 'center' });
-        doc.text(designGstRate.toFixed(0) + '%', tableColPositions.tax, designRowY, { width: tableColPositions.taxWidth, align: 'right' });
-        doc.text('₹' + designTax.toFixed(2), tableColPositions.gst, designRowY, { width: tableColPositions.gstWidth, align: 'right' });
-        doc.text('₹' + designTotal.toFixed(2), tableColPositions.total, designRowY, { width: 60, align: 'right' });
-
-        yPos += 18;
-        rowNum++;
-      }
-    }
-
-    // Table Bottom
-    doc.moveTo(margin, yPos)
-       .lineTo(pageWidth - margin, yPos)
-       .strokeColor(colors.primary)
-       .lineWidth(1.5)
-       .stroke();
-
-    yPos += 20;
-
-    // ======================== SUMMARY ========================
-    // Summary section with proper spacing
-    const summaryLabelX = margin + 310;
-    const summaryValueX = margin + 430;
-
-    doc.fontSize(8)
-       .font('Helvetica')
-       .fillColor(colors.text);
-
-    // Subtotal
-    doc.text('Subtotal:', summaryLabelX, yPos, { width: 110 });
-    doc.text(`₹ ${(invoice.subtotal || subtotal).toFixed(2)}`, summaryValueX, yPos, { width: 85, align: 'right' });
-    yPos += 14;
-
-    // Discount
-    if ((invoice.discountAmount || 0) > 0) {
-      doc.text('Discount:', summaryLabelX, yPos, { width: 110 });
-      doc.text(`₹ ${(invoice.discountAmount || 0).toFixed(2)}`, summaryValueX, yPos, { width: 85, align: 'right' });
-      yPos += 14;
-    }
-
-    // Taxable Amount
-    const taxableAmount = (invoice.subtotal || subtotal) - (invoice.discountAmount || 0);
-    doc.text('Taxable Amount:', summaryLabelX, yPos, { width: 110 });
-    doc.text(`₹ ${taxableAmount.toFixed(2)}`, summaryValueX, yPos, { width: 85, align: 'right' });
-    yPos += 14;
-
-    // Total GST
-    const totalGstAmount = invoice.totalGstAmount || totalTax;
-    doc.text('Total GST Amount:', summaryLabelX, yPos, { width: 110 });
-    doc.text(`₹ ${totalGstAmount.toFixed(2)}`, summaryValueX, yPos, { width: 85, align: 'right' });
-    yPos += 14;
-
-    doc.moveTo(summaryLabelX, yPos)
-       .lineTo(pageWidth - margin, yPos)
-       .strokeColor(colors.primary)
-       .lineWidth(1)
-       .stroke();
-
-    yPos += 12;
-
-    // Total Amount
-    doc.fontSize(9)
-       .font('Helvetica-Bold')
-       .fillColor(colors.primary);
-
-    doc.text('Total Amount:', summaryLabelX, yPos, { width: 110 });
-    doc.text(`₹ ${(invoice.totalAmount || 0).toFixed(2)}`, summaryValueX, yPos, { width: 85, align: 'right' });
-    yPos += 14;
-
-    // Amount Paid
-    doc.fontSize(8)
-       .font('Helvetica')
-       .fillColor(colors.text);
-
-    doc.text('Amount Paid:', summaryLabelX, yPos, { width: 110 });
-    doc.text(`₹ ${(invoice.amountPaid || 0).toFixed(2)}`, summaryValueX, yPos, { width: 85, align: 'right' });
-    yPos += 14;
-
-    // Balance Due
-    const balanceDue = (invoice.totalAmount || 0) - (invoice.amountPaid || 0);
-    doc.text('Balance Due:', summaryLabelX, yPos, { width: 110 });
-    doc.text(`₹ ${balanceDue.toFixed(2)}`, summaryValueX, yPos, { width: 85, align: 'right' });
-    yPos += 14;
-
-    doc.moveTo(summaryLabelX, yPos)
-       .lineTo(pageWidth - margin, yPos)
-       .strokeColor(colors.primary)
-       .lineWidth(2)
-       .stroke();
-
-    yPos += 20;
-
-    // ======================== AMOUNT IN WORDS ========================
-    doc.fontSize(8)
-       .font('Helvetica-Bold')
-       .fillColor(colors.primary);
-
-    const amountInWords = this.numberToWords(Math.floor(invoice.totalAmount || 0));
-    doc.text('Amount in Words:', margin, yPos);
-    yPos += 12;
-
-    doc.fontSize(8)
-       .font('Helvetica')
-       .fillColor(colors.text);
-
-    doc.text(amountInWords.toUpperCase() + ' RUPEES ONLY', margin, yPos, { width: contentWidth - 100 });
-    yPos += 30;
-
-    // ======================== BANK DETAILS ========================
-    if (yPos < pageHeight - 100) {
-      doc.fontSize(9)
-         .font('Helvetica-Bold')
-         .fillColor(colors.primary)
-         .text('BANK DETAILS', margin, yPos);
-
-      yPos += 14;
-
-      doc.fontSize(8)
-         .font('Helvetica')
-         .fillColor(colors.text);
-
-      doc.text(`Bank: ${companyInfo.bankName || 'N/A'}`, margin, yPos);
-      yPos += 10;
-
-      doc.text(`Account: ${companyInfo.accountNumber || 'N/A'}`, margin, yPos);
-      yPos += 10;
-
-      doc.text(`IFSC: ${companyInfo.ifscCode || 'N/A'}`, margin, yPos);
-    }
   }
 
   // ==================== SynX-style PDF helpers ====================
@@ -1340,98 +398,103 @@ class PDFService {
     return map[currency] || 'Indian Rupees';
   }
 
-  static renderSynxInvoice(doc, invoice, companyInfo) {
+  static bankLines(companyInfo) {
+    const lines = [];
+    if (companyInfo.bankName) lines.push('Bank Name: ' + companyInfo.bankName);
+    if (companyInfo.accountName) lines.push('Account Name: ' + companyInfo.accountName);
+    if (companyInfo.accountNumber) lines.push('Account Number: ' + companyInfo.accountNumber);
+    if (companyInfo.ifscCode) lines.push('IFSC Code: ' + companyInfo.ifscCode);
+    if (companyInfo.branchName) lines.push('Branch: ' + companyInfo.branchName);
+    return lines;
+  }
+
+  /**
+   * One row of the items table, from a line in either document's terms:
+   * { name, description, quantity, unit, rate, amount, length, width,
+   *   areaPerPiece, totalArea }. An area-priced line shows its size and area
+   * per piece, its total area, the pieces and the rate per sq ft / sq m.
+   */
+  static itemRow(line) {
+    const size = sizeLabel(line);
+    const areaUnit = AREA_UNITS[line.unit];
+    const showArea = !!areaUnit && (line.totalArea || 0) > 0;
+    return {
+      description: line.name || '',
+      sub: line.description || '',
+      size,
+      sizeSub: size && line.areaPerPiece > 0 ? `${areaLabel(line.areaPerPiece, line.unit)} each` : '',
+      area: showArea ? areaLabel(line.totalArea, line.unit) : '',
+      qty: showArea ? this.fmtQty(line.quantity) : this.formatQtyWithUnit(line.quantity, line.unit),
+      rate: this.fmtNum(line.rate),
+      rateSub: showArea ? `per ${areaUnit.label}` : '',
+      amount: this.fmtNum(line.amount)
+    };
+  }
+
+  /** Everything the invoice PDF shows, before any drawing. */
+  static invoiceDocument(invoice, companyInfo) {
     const customer = invoice.customerId || {};
     const currency = companyInfo.currency || 'INR';
+    const money = (n) => currency + ' ' + this.fmtNum(n);
 
     const custName = invoice.customerName || customer.name || 'N/A';
     const custLines = [];
-    const pos = invoice.customerState || customer.state;
-    if (pos) custLines.push('POS: ' + String(pos).toUpperCase());
     const custGst = invoice.customerGstNumber || customer.gstNumber;
     if (custGst) custLines.push('GSTIN: ' + custGst);
 
     const billing = this.splitAddress(invoice.customerAddress || customer.address);
-    if (invoice.customerState && !billing.some(l => l.toLowerCase().includes(String(invoice.customerState).toLowerCase()))) {
-      billing.push(invoice.customerState);
-    }
 
-    const items = [];
-    (invoice.items || []).forEach(item => {
-      // Area items are priced per sq ft/m off the measured area; everything else
-      // is priced per copy. The two live in separate columns on the document.
-      const isArea = item.itemType === 'Square Feet'
-        || (!item.quantity && (item.totalSquareFeet || 0) > 0); // older items carry no itemType
-      const area = isArea ? (item.totalSquareFeet || 0) : 0;
-      const copies = item.quantity || (area ? 1 : 0);
-      const rate = item.unitPrice || 0;
-      const amount = (area || copies) * rate;
-      const gst = item.gstAmount || (amount * ((item.gstRate || 0) / 100));
-      const total = item.itemTotal || (amount + gst);
-
-      items.push({
-        description: item.itemName || '',
-        sub: item.description || '',
-        hsn: item.hsnCode || '',
-        taxRate: item.gstRate,
-        area,
-        copies,
-        unit: area ? null : item.unit,
-        rate,
-        total
+    const items = (invoice.items || []).map((item) => {
+      // Older area lines can say "pieces" in their unit; they were priced per sq ft.
+      const isArea = item.itemType === 'Square Feet';
+      const unit = isArea && !AREA_UNITS[item.unit] ? 'sqft' : item.unit;
+      const areaPerPiece = item.areaPerPiece || (isArea && item.length > 0 && item.width > 0 ? round4(item.length * item.width) : 0);
+      return this.itemRow({
+        name: item.itemName,
+        description: item.description,
+        quantity: item.quantity,
+        unit,
+        rate: item.unitPrice || 0,
+        amount: item.totalAmount != null ? item.totalAmount : (item.quantity || 0) * (item.unitPrice || 0),
+        length: item.length,
+        width: item.width,
+        areaPerPiece,
+        totalArea: isArea ? item.totalSquareFeet || 0 : 0
       });
     });
-    if (invoice.designCharge && invoice.designCharge.amount > 0) {
-      const amt = invoice.designCharge.amount;
-      const gst = amt * ((invoice.designCharge.gstRate || 18) / 100);
-      items.push({
-        description: 'Design Charge',
-        sub: '',
-        hsn: '9983',
-        taxRate: invoice.designCharge.gstRate || 18,
-        area: 0,
-        copies: 1,
-        rate: amt,
-        total: amt + gst
-      });
-    }
 
-    const bankLines = [];
-    if (companyInfo.bankName) bankLines.push('Bank Name: ' + companyInfo.bankName);
-    if (companyInfo.accountName) bankLines.push('Account Name: ' + companyInfo.accountName);
-    if (companyInfo.accountNumber) bankLines.push('Account Number: ' + companyInfo.accountNumber);
-    if (companyInfo.ifscCode) bankLines.push('IFSC Code: ' + companyInfo.ifscCode);
-    if (companyInfo.branchName) bankLines.push('Branch: ' + companyInfo.branchName);
-
-    const taxable = invoice.taxableAmount != null ? invoice.taxableAmount : (invoice.subtotal || 0);
-    const gstTotal = invoice.totalGstAmount || 0;
+    const subtotal = invoice.subtotal != null ? invoice.subtotal : (invoice.items || []).reduce((s, i) => s + (i.totalAmount || 0), 0);
+    const designCharge = invoice.designCharge || 0;
+    const discount = invoice.discountAmount || 0;
+    // Only an invoice issued before GST was removed carries any.
+    const legacyGst = invoice.noGst ? 0 : invoice.totalGstAmount || 0;
     const total = invoice.totalAmount || 0;
     const paid = invoice.amountPaid != null ? invoice.amountPaid : (invoice.paidAmount || 0);
 
-    const summary = [{ label: 'Taxable', value: currency + ' ' + this.fmtNum(taxable) }];
-    if (gstTotal > 0) summary.push({ label: 'GST', value: currency + ' ' + this.fmtNum(gstTotal) });
-    summary.push({ label: 'Total', value: currency + ' ' + this.fmtNum(total), bold: true });
+    const summary = [{ label: 'Subtotal', value: money(subtotal) }];
+    if (designCharge > 0) summary.push({ label: 'Design Charge', value: money(designCharge) });
+    if (discount > 0) summary.push({ label: 'Discount', value: '- ' + money(discount) });
+    if (legacyGst > 0) summary.push({ label: 'GST', value: money(legacyGst) });
+    summary.push({ label: 'Total', value: money(total), bold: true });
     if (paid > 0 && paid < total) {
-      summary.push({ label: 'Paid', value: currency + ' ' + this.fmtNum(paid) });
-      summary.push({ label: 'Balance', value: currency + ' ' + this.fmtNum(total - paid) });
+      summary.push({ label: 'Paid', value: money(paid) });
+      summary.push({ label: 'Balance', value: money(total - paid) });
     }
 
-    const fullyPaid = total > 0 && paid >= total;
-
-    this.renderSynxDocument(doc, {
+    return {
       type: 'INVOICE',
       number: invoice.invoiceNumber || '',
       meta: [
         { label: 'Date', value: new Date(invoice.invoiceDate || Date.now()).toLocaleDateString('en-GB') },
         ...(invoice.dueDate ? [{ label: 'Due Date', value: new Date(invoice.dueDate).toLocaleDateString('en-GB') }] : [])
       ],
-      badge: fullyPaid ? { text: 'FULLY PAID', color: '#2e7d32' } : null,
+      badge: total > 0 && paid >= total ? { text: 'FULLY PAID', color: '#2e7d32' } : null,
       company: companyInfo,
       customer: { name: custName, lines: custLines },
       billingLines: billing,
       shippingLines: billing,
       items,
-      bankLines,
+      bankLines: this.bankLines(companyInfo),
       summary,
       amountWords: this.currencyWords(currency) + ' ' + this.numberToWords(Math.floor(total)) + ' Only',
       terms: invoice.termsAndConditions || 'Payment must be completed as per the agreed terms.',
@@ -1439,51 +502,44 @@ class PDFService {
       qrCode: companyInfo.paymentQRCode || '',
       paymentLink: invoice.paymentLink || '',
       upiId: companyInfo.upiId || ''
-    });
+    };
   }
 
-  static renderSynxQuotation(doc, quotation, companyInfo) {
+  /** Everything the quotation PDF shows, before any drawing. */
+  static quotationDocument(quotation, companyInfo) {
     const customer = quotation.customer_id || {};
     const currency = companyInfo.currency || 'INR';
+    const money = (n) => currency + ' ' + this.fmtNum(n);
 
     const custLines = [];
-    custLines.push(quotation.gst_type === 'gst'
-      ? 'GST: ' + (quotation.is_interstate ? 'Interstate (IGST)' : 'Intrastate (CGST+SGST)')
-      : 'Non-GST');
     if (customer.gstNumber) custLines.push('GSTIN: ' + customer.gstNumber);
 
-    const billing = this.splitAddress(customer.address);
-
-    // A quotation priced in sq ft/m counts its quantity as the area, so it is
-    // shown in the Area column rather than as copies.
-    const items = (quotation.items || []).map(item => {
-      const isArea = ['sqft', 'sqm'].includes(item.unit);
-      return {
-        description: item.item_name || '',
-        sub: item.description || '',
-        hsn: '',
-        taxRate: quotation.gst_type === 'gst' ? item.tax_rate : null,
-        area: isArea ? (item.quantity || 0) : 0,
-        copies: isArea ? 1 : (item.quantity || 0),
-        unit: isArea ? null : item.unit,
+    const items = (quotation.items || []).map((item) =>
+      this.itemRow({
+        name: item.item_name,
+        description: item.description,
+        quantity: item.quantity,
+        unit: item.unit,
         rate: item.unit_price || 0,
-        total: item.total_amount != null ? item.total_amount : ((item.quantity || 0) * (item.unit_price || 0))
-      };
-    });
+        // A line written with GST kept the tax inside total_amount.
+        amount: item.total_amount != null ? item.total_amount - (item.tax_amount || 0) : (item.quantity || 0) * (item.unit_price || 0),
+        length: item.length,
+        width: item.width,
+        areaPerPiece: item.area_per_piece,
+        totalArea: item.total_area
+      })
+    );
 
-    const bankLines = [];
-    if (companyInfo.bankName) bankLines.push('Bank Name: ' + companyInfo.bankName);
-    if (companyInfo.accountName) bankLines.push('Account Name: ' + companyInfo.accountName);
-    if (companyInfo.accountNumber) bankLines.push('Account Number: ' + companyInfo.accountNumber);
-    if (companyInfo.ifscCode) bankLines.push('IFSC Code: ' + companyInfo.ifscCode);
-    if (companyInfo.branchName) bankLines.push('Branch: ' + companyInfo.branchName);
-
+    const designCharge = quotation.design_charge || 0;
+    const legacyGst = quotation.gst_type === 'gst' ? quotation.tax_amount || 0 : 0;
     const total = quotation.total_amount || 0;
-    const summary = [{ label: 'Taxable', value: currency + ' ' + this.fmtNum(quotation.subtotal || 0) }];
-    if (quotation.gst_type === 'gst') summary.push({ label: 'GST', value: currency + ' ' + this.fmtNum(quotation.tax_amount || 0) });
-    summary.push({ label: 'Total', value: currency + ' ' + this.fmtNum(total), bold: true });
+    const summary = [{ label: 'Subtotal', value: money(quotation.subtotal || 0) }];
+    if (designCharge > 0) summary.push({ label: 'Design Charge', value: money(designCharge) });
+    if (legacyGst > 0) summary.push({ label: 'GST', value: money(legacyGst) });
+    summary.push({ label: 'Total', value: money(total), bold: true });
 
-    this.renderSynxDocument(doc, {
+    const billing = this.splitAddress(customer.address);
+    return {
       type: 'QUOTATION',
       number: quotation.quotationNumber || '',
       meta: [
@@ -1496,7 +552,7 @@ class PDFService {
       billingLines: billing,
       shippingLines: billing,
       items,
-      bankLines,
+      bankLines: this.bankLines(companyInfo),
       summary,
       amountWords: this.currencyWords(currency) + ' ' + this.numberToWords(Math.floor(total)) + ' Only',
       terms: quotation.terms_conditions ||
@@ -1505,7 +561,15 @@ class PDFService {
       qrCode: companyInfo.paymentQRCode || '',
       paymentLink: quotation.payment_link || '',
       upiId: companyInfo.upiId || ''
-    });
+    };
+  }
+
+  static renderSynxInvoice(doc, invoice, companyInfo) {
+    return this.renderSynxDocument(doc, this.invoiceDocument(invoice, companyInfo));
+  }
+
+  static renderSynxQuotation(doc, quotation, companyInfo) {
+    return this.renderSynxDocument(doc, this.quotationDocument(quotation, companyInfo));
   }
 
   static renderSynxDocument(doc, d) {
@@ -1585,56 +649,66 @@ class PDFService {
     y = Math.max(cy, byc, bys) + 12;
 
     // ---------- ITEMS TABLE ----------
-    const colsW = { sno: 26, desc: 159, hsn: 46, tax: 34, area: 52, copies: 58, rate: 58, total: 82 };
+    // Size and Area are filled for lines priced by area (6 × 4 ft, 24 sq ft
+    // each, 240 sq ft for 10 pieces); other lines leave them blank.
+    const colsW = { sno: 24, desc: 165, size: 70, area: 64, qty: 52, rate: 62, total: 78 };
     const cols = { sno: margin };
     cols.desc = cols.sno + colsW.sno;
-    cols.hsn = cols.desc + colsW.desc;
-    cols.tax = cols.hsn + colsW.hsn;
-    cols.area = cols.tax + colsW.tax;
-    cols.copies = cols.area + colsW.area;
-    cols.rate = cols.copies + colsW.copies;
+    cols.size = cols.desc + colsW.desc;
+    cols.area = cols.size + colsW.size;
+    cols.qty = cols.area + colsW.area;
+    cols.rate = cols.qty + colsW.qty;
     cols.total = cols.rate + colsW.rate;
 
-    const headerH = 30;
+    const headerH = 24;
     doc.rect(margin, y, contentWidth, headerH).fill(C.light);
     doc.fillColor(C.ink).fontSize(9).font('Helvetica-Bold');
-    doc.text('Sl. No.', cols.sno + 2, y + 5, { width: colsW.sno - 2 });
-    doc.text('Description of Items', cols.desc, y + 10, { width: colsW.desc });
-    doc.text('HSN', cols.hsn, y + 10, { width: colsW.hsn, align: 'center' });
-    doc.text('Tax%', cols.tax, y + 10, { width: colsW.tax, align: 'center' });
-    doc.text('Area', cols.area, y + 5, { width: colsW.area, align: 'right' });
-    doc.fontSize(7.5).text('Total SQ.FT', cols.area, y + 17, { width: colsW.area, align: 'right' });
-    doc.fontSize(9);
-    doc.text('Copies', cols.copies, y + 10, { width: colsW.copies, align: 'right' });
-    doc.text('Rate', cols.rate, y + 10, { width: colsW.rate, align: 'right' });
-    doc.text('Total Amt', cols.total, y + 10, { width: colsW.total, align: 'right' });
-    y += headerH + 4;
+    const headY = y + 8;
+    doc.text('Sl.', cols.sno + 2, headY, { width: colsW.sno - 2 });
+    doc.text('Description of Items', cols.desc, headY, { width: colsW.desc });
+    doc.text('Size (L × W)', cols.size, headY, { width: colsW.size - 4, align: 'right' });
+    doc.text('Area', cols.area, headY, { width: colsW.area - 4, align: 'right' });
+    doc.text('Qty', cols.qty, headY, { width: colsW.qty - 4, align: 'right' });
+    doc.text('Rate', cols.rate, headY, { width: colsW.rate - 4, align: 'right' });
+    doc.text('Amount', cols.total, headY, { width: colsW.total, align: 'right' });
+    y += headerH + 5;
+
+    // Draws a cell's value with an optional smaller line under it and returns
+    // the height used, so the row can be as tall as its tallest cell.
+    const cell = (x, w, main, sub, align = 'right', y0) => {
+      doc.font('Helvetica').fillColor(C.text).fontSize(9.5);
+      doc.text(main || '-', x, y0, { width: w, align });
+      let h = doc.heightOfString(main || '-', { width: w });
+      if (sub) {
+        doc.fontSize(8).font('Helvetica-Oblique').fillColor(C.muted);
+        doc.text(sub, x, y0 + h, { width: w, align });
+        h += doc.heightOfString(sub, { width: w });
+      }
+      return h;
+    };
 
     d.items.forEach((it, idx) => {
       if (y > pageHeight - 180) { doc.addPage(); y = margin; }
       const startY = y;
-      doc.font('Helvetica').fillColor(C.text).fontSize(9.5);
-      doc.text(String(idx + 1), cols.sno + 2, startY, { width: colsW.sno - 2 });
-      doc.text(it.description || '', cols.desc, startY, { width: colsW.desc });
-      const descH = doc.heightOfString(it.description || ' ', { width: colsW.desc });
-      doc.text(it.hsn || '-', cols.hsn, startY, { width: colsW.hsn, align: 'center' });
-      doc.text(it.taxRate != null ? this.fmtQty(it.taxRate) + '%' : '-', cols.tax, startY, { width: colsW.tax, align: 'center' });
-      doc.text(it.area ? this.fmtNum(it.area) : '-', cols.area, startY, { width: colsW.area, align: 'right' });
-      doc.text(it.copies ? this.formatQtyWithUnit(it.copies, it.unit) : '-', cols.copies, startY, { width: colsW.copies, align: 'right' });
-      doc.text(this.fmtNum(it.rate), cols.rate, startY, { width: colsW.rate, align: 'right' });
-      doc.text(this.fmtNum(it.total), cols.total, startY, { width: colsW.total, align: 'right' });
-
-      let subY = startY + descH;
-      if (it.sub) { doc.fontSize(8.5).font('Helvetica-Oblique').fillColor(C.muted).text(it.sub, cols.desc, subY, { width: colsW.desc }); subY = doc.y; }
-      y = Math.max(subY, startY + 15) + 6;
+      const heights = [
+        cell(cols.sno + 2, colsW.sno - 2, String(idx + 1), '', 'left', startY),
+        cell(cols.desc, colsW.desc - 6, it.description, it.sub, 'left', startY),
+        cell(cols.size, colsW.size - 4, it.size, it.sizeSub, 'right', startY),
+        cell(cols.area, colsW.area - 4, it.area, '', 'right', startY),
+        cell(cols.qty, colsW.qty - 4, it.qty, '', 'right', startY),
+        cell(cols.rate, colsW.rate - 4, it.rate, it.rateSub, 'right', startY),
+        cell(cols.total, colsW.total, it.amount, '', 'right', startY)
+      ];
+      y = startY + Math.max(15, ...heights) + 6;
       doc.moveTo(margin, y - 3).lineTo(right, y - 3).strokeColor('#eeeeee').lineWidth(0.5).stroke();
     });
 
     doc.moveTo(margin, y).lineTo(right, y).strokeColor(C.line).lineWidth(0.7).stroke();
     y += 8;
+    if (y > pageHeight - 200) { doc.addPage(); y = margin; }
 
     // ---------- BANK (left) + SUMMARY (right) ----------
-    const sumLabelX = margin + 300, sumValueX = margin + 372;
+    const sumLabelX = margin + 290, sumValueX = margin + 372;
     let bankY = y, sumY = y;
     if (d.bankLines && d.bankLines.length) {
       doc.fontSize(9.5).font('Helvetica').fillColor(C.text);
@@ -1642,7 +716,7 @@ class PDFService {
     }
     d.summary.forEach(s => {
       doc.fontSize(s.bold ? 11.5 : 10).font(s.bold ? 'Helvetica-Bold' : 'Helvetica').fillColor(s.bold ? C.ink : C.text);
-      doc.text(s.label, sumLabelX, sumY, { width: 70 });
+      doc.text(s.label, sumLabelX, sumY, { width: sumValueX - sumLabelX - 4 });
       doc.text(s.value, sumValueX, sumY, { width: right - sumValueX, align: 'right' });
       sumY += s.bold ? 18 : 16;
     });

@@ -213,37 +213,35 @@ inventorySchema.pre('save', function (next) {
 });
 
 // Static method to get low stock items
-inventorySchema.statics.getLowStockItems = function (userId) {
-  // userId parameter kept for compatibility but not used in query
+inventorySchema.statics.getLowStockItems = function (scope = {}) {
   return this.find({
+    ...scope,
     status: 'active',
     $expr: { $lte: ['$quantity', '$minStockLevel'] }
   });
 };
 
 // Static method to get critical stock items
-inventorySchema.statics.getCriticalStockItems = function (userId) {
-  // userId parameter kept for compatibility but not used in query
+inventorySchema.statics.getCriticalStockItems = function (scope = {}) {
   return this.find({
+    ...scope,
     status: 'active',
     $expr: { $lte: ['$quantity', { $divide: ['$minStockLevel', 2] }] }
   });
 };
 
 // Static method to get inventory value
-inventorySchema.statics.getTotalValue = function (userId) {
-  // userId parameter kept for compatibility but not used in query
+inventorySchema.statics.getTotalValue = function (scope = {}) {
   return this.aggregate([
-    { $match: { status: 'active' } },
+    { $match: { ...scope, status: 'active' } },
     { $group: { _id: null, totalValue: { $sum: { $multiply: ['$quantity', '$unitCost'] } } } }
   ]);
 };
 
 // Static method to get category distribution
-inventorySchema.statics.getCategoryDistribution = function (userId) {
-  // userId parameter kept for compatibility but not used in query
+inventorySchema.statics.getCategoryDistribution = function (scope = {}) {
   return this.aggregate([
-    { $match: { status: 'active' } },
+    { $match: { ...scope, status: 'active' } },
     {
       $group: {
         _id: '$category',
@@ -257,10 +255,9 @@ inventorySchema.statics.getCategoryDistribution = function (userId) {
 };
 
 // Static method to get inventory analytics
-inventorySchema.statics.getInventoryAnalytics = function (userId) {
-  // userId parameter kept for compatibility but not used in query
+inventorySchema.statics.getInventoryAnalytics = function (scope = {}) {
   return this.aggregate([
-    { $match: { status: 'active' } },
+    { $match: { ...scope, status: 'active' } },
     {
       $group: {
         _id: null,
@@ -292,9 +289,9 @@ inventorySchema.statics.getInventoryAnalytics = function (userId) {
 };
 
 // Static method to get top moving items
-inventorySchema.statics.getTopMovingItems = function (userId, limit = 10) {
-  // userId parameter kept for compatibility but not used in query
+inventorySchema.statics.getTopMovingItems = function (scope = {}, limit = 10) {
   return this.find({
+    ...scope,
     status: 'active'
   })
     .sort({ quantity: -1 })
@@ -303,14 +300,14 @@ inventorySchema.statics.getTopMovingItems = function (userId, limit = 10) {
 };
 
 // Static method to get inventory trends
-inventorySchema.statics.getInventoryTrends = function (userId, days = 30) {
-  // userId parameter kept for compatibility but not used in query
+inventorySchema.statics.getInventoryTrends = function (scope = {}, days = 30) {
   const startDate = new Date();
   startDate.setDate(startDate.getDate() - days);
 
   return this.aggregate([
     {
       $match: {
+        ...scope,
         status: 'active',
         updatedAt: { $gte: startDate }
       }
@@ -331,9 +328,8 @@ inventorySchema.statics.getInventoryTrends = function (userId, days = 30) {
 };
 
 // Static method to get category-specific analytics
-inventorySchema.statics.getCategoryAnalytics = function (userId, category) {
-  // userId parameter kept for compatibility but not used in query
-  const matchQuery = { status: 'active' };
+inventorySchema.statics.getCategoryAnalytics = function (scope = {}, category) {
+  const matchQuery = { ...scope, status: 'active' };
   if (category && category !== 'all') {
     matchQuery.category = category;
   }

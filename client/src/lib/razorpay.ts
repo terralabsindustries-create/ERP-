@@ -82,20 +82,15 @@ export const createRazorpayOrder = async (planData: {
   userId?: string;
 }): Promise<{ orderId: string; amount: number; keyId?: string }> => {
   try {
+    // The server prices the order from the plan and ties it to this login.
+    const token = localStorage.getItem('token');
     const response = await fetch(`${BASE_URL}/razorpay/create-order`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({
-        amount: planData.amount * 100, // Razorpay expects amount in paise
-        currency: planData.currency || 'INR',
-        receipt: `order_${planData.planName}_${Date.now()}`,
-        notes: {
-          planName: planData.planName,
-          userId: planData.userId || 'guest',
-        },
-      }),
+      body: JSON.stringify({ planName: planData.planName }),
     });
 
     const data = await response.json();

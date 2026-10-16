@@ -1,23 +1,48 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const { body, query } = require('express-validator');
+const { validate } = require('../middleware/validate');
 const Invoice = require('../models/Invoice');
 const Customer = require('../models/Customer');
 const Job = require('../models/Job');
 const HsnCode = require('../models/HsnCode');
 const Settings = require('../models/Settings');
+const { settingsOwnerId, businessSettings } = require('../utils/businessSettings');
 const ActivityLog = require('../models/ActivityLog');
 const PDFService = require('../services/PDFService');
 const InventoryService = require('../services/InventoryService');
 const { protect } = require('../middleware/auth');
-const { requirePermission } = require('../middleware/requirePermission');
+const { requirePermission, userCan } = require('../middleware/requirePermission');
+const { round2, parseDesignCharge, documentTotals, toInvoiceLine } = require('../utils/billing');
+
+// Invoices are issued without GST. Bills marked "No GST" before that stay
+// visible only to logins granted "Invoicing (View No GST)".
+const noGstVisibility = (user) => (userCan(user, 'Invoicing (View No GST)') ? {} : { noGst: { $ne: true } });
 const { staffScopeQuery } = require('../utils/dataScopeHelper');
 const { sendWhatsAppMessage, buildTemplateVariables } = require('../utils/metaWhatsApp');
 
 const router = express.Router();
 
+const startOfToday = () => {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
+// The views of the invoice list. "Unpaid" and "overdue" only count issued
+// invoices: a draft or a cancelled invoice is not owed.
+const ISSUED = { status: { $nin: ['draft', 'cancelled'] } };
+const INVOICE_VIEWS = {
+  draft: () => ({ status: 'draft' }),
+  unpaid: () => ({ ...ISSUED, paymentStatus: { $ne: 'paid' } }),
+  overdue: () => ({ ...ISSUED, paymentStatus: { $ne: 'paid' }, dueDate: { $lt: startOfToday() } }),
+  paid: () => ({ ...ISSUED, paymentStatus: 'paid' }),
+  cancelled: () => ({ status: 'cancelled' })
+};
+
 // Helper function to get company info from settings with validation
-async function getCompanyInfo(userId) {
-  const settings = await Settings.getOrCreateSettings(userId);
+async function getCompanyInfo(user) {
+  const settings = await businessSettings(user);
   
   // Check if company name is configured
   if (!settings.companyName || settings.companyName === 'My Company') {
@@ -71,31 +96,60 @@ async function getCompanyInfo(userId) {
   };
 }
 
-// Validation rules
+// Validation rules. The line rules apply to create, and to an edit that sends lines.
+const INVOICE_UNITS = Invoice.schema.path('items').schema.path('unit').enumValues;
+const lineValidation = [
+  body('items.*.itemName').trim().notEmpty().withMessage('Item name is required'),
+  body('items.*.quantity').isFloat({ min: 0.01 }).withMessage('Quantity must be greater than 0'),
+  body('items.*.unitPrice').isFloat({ min: 0 }).withMessage('Unit price cannot be negative'),
+  body('items.*.unit').optional({ values: 'falsy' }).isIn(INVOICE_UNITS).withMessage('Invalid unit'),
+  body('items.*.length').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Length cannot be negative'),
+  body('items.*.width').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Width cannot be negative'),
+  body('designCharge').optional({ values: 'falsy' }).custom((v) => parseDesignCharge(v) !== null).withMessage('Design charge must be an amount of 0 or more'),
+  body('discountAmount').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Discount cannot be negative')
+];
 const invoiceValidation = [
   body('customerId').notEmpty().withMessage('Customer ID is required'),
-  body('dueDate').notEmpty().withMessage('Due date is required').isISO8601().withMessage('Due date must be a valid date'),
+  // Without a due date the invoice is due 30 days after its date (set in the handler).
+  body('dueDate').optional({ values: 'falsy' }).isISO8601().withMessage('Due date must be a valid date'),
+  body('status').optional({ values: 'falsy' }).isIn(['draft', 'sent']).withMessage('A new invoice is a draft or sent'),
   body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
-  body('items.*.itemName').notEmpty().withMessage('Item name is required'),
-  body('items.*.quantity').isFloat({ min: 0.01 }).withMessage('Quantity must be greater than 0'),
-  body('items.*.unitPrice').isFloat({ min: 0 }).withMessage('Unit price cannot be negative')
+  ...lineValidation
 ];
+
+/** A reference as the client may send it: an id, or the populated object. */
+const idOf = (value) => (value && typeof value === 'object' ? value._id || value.id : value);
+
+/**
+ * Lines, design charge and discount → the stored lines and the totals the
+ * Invoice pre-save hook will arrive at. Returns { error } when the discount is
+ * more than the invoice.
+ */
+function priceInvoice(items, designChargeInput, discountInput) {
+  const lines = items.map(toInvoiceLine);
+  const totals = documentTotals(lines.map((l) => l.totalAmount), parseDesignCharge(designChargeInput) || 0, discountInput);
+  if (totals.discount > totals.gross) {
+    return { error: `Discount (${totals.discount}) cannot be more than the invoice value (${totals.gross}).` };
+  }
+  return { lines, totals };
+}
 
 // @route   GET /api/invoices
 // @desc    Get all invoices for the authenticated user
 // @access  Private
 router.get('/', protect, [
-  query('status').optional().isIn(['draft', 'sent', 'paid', 'overdue', 'cancelled', 'refunded']),
-  query('paymentStatus').optional().custom(value => {
+  query('status').optional({ values: 'falsy' }).isIn(['all', 'draft', 'sent', 'paid', 'overdue', 'cancelled', 'refunded']),
+  query('paymentStatus').optional({ values: 'falsy' }).custom(value => {
     const statuses = value.split(',');
     const valid = ['pending', 'partial', 'paid', 'overdue'];
     return statuses.every(s => valid.includes(s));
   }),
-  query('search').optional().trim(),
-  query('jobId').optional().isMongoId().withMessage('jobId must be a valid id'),
-  query('page').optional().isInt({ min: 1 }),
-  query('limit').optional().isInt({ min: 1, max: 100 }),
-  query('noGst').optional().isBoolean()
+  query('search').optional({ values: 'falsy' }).trim(),
+  query('jobId').optional({ values: 'falsy' }).isMongoId().withMessage('jobId must be a valid id'),
+  query('customerId').optional({ values: 'falsy' }).isMongoId().withMessage('customerId must be a valid id'),
+  query('page').optional({ values: 'falsy' }).isInt({ min: 1 }),
+  query('limit').optional({ values: 'falsy' }).isInt({ min: 1, max: 100 }),
+  query('view').optional({ values: 'falsy' }).isIn(Object.keys(INVOICE_VIEWS))
 ], async (req, res) => {
   try {
     const {
@@ -106,28 +160,12 @@ router.get('/', protect, [
       page = 1,
       limit = 10,
       sortBy = 'invoiceDate',
-      sortOrder = 'desc',
-      noGst
+      sortOrder = 'desc'
     } = req.query;
 
     // Build query - staff see only the invoices they created; the admin and
     // view-all logins see every invoice in the dataScope
-    const queryConditions = [staffScopeQuery(req.user)];
-
-    // Apply noGst filter if specified
-    // NOTE: Existing invoices may not have noGst field set (undefined)
-    // When noGst=false, we want to show invoices that either have noGst: false OR don't have noGst field at all
-    if (noGst !== undefined && noGst !== null) {
-      const noGstValue = noGst === 'true' || noGst === true;
-      if (noGstValue) {
-        // Looking for invoices explicitly marked as no-GST
-        queryConditions.push({ noGst: true });
-      } else {
-        // Looking for invoices with GST (noGst is false or not set)
-        // Use $ne (not equal) to match both false and undefined
-        queryConditions.push({ noGst: { $ne: true } });
-      }
-    }
+    const queryConditions = [staffScopeQuery(req.user), noGstVisibility(req.user)];
 
     // Used to find a job's invoices, e.g. when opening one for editing from
     // the job list.
@@ -137,8 +175,17 @@ router.get('/', protect, [
       queryConditions.push({ jobId });
     }
 
+    // Used by Record Payment to list one customer's unpaid invoices.
+    if (req.query.customerId && /^[0-9a-fA-F]{24}$/.test(req.query.customerId)) {
+      queryConditions.push({ customerId: req.query.customerId });
+    }
+
     if (status && status !== 'all') {
       queryConditions.push({ status: status });
+    }
+
+    if (req.query.view && INVOICE_VIEWS[req.query.view]) {
+      queryConditions.push(INVOICE_VIEWS[req.query.view]());
     }
 
     if (paymentStatus && paymentStatus !== 'all') {
@@ -221,7 +268,7 @@ router.get('/', protect, [
 // @access  Private
 router.get('/:id', protect, async (req, res) => {
   try {
-    const findQuery = { _id: req.params.id, ...staffScopeQuery(req.user) };
+    const findQuery = { _id: req.params.id, ...staffScopeQuery(req.user), ...noGstVisibility(req.user) };
 
     const invoice = await Invoice.findOne(findQuery)
       .populate('customerId', 'name email phone gstNumber address')
@@ -253,19 +300,26 @@ router.get('/:id', protect, async (req, res) => {
 // @route   POST /api/invoices
 // @desc    Create new invoice
 // @access  Private
-router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoiceValidation, async (req, res) => {
+router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoiceValidation, validate, async (req, res) => {
   try {
     // Set default due date if not provided (30 days from invoice date)
     if (!req.body.dueDate || req.body.dueDate === '') {
-      const invoiceDate = new Date(req.body.invoiceDate);
-      const defaultDueDate = new Date(invoiceDate);
+      const defaultDueDate = req.body.invoiceDate ? new Date(req.body.invoiceDate) : new Date();
       defaultDueDate.setDate(defaultDueDate.getDate() + 30);
       req.body.dueDate = defaultDueDate.toISOString().split('T')[0];
     }
 
-    // First, check stock availability for all items
-    const stockCheck = await InventoryService.checkStockAvailability(req.body.items, req.user._id);
-    console.log('stockCheck',stockCheck)
+    // Every money figure is recomputed here from quantity, dimensions and unit
+    // price. The client sends its own totals for display, but they are never
+    // trusted, and no GST is charged whatever rate a line arrives with.
+    const priced = priceInvoice(req.body.items, req.body.designCharge, req.body.discountAmount);
+    if (priced.error) {
+      return res.status(400).json({ status: 'error', message: priced.error });
+    }
+    const { lines, totals } = priced;
+
+    // Check stock for the priced lines (an area line needs its total area).
+    const stockCheck = await InventoryService.checkStockAvailability(lines, req.user);
     if (!stockCheck.available) {
       return res.status(400).json({
         status: 'error',
@@ -274,164 +328,54 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
         stockCheck: stockCheck.items
       });
     }
-    
-    // Generate invoice number
-    const invoiceNumber = await Invoice.generateInvoiceNumber(req.user._id, req.user.dataScope);
-    console.log('invoiceNumber',invoiceNumber)
-
-    // Extract customer ID from object or string
-    let customerId = req.body.customerId;
-    if (typeof customerId === 'object' && customerId._id) {
-      customerId = customerId._id;
-    } else if (typeof customerId === 'object' && customerId.id) {
-      customerId = customerId.id;
-    }
 
     // Build customer query with dataScope or userId
+    const customerId = idOf(req.body.customerId);
     const customerQuery = req.user.dataScope
       ? { _id: customerId, dataScope: req.user.dataScope }
       : { _id: customerId, userId: req.user._id };
 
-    // Get customer details
     const customer = await Customer.findOne(customerQuery);
-    console.log('customer11111',customer)
     if (!customer) {
       return res.status(404).json({
         status: 'error',
         message: 'Customer not found'
       });
     }
-    
-    // Every money figure is recomputed here from quantity and unit price. The
-    // client sends its own totals for display, but they are never trusted.
-    const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
-    const isNoGst = req.body.noGst === true;
-    const isInterState = req.body.isInterState === true;
 
-    const processedItems = [];
-    let subtotal = 0;
+    const invoiceNumber = await Invoice.generateInvoiceNumber(req.user._id, req.user.dataScope);
 
-    for (const item of req.body.items) {
-      // Skip design charge items - they are processed separately
-      if (item.isDesignCharge) {
-        continue;
-      }
-
-      // Calculate total amount based on itemType
-      // For Square Feet items: use totalSquareFeet × unitPrice
-      // For Numbers items: use quantity × unitPrice
-      const itemQuantity = (item.itemType === 'Square Feet')
-        ? (item.totalSquareFeet || 0)
-        : (item.quantity || 0);
-
-      const totalAmount = round2(itemQuantity * item.unitPrice);
-
-      processedItems.push({
-        ...item,
-        itemQuantity,  // Store the actual quantity used for calculation
-        totalAmount,
-        gstRate: isNoGst ? 0 : (item.gstRate || 0),
-        // Tax is filled in below, once the discount has been apportioned — GST
-        // is charged on the discounted taxable value, not the list price.
-        gstAmount: 0,
-        cgstAmount: 0,
-        sgstAmount: 0,
-        igstAmount: 0,
-        itemTotal: totalAmount
-      });
-
-      subtotal = round2(subtotal + totalAmount);
-    }
-
-    // Process design charge if provided. Carries its own GST rate (SAC 9983)
-    // so a taxable invoice charges tax on the service too.
-    let designChargeSubtotal = 0;
-
-    if (req.body.designCharge && req.body.designCharge.amount) {
-      designChargeSubtotal = round2(req.body.designCharge.amount || 0);
-
-      // Add design charge to processed items for consistency
-      processedItems.push({
-        itemName: 'Design Charge',
-        description: req.body.designCharge.description || 'Design Charge',
-        quantity: 1,
-        unitPrice: designChargeSubtotal,
-        hsnCode: '9983',
-        hsnDescription: 'Service - Design & Consultation',
-        gstRate: isNoGst ? 0 : (req.body.designCharge.gstRate || 0),
-        totalAmount: designChargeSubtotal,
-        gstAmount: 0,
-        cgstAmount: 0,
-        sgstAmount: 0,
-        igstAmount: 0,
-        itemTotal: designChargeSubtotal,
-        isDesignCharge: true
-      });
-    }
-
-    const grandSubtotal = round2(subtotal + designChargeSubtotal);
-    const discountAmount = round2(req.body.discountAmount || 0);
-
-    if (discountAmount > grandSubtotal) {
-      return res.status(400).json({
-        status: 'error',
-        message: `Discount (${discountAmount}) cannot be more than the invoice value (${grandSubtotal}).`
-      });
-    }
-
-    // Apportion the discount across items by value, then charge GST on what is
-    // left. Taxing the list price would leave the printed taxable value and the
-    // tax on the invoice disagreeing with each other.
-    let totalGstAmount = 0;
-
-    if (!isNoGst) {
-      processedItems.forEach((item) => {
-        const share = grandSubtotal > 0
-          ? round2(discountAmount * (item.totalAmount / grandSubtotal))
-          : 0;
-        const taxableValue = round2(item.totalAmount - share);
-        const gstAmount = round2(taxableValue * (item.gstRate || 0) / 100);
-
-        // Split so the halves always add back to the exact total — halving an
-        // odd number of paise and rounding twice would lose one.
-        const half = round2(gstAmount / 2);
-
-        item.gstAmount = gstAmount;
-        item.cgstAmount = isInterState ? 0 : half;
-        item.sgstAmount = isInterState ? 0 : round2(gstAmount - half);
-        item.igstAmount = isInterState ? gstAmount : 0;
-        item.itemTotal = round2(item.totalAmount + gstAmount);
-
-        totalGstAmount = round2(totalGstAmount + gstAmount);
-      });
-    }
-
-    const taxableAmount = round2(grandSubtotal - discountAmount);
-    const totalAmount = round2(taxableAmount + totalGstAmount);
-
+    // Only these fields are taken from the request; everything else is derived.
     const invoiceData = {
-      ...req.body,
       invoiceNumber,
+      customerId: customer._id,
       customerName: customer.name,
       customerGstNumber: customer.gstNumber,
       customerAddress: customer.address,
-      items: processedItems,
-      discountAmount,
-      subtotal: grandSubtotal,
-      taxableAmount,
-      totalGstAmount,
-      totalAmount,
-      noGst: isNoGst,
-      isInterState,
+      invoiceDate: req.body.invoiceDate || new Date(),
+      dueDate: req.body.dueDate,
+      items: lines,
+      designCharge: totals.designCharge,
+      discountAmount: totals.discount,
+      subtotal: totals.subtotal,
+      taxableAmount: totals.total,
+      totalGstAmount: 0,
+      totalAmount: totals.total,
+      noGst: false,
+      isInterState: false,
+      paymentTerms: req.body.paymentTerms || undefined,
+      notes: req.body.notes,
+      // Older job dialogs send terms_conditions.
+      termsAndConditions: req.body.termsAndConditions ?? req.body.terms_conditions,
       userId: req.user._id
     };
+    if (req.body.status) invoiceData.status = req.body.status;
 
     // Job is optional — the client sends "" rather than omitting the field
     // when none is picked, which fails Mongoose's ObjectId cast on create.
-    // The update route already guards against this; create never did.
-    if (!invoiceData.jobId) {
-      delete invoiceData.jobId;
-    }
+    const jobId = idOf(req.body.jobId);
+    if (jobId && mongoose.isValidObjectId(jobId)) invoiceData.jobId = jobId;
+    if (req.body.jobTitle) invoiceData.jobTitle = req.body.jobTitle;
 
     // Add dataScope if available
     if (req.user.dataScope) {
@@ -442,10 +386,10 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
     // Deduct inventory for all items
     try {
       const inventoryResult = await InventoryService.deductInventoryForInvoice(
-        req.body.items,
+        lines,
         invoice._id,
         invoiceNumber,
-        req.user._id
+        req.user
       );
 
       if (!inventoryResult.success) {
@@ -501,68 +445,93 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
 // @route   PUT /api/invoices/:id
 // @desc    Update invoice
 // @access  Private
-router.put('/:id', protect, requirePermission('Invoicing: Create & Edit'), async (req, res) => {
+// Lines, design charge and discount are priced again on the server, exactly as
+// on create; totals sent by the client are ignored. An invoice issued with GST
+// is re-priced without it once its lines are saved through here.
+router.put('/:id', protect, requirePermission('Invoicing: Create & Edit'), [
+  body('items').optional().isArray({ min: 1 }).withMessage('At least one item is required'),
+  body('invoiceDate').optional({ values: 'falsy' }).isISO8601().withMessage('Invoice date must be a valid date'),
+  body('dueDate').optional({ values: 'falsy' }).isISO8601().withMessage('Due date must be a valid date'),
+  ...lineValidation
+], validate, async (req, res) => {
   try {
     // Check if invoice exists and belongs to user's dataScope
     const findQuery = { _id: req.params.id, ...staffScopeQuery(req.user) };
 
-    const existingInvoice = await Invoice.findOne(findQuery);
+    const invoice = mongoose.isValidObjectId(req.params.id) ? await Invoice.findOne(findQuery) : null;
 
-    if (!existingInvoice) {
+    if (!invoice) {
       return res.status(404).json({
         status: 'error',
         message: 'Invoice not found'
       });
     }
 
-    // Allow updates even for paid or cancelled invoices from the edit dialog
-    // Comment out the status check to allow full editing
-    // if (existingInvoice.status === 'paid' || existingInvoice.status === 'cancelled') {
-    //   return res.status(400).json({
-    //     status: 'error',
-    //     message: 'Cannot update paid or cancelled invoice'
-    //   });
-    // }
-
-    // Accept the calculated values directly from frontend
-    // The frontend already does all the calculations, so we just update with the provided data
-    const updateData = {
-      ...req.body,
-      // Ensure calculated fields are included
-      items: req.body.items,
-      subtotal: req.body.subtotal,
-      taxableAmount: req.body.taxableAmount,
-      totalGstAmount: req.body.totalGstAmount,
-      totalAmount: req.body.totalAmount,
-      balanceDue: req.body.balanceDue
-    };
-
-    // Strip fields that must not be overwritten / are virtuals
-    delete updateData._id;
-    delete updateData.userId;
-    delete updateData.dataScope;
-    delete updateData.invoiceNumber;
-    delete updateData.createdAt;
-    delete updateData.updatedAt;
-    delete updateData.balanceDue; // virtual alias of balanceAmount, not a real path
-
-    // ObjectId fields cannot be cast from empty strings — drop/normalize them
-    if (!updateData.customerId) {
-      // keep the existing customer rather than clearing a required reference
-      delete updateData.customerId;
-    }
-    if (!updateData.jobId) {
-      // empty string -> unset the optional job reference
-      updateData.jobId = null;
+    const pricingChanged = req.body.items !== undefined || req.body.designCharge !== undefined || req.body.discountAmount !== undefined;
+    if (pricingChanged) {
+      const items = req.body.items !== undefined ? req.body.items : invoice.items.map((i) => i.toObject());
+      const designCharge = req.body.designCharge !== undefined ? req.body.designCharge : invoice.designCharge;
+      const discount = req.body.discountAmount !== undefined ? req.body.discountAmount : invoice.discountAmount;
+      const priced = priceInvoice(items, designCharge, discount);
+      if (priced.error) {
+        return res.status(400).json({ status: 'error', message: priced.error });
+      }
+      if (priced.totals.total + 0.001 < (invoice.paidAmount || 0)) {
+        return res.status(400).json({
+          status: 'error',
+          message: `The new total (₹${priced.totals.total}) is less than the ₹${invoice.paidAmount} already paid on this invoice.`
+        });
+      }
+      invoice.items = priced.lines;
+      invoice.designCharge = priced.totals.designCharge;
+      invoice.discountAmount = priced.totals.discount;
+      // Lines saved here carry no GST. Clearing the header figures too means an
+      // invoice issued with GST re-totals without it (the pre-save hook rolls
+      // tax up from the lines, which now have none).
+      invoice.isInterState = false;
     }
 
-    // Update invoice with the data from frontend (which has already calculated everything)
-    const invoice = await Invoice.findOneAndUpdate(
-      findQuery,
-      updateData,
-      { new: true, runValidators: false } // Disable validators to allow direct updates
-    ).populate('customerId', 'name email phone gstNumber')
-     .populate('jobId', 'title status');
+    const customerId = idOf(req.body.customerId);
+    if (customerId && String(customerId) !== String(invoice.customerId)) {
+      const customer = mongoose.isValidObjectId(customerId)
+        ? await Customer.findOne(req.user.dataScope ? { _id: customerId, dataScope: req.user.dataScope } : { _id: customerId, userId: req.user._id })
+        : null;
+      if (!customer) {
+        return res.status(404).json({ status: 'error', message: 'Customer not found' });
+      }
+      invoice.customerId = customer._id;
+      invoice.customerName = customer.name;
+      invoice.customerGstNumber = customer.gstNumber;
+      invoice.customerAddress = customer.address;
+    }
+
+    if (req.body.jobId !== undefined) {
+      const jobId = idOf(req.body.jobId);
+      // "" or "no-job" unsets the optional job reference.
+      invoice.jobId = jobId && mongoose.isValidObjectId(jobId) ? jobId : null;
+    }
+    if (req.body.invoiceDate) invoice.invoiceDate = req.body.invoiceDate;
+    if (req.body.dueDate) invoice.dueDate = req.body.dueDate;
+    for (const field of ['notes', 'termsAndConditions', 'paymentTerms']) {
+      if (req.body[field] !== undefined) invoice[field] = req.body[field];
+    }
+
+    // A changed total moves the payment state with it: a partly paid invoice
+    // whose total came down to what was paid is now settled, and a settled one
+    // whose total went up is partly paid again.
+    if (pricingChanged && (invoice.paidAmount || 0) > 0) {
+      const total = documentTotals(invoice.items.map((i) => i.totalAmount), invoice.designCharge, invoice.discountAmount).total;
+      const settled = invoice.paidAmount + 0.001 >= total;
+      invoice.paymentStatus = settled ? 'paid' : 'partial';
+      if (settled && invoice.status !== 'cancelled') invoice.status = 'paid';
+      else if (!settled && invoice.status === 'paid') invoice.status = 'sent';
+    }
+
+    await invoice.save();
+    await invoice.populate([
+      { path: 'customerId', select: 'name email phone gstNumber' },
+      { path: 'jobId', select: 'title status' }
+    ]);
 
     ActivityLog.logActivity({
       action: 'Invoice Updated',
@@ -588,11 +557,13 @@ router.put('/:id', protect, requirePermission('Invoicing: Create & Edit'), async
     });
 
   } catch (error) {
+    if (error.name === 'ValidationError' || error.name === 'CastError') {
+      return res.status(400).json({ status: 'error', message: error.message });
+    }
     console.error('Update invoice error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Server error while updating invoice',
-      error: error.message
+      message: 'Server error while updating invoice'
     });
   }
 });
@@ -649,7 +620,8 @@ router.delete('/:id', protect, requirePermission('Invoicing: Delete'), async (re
 // @access  Private
 router.get('/stats/summary', protect, async (req, res) => {
   try {
-    const stats = await Invoice.getInvoiceStats(staffScopeQuery(req.user));
+    // No GST totals only for logins that may see No GST invoices.
+    const stats = await Invoice.getInvoiceStats({ $and: [staffScopeQuery(req.user), noGstVisibility(req.user)] });
     
     res.status(200).json({
       status: 'success',
@@ -670,6 +642,47 @@ router.get('/stats/summary', protect, async (req, res) => {
       status: 'error',
       message: 'Server error while fetching invoice statistics'
     });
+  }
+});
+
+// @route   GET /api/invoices/stats/views
+// @desc    Counts and amounts behind the invoice list's views
+// @access  Private (Invoicing)
+router.get('/stats/views', protect, async (req, res) => {
+  try {
+    const base = { $and: [staffScopeQuery(req.user), noGstVisibility(req.user)] };
+    const monthStart = new Date();
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
+    const today = startOfToday();
+    const issued = { $not: { $in: ['$status', ['draft', 'cancelled']] } };
+    const owed = { $and: [issued, { $ne: ['$paymentStatus', 'paid'] }] };
+    const [row] = await Invoice.aggregate([
+      { $match: base },
+      {
+        $group: {
+          _id: null,
+          all: { $sum: 1 },
+          draft: { $sum: { $cond: [{ $eq: ['$status', 'draft'] }, 1, 0] } },
+          cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
+          paid: { $sum: { $cond: [{ $and: [issued, { $eq: ['$paymentStatus', 'paid'] }] }, 1, 0] } },
+          unpaid: { $sum: { $cond: [owed, 1, 0] } },
+          overdue: { $sum: { $cond: [{ $and: [owed, { $lt: ['$dueDate', today] }] }, 1, 0] } },
+          invoiced: { $sum: { $cond: [issued, '$totalAmount', 0] } },
+          outstanding: { $sum: { $cond: [owed, { $ifNull: ['$balanceAmount', 0] }, 0] } },
+          overdueAmount: { $sum: { $cond: [{ $and: [owed, { $lt: ['$dueDate', today] }] }, { $ifNull: ['$balanceAmount', 0] }, 0] } },
+          collected: { $sum: { $cond: [issued, { $ifNull: ['$paidAmount', 0] }, 0] } },
+          invoicedThisMonth: { $sum: { $cond: [{ $and: [issued, { $gte: ['$invoiceDate', monthStart] }] }, '$totalAmount', 0] } },
+          countThisMonth: { $sum: { $cond: [{ $and: [issued, { $gte: ['$invoiceDate', monthStart] }] }, 1, 0] } }
+        }
+      }
+    ]);
+    const empty = { all: 0, draft: 0, cancelled: 0, paid: 0, unpaid: 0, overdue: 0, invoiced: 0, outstanding: 0, overdueAmount: 0, collected: 0, invoicedThisMonth: 0, countThisMonth: 0 };
+    const { _id, ...stats } = row || {};
+    res.json({ status: 'success', data: { stats: { ...empty, ...stats } } });
+  } catch (error) {
+    console.error('Invoice view stats error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error while fetching invoice statistics' });
   }
 });
 
@@ -720,7 +733,7 @@ router.patch('/:id/cancel', protect, async (req, res) => {
     try {
       const restoreResult = await InventoryService.restoreInventoryForCancelledInvoice(
         invoice._id,
-        req.user._id
+        req.user
       );
       
       res.status(200).json({
@@ -760,8 +773,8 @@ router.patch('/:id/cancel', protect, async (req, res) => {
 // @access  Private
 router.patch('/:id/payment-status', protect, requirePermission('Invoicing: Record Payment'), [
   body('paymentStatus').isIn(['pending', 'partial', 'paid', 'overdue']).withMessage('Invalid payment status'),
-  body('amountPaid').optional().isFloat({ min: 0 }).withMessage('Amount paid must be greater than or equal to 0')
-], async (req, res) => {
+  body('amountPaid').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Amount paid must be greater than or equal to 0')
+], validate, async (req, res) => {
   try {
     const { paymentStatus, amountPaid } = req.body;
 
@@ -858,74 +871,14 @@ router.patch('/:id/payment-status', protect, requirePermission('Invoicing: Recor
   }
 });
 
-// @route   PATCH /api/invoices/:id/no-gst
-// @desc    Toggle noGst flag on an invoice
-// @access  Private
-router.patch('/:id/no-gst', protect, [
-  body('noGst').isBoolean().withMessage('noGst must be a boolean value')
-], async (req, res) => {
-  try {
-    const { noGst } = req.body;
-
-    const query = { _id: req.params.id, ...staffScopeQuery(req.user) };
-
-    const invoice = await Invoice.findOne(query);
-
-    if (!invoice) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Invoice not found'
-      });
-    }
-
-    invoice.noGst = noGst;
-    await invoice.save();
-
-    ActivityLog.logActivity({
-      action: 'Invoice No GST Flag Updated',
-      description: `Invoice ${invoice.invoiceNumber} was ${noGst ? 'marked as' : 'unmarked from'} No GST`,
-      entityType: 'invoice',
-      entityId: invoice._id,
-      entityName: invoice.invoiceNumber,
-      performedBy: req.user._id,
-      performedByName: req.user.fullName,
-      actionType: 'update',
-      changes: { fields: ['noGst'] },
-      severity: 'low',
-      userId: req.user._id,
-      dataScope: req.user.dataScope
-    }).catch(err => console.error('Activity log (invoice noGst update) failed:', err.message));
-
-    // Populate and return updated invoice
-    const updatedInvoice = await Invoice.findById(req.params.id)
-      .populate('customerId', 'name email phone gstNumber')
-      .populate('jobId', 'title status');
-
-    res.status(200).json({
-      status: 'success',
-      message: `Invoice ${noGst ? 'marked as' : 'unmarked from'} No GST`,
-      data: {
-        invoice: updatedInvoice
-      }
-    });
-  } catch (error) {
-    console.error('Update noGst error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while updating noGst flag'
-    });
-  }
-});
-
 // @route   GET /api/invoices/:id/movements
 // @desc    Get inventory movements for an invoice
 // @access  Private
 router.get('/:id/movements', protect, async (req, res) => {
   try {
-    const invoice = await Invoice.findOne({
-      _id: req.params.id,
-      userId: req.user._id
-    });
+    const invoice = mongoose.isValidObjectId(req.params.id)
+      ? await Invoice.findOne({ _id: req.params.id, ...staffScopeQuery(req.user), ...noGstVisibility(req.user) })
+      : null;
     
     if (!invoice) {
       return res.status(404).json({
@@ -934,7 +887,7 @@ router.get('/:id/movements', protect, async (req, res) => {
       });
     }
     
-    const movements = await InventoryService.getMovementHistory(req.user._id, {
+    const movements = await InventoryService.getMovementHistory(req.user, {
       referenceType: 'invoice',
       referenceId: req.params.id
     });
@@ -983,7 +936,7 @@ router.get('/:id/pdf', protect, async (req, res) => {
     console.log('✅ Invoice found:', invoice.invoiceNumber);
 
     // Get company information from settings
-    const companyInfoResult = await getCompanyInfo(req.user._id);
+    const companyInfoResult = await getCompanyInfo(req.user);
     
     if (!companyInfoResult.isConfigured) {
       return res.status(400).json({
@@ -1027,8 +980,8 @@ router.get('/:id/pdf', protect, async (req, res) => {
 // @access  Private
 router.post('/:id/send-email', protect, requirePermission('Invoicing: Send Email'), [
   body('email').isEmail().withMessage('Valid email is required'),
-  body('message').optional().isString().trim()
-], async (req, res) => {
+  body('message').optional({ values: 'falsy' }).isString().trim()
+], validate, async (req, res) => {
   try {
     const invoiceId = req.params.id;
     const { email, message } = req.body;
@@ -1047,7 +1000,7 @@ router.post('/:id/send-email', protect, requirePermission('Invoicing: Send Email
     }
 
     // Get company information from settings
-    const companyInfoResult = await getCompanyInfo(req.user._id);
+    const companyInfoResult = await getCompanyInfo(req.user);
     
     if (!companyInfoResult.isConfigured) {
       return res.status(400).json({
@@ -1107,7 +1060,7 @@ router.post('/:id/send-whatsapp', protect, requirePermission('WhatsApp: Send Mes
   body('metaTemplateName').notEmpty().withMessage('A WhatsApp template is required'),
   body('metaTemplateLanguage').optional({ nullable: true }).isString(),
   body('templateVariableMapping').optional({ nullable: true }).isObject()
-], async (req, res) => {
+], validate, async (req, res) => {
   try {
     const invoiceId = req.params.id;
     const { phone, metaTemplateName, metaTemplateLanguage, templateVariableMapping } = req.body;
@@ -1126,7 +1079,7 @@ router.post('/:id/send-whatsapp', protect, requirePermission('WhatsApp: Send Mes
     }
 
     // Get company information from settings
-    const companyInfoResult = await getCompanyInfo(req.user._id);
+    const companyInfoResult = await getCompanyInfo(req.user);
 
     if (!companyInfoResult.isConfigured) {
       return res.status(400).json({
@@ -1136,7 +1089,7 @@ router.post('/:id/send-whatsapp', protect, requirePermission('WhatsApp: Send Mes
       });
     }
 
-    const settings = await Settings.getOrCreateSettings(req.user._id);
+    const settings = await businessSettings(req.user);
     const waIntegration = settings.whatsappIntegration;
 
     if (!waIntegration?.enabled || !waIntegration?.phoneNumberId || !waIntegration?.accessToken) {
@@ -1264,7 +1217,7 @@ router.get('/:id/print-data', protect, async (req, res) => {
     }
 
     // Get company information from settings
-    const companyInfoResult = await getCompanyInfo(req.user._id);
+    const companyInfoResult = await getCompanyInfo(req.user);
     
     if (!companyInfoResult.isConfigured) {
       return res.status(400).json({

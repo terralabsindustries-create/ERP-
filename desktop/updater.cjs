@@ -50,7 +50,7 @@ function checkForUpdates({ parentWindow, silent = true, log = console.log } = {}
         buttons: ['Download', 'Later'],
         defaultId: 0,
         title: 'Update available',
-        message: `SerpY ${info.version} is available.`,
+        message: `Terralabs ERP ${info.version} is available.`,
         detail: 'This build is not code-signed, so it cannot update itself. ' +
                 'Download the new version and drag it over the old one.'
       });
@@ -63,7 +63,7 @@ function checkForUpdates({ parentWindow, silent = true, log = console.log } = {}
       buttons: ['Download now', 'Later'],
       defaultId: 0,
       title: 'Update available',
-      message: `SerpY ${info.version} is available.`,
+      message: `Terralabs ERP ${info.version} is available.`,
       detail: 'It downloads in the background — you can carry on working, and ' +
               'install it whenever you are ready.'
     });
@@ -77,7 +77,7 @@ function checkForUpdates({ parentWindow, silent = true, log = console.log } = {}
       buttons: ['Restart now', 'Install on next launch'],
       defaultId: 1,
       title: 'Update ready',
-      message: `SerpY ${info.version} is ready to install.`,
+      message: `Terralabs ERP ${info.version} is ready to install.`,
       detail: 'Restarting takes a few seconds. Finish anything in progress first — ' +
               'the update will also install by itself next time you close the app.'
     });
@@ -87,7 +87,7 @@ function checkForUpdates({ parentWindow, silent = true, log = console.log } = {}
   autoUpdater.on('update-not-available', () => {
     log('[updater] already on the latest version');
     if (!silent) {
-      show({ type: 'info', title: 'No update', message: 'SerpY is up to date.' });
+      show({ type: 'info', title: 'No update', message: 'Terralabs ERP is up to date.' });
     }
   });
 

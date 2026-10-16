@@ -141,7 +141,7 @@ export function CreateVendorDialog({ open, onOpenChange, onVendorCreated, vendor
       console.error(`Error ${isEditMode ? 'updating' : 'creating'} vendor:`, error);
       toast({
         title: "Error",
-        description: error.response?.data?.message || `Failed to ${isEditMode ? 'update' : 'create'} vendor`,
+        description: error?.message || `Failed to ${isEditMode ? 'update' : 'create'} vendor`,
         variant: "destructive",
       });
     } finally {

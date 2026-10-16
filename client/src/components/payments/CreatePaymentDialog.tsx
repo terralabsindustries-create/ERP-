@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -6,191 +6,230 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import apiClient from "@/lib/apiClient";
+import { formatINR } from "@/lib/printWorkflow";
+import { METHOD_LABELS, type PaymentMethod } from "./paymentMeta";
+import { localDate } from "@/lib/format";
 
 interface CreatePaymentDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onPaymentCreated: () => void;
+  onPaymentCreated?: () => void;
 }
 
+interface CustomerOption {
+  _id: string;
+  id?: string;
+  name: string;
+  company?: string;
+}
+
+interface InvoiceOption {
+  _id: string;
+  invoiceNumber: string;
+  totalAmount: number;
+  balanceAmount: number;
+  dueDate?: string;
+}
+
+const NO_INVOICE = "none";
+
+const emptyForm = () => ({
+  customerId: "",
+  invoiceId: NO_INVOICE,
+  amount: "",
+  paymentMethod: "cash" as PaymentMethod,
+  status: "completed" as "completed" | "pending",
+  paymentDate: localDate(),
+  referenceNumber: "",
+  notes: ""
+});
+
+/** Record money received from a customer, optionally against one of their unpaid invoices. */
 export function CreatePaymentDialog({ open, onOpenChange, onPaymentCreated }: CreatePaymentDialogProps) {
-  const [formData, setFormData] = useState({
-    invoiceId: "",
-    customerId: "",
-    amount: "",
-    paymentMethod: "cash" as 'cash' | 'bank' | 'cheque' | 'card',
-    date: new Date().toISOString().split('T')[0],
-    status: "completed" as 'pending' | 'completed' | 'failed' | 'refunded',
-    reference: "",
-    notes: ""
-  });
-  const [loading, setLoading] = useState(false);
+  const [form, setForm] = useState(emptyForm);
+  const [customers, setCustomers] = useState<CustomerOption[]>([]);
+  const [invoices, setInvoices] = useState<InvoiceOption[]>([]);
+  const [loadingInvoices, setLoadingInvoices] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
+
+  useEffect(() => {
+    if (!open) return;
+    setForm(emptyForm());
+    setError(null);
+    apiClient
+      .getCustomer({ limit: 100 })
+      .then((res: { customers?: CustomerOption[] }) => setCustomers(res?.customers || []))
+      .catch(() => setCustomers([]));
+  }, [open]);
+
+  useEffect(() => {
+    if (!form.customerId) {
+      setInvoices([]);
+      return;
+    }
+    setLoadingInvoices(true);
+    apiClient
+      .getInvoices({ customerId: form.customerId, paymentStatus: "pending,partial,overdue", limit: 50 })
+      .then((res: { invoices?: InvoiceOption[] }) => setInvoices((res?.invoices || []).filter((i) => i.balanceAmount > 0)))
+      .catch(() => setInvoices([]))
+      .finally(() => setLoadingInvoices(false));
+  }, [form.customerId]);
+
+  const selectedInvoice = invoices.find((i) => i._id === form.invoiceId);
+  const set = <K extends keyof ReturnType<typeof emptyForm>>(key: K, value: ReturnType<typeof emptyForm>[K]) =>
+    setForm((prev) => ({ ...prev, [key]: value }));
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (!formData.invoiceId || !formData.customerId || !formData.amount) {
-      toast({
-        title: "Invalid Input",
-        description: "Please fill in all required fields",
-        variant: "destructive",
-      });
-      return;
+    setError(null);
+    const amount = Number(form.amount);
+    if (!form.customerId) return setError("Choose the customer who paid.");
+    if (!(amount > 0)) return setError("Enter the amount received.");
+    if (selectedInvoice && form.status === "completed" && amount > selectedInvoice.balanceAmount + 0.01) {
+      return setError(`That is more than the ${formatINR(selectedInvoice.balanceAmount)} still due on ${selectedInvoice.invoiceNumber}.`);
     }
 
-    setLoading(true);
+    setSaving(true);
     try {
-      // TODO: Implement API call to create payment
-      console.log('📋 API not yet implemented');
-      
-      toast({
-        title: "Payment Created",
-        description: "Payment has been recorded successfully",
+      await apiClient.createPayment({
+        customerId: form.customerId,
+        invoiceId: form.invoiceId === NO_INVOICE ? undefined : form.invoiceId,
+        amount,
+        paymentMethod: form.paymentMethod,
+        status: form.status,
+        paymentDate: form.paymentDate,
+        referenceNumber: form.referenceNumber || undefined,
+        notes: form.notes || undefined
       });
-      
-      onPaymentCreated();
+      toast({
+        title: "Payment recorded",
+        description: selectedInvoice ? `${formatINR(amount)} recorded against ${selectedInvoice.invoiceNumber}.` : `${formatINR(amount)} recorded.`
+      });
+      onPaymentCreated?.();
       onOpenChange(false);
-      
-      // Reset form
-      setFormData({
-        invoiceId: "",
-        customerId: "",
-        amount: "",
-        paymentMethod: "cash",
-        date: new Date().toISOString().split('T')[0],
-        status: "completed",
-        reference: "",
-        notes: ""
-      });
-    } catch (error) {
-      console.error('Error creating payment:', error);
-      toast({
-        title: "Error",
-        description: "Failed to create payment",
-        variant: "destructive",
-      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The payment could not be recorded.");
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[425px]">
+      <DialogContent className="sm:max-w-[480px]">
         <DialogHeader>
-          <DialogTitle>Record New Payment</DialogTitle>
-          <DialogDescription>
-            Record a new payment received from a customer.
-          </DialogDescription>
+          <DialogTitle>Record payment</DialogTitle>
+          <DialogDescription>Money received from a customer. Recording it against an invoice reduces that invoice's balance.</DialogDescription>
         </DialogHeader>
-        
+
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="invoiceId">Invoice ID *</Label>
-            <Input
-              id="invoiceId"
-              value={formData.invoiceId}
-              onChange={(e) => setFormData(prev => ({ ...prev, invoiceId: e.target.value }))}
-              placeholder="Enter invoice ID"
-            />
+          <div className="space-y-1.5">
+            <Label htmlFor="pay-customer">Customer</Label>
+            <Select value={form.customerId} onValueChange={(v) => setForm((prev) => ({ ...prev, customerId: v, invoiceId: NO_INVOICE, amount: "" }))}>
+              <SelectTrigger id="pay-customer">
+                <SelectValue placeholder="Choose a customer" />
+              </SelectTrigger>
+              <SelectContent>
+                {customers.map((c) => (
+                  <SelectItem key={c._id || c.id} value={c._id || c.id || ""}>
+                    {c.name}
+                    {c.company ? ` — ${c.company}` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-          
-          <div className="space-y-2">
-            <Label htmlFor="customerId">Customer ID *</Label>
-            <Input
-              id="customerId"
-              value={formData.customerId}
-              onChange={(e) => setFormData(prev => ({ ...prev, customerId: e.target.value }))}
-              placeholder="Enter customer ID"
-            />
+
+          <div className="space-y-1.5">
+            <Label htmlFor="pay-invoice">Against invoice</Label>
+            <Select
+              value={form.invoiceId}
+              onValueChange={(v) => {
+                const inv = invoices.find((i) => i._id === v);
+                setForm((prev) => ({ ...prev, invoiceId: v, amount: inv ? String(inv.balanceAmount) : prev.amount }));
+              }}
+              disabled={!form.customerId || loadingInvoices}
+            >
+              <SelectTrigger id="pay-invoice">
+                <SelectValue placeholder={loadingInvoices ? "Loading invoices…" : "No invoice"} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_INVOICE}>No invoice (advance or on account)</SelectItem>
+                {invoices.map((i) => (
+                  <SelectItem key={i._id} value={i._id}>
+                    {i.invoiceNumber} — {formatINR(i.balanceAmount)} due
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {form.customerId && !loadingInvoices && invoices.length === 0 && (
+              <p className="text-xs text-muted-foreground">This customer has no unpaid invoices.</p>
+            )}
           </div>
-          
-          <div className="space-y-2">
-            <Label htmlFor="amount">Amount *</Label>
-            <Input
-              id="amount"
-              type="number"
-              step="0.01"
-              value={formData.amount}
-              onChange={(e) => setFormData(prev => ({ ...prev, amount: e.target.value }))}
-              placeholder="0.00"
-            />
-          </div>
-          
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="paymentMethod">Payment Method</Label>
-              <Select value={formData.paymentMethod} onValueChange={(value: 'cash' | 'bank' | 'cheque' | 'card') => 
-                setFormData(prev => ({ ...prev, paymentMethod: value }))
-              }>
-                <SelectTrigger>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="pay-amount">Amount (₹)</Label>
+              <Input id="pay-amount" type="number" inputMode="decimal" min="0.01" step="0.01" value={form.amount} onChange={(e) => set("amount", e.target.value)} placeholder="0.00" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="pay-date">Date received</Label>
+              <Input id="pay-date" type="date" value={form.paymentDate} onChange={(e) => set("paymentDate", e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="pay-method">Method</Label>
+              <Select value={form.paymentMethod} onValueChange={(v: PaymentMethod) => set("paymentMethod", v)}>
+                <SelectTrigger id="pay-method">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="cash">Cash</SelectItem>
-                  <SelectItem value="bank">Bank Transfer</SelectItem>
-                  <SelectItem value="cheque">Cheque</SelectItem>
-                  <SelectItem value="card">Card</SelectItem>
+                  {(Object.keys(METHOD_LABELS) as PaymentMethod[]).map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {METHOD_LABELS[m]}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
-            
-            <div className="space-y-2">
-              <Label htmlFor="status">Status</Label>
-              <Select value={formData.status} onValueChange={(value: 'pending' | 'completed' | 'failed' | 'refunded') => 
-                setFormData(prev => ({ ...prev, status: value }))
-              }>
-                <SelectTrigger>
+            <div className="space-y-1.5">
+              <Label htmlFor="pay-status">Status</Label>
+              <Select value={form.status} onValueChange={(v: "completed" | "pending") => set("status", v)}>
+                <SelectTrigger id="pay-status">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="pending">Pending</SelectItem>
-                  <SelectItem value="completed">Completed</SelectItem>
-                  <SelectItem value="failed">Failed</SelectItem>
-                  <SelectItem value="refunded">Refunded</SelectItem>
+                  <SelectItem value="completed">Completed (money received)</SelectItem>
+                  <SelectItem value="pending">Pending (e.g. cheque not cleared)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </div>
-          
-          <div className="space-y-2">
-            <Label htmlFor="date">Payment Date</Label>
-            <Input
-              id="date"
-              type="date"
-              value={formData.date}
-              onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
-            />
+
+          <div className="space-y-1.5">
+            <Label htmlFor="pay-ref">Reference</Label>
+            <Input id="pay-ref" value={form.referenceNumber} onChange={(e) => set("referenceNumber", e.target.value)} placeholder="UPI ref, cheque no., receipt no." />
           </div>
-          
-          <div className="space-y-2">
-            <Label htmlFor="reference">Reference</Label>
-            <Input
-              id="reference"
-              value={formData.reference}
-              onChange={(e) => setFormData(prev => ({ ...prev, reference: e.target.value }))}
-              placeholder="Transaction reference, receipt number, etc."
-            />
+
+          <div className="space-y-1.5">
+            <Label htmlFor="pay-notes">Notes</Label>
+            <Textarea id="pay-notes" rows={2} value={form.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Optional" />
           </div>
-          
-          <div className="space-y-2">
-            <Label htmlFor="notes">Notes</Label>
-            <Textarea
-              id="notes"
-              value={formData.notes}
-              onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
-              placeholder="Additional notes (optional)"
-              rows={3}
-            />
-          </div>
-          
+
+          {error && (
+            <p role="alert" className="rounded-md border border-destructive/25 bg-destructive-soft px-3 py-2 text-sm text-destructive-strong">
+              {error}
+            </p>
+          )}
+
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={loading}>
-              {loading ? "Recording..." : "Record Payment"}
+            <Button type="submit" loading={saving}>
+              {saving ? "Recording…" : "Record payment"}
             </Button>
           </DialogFooter>
         </form>

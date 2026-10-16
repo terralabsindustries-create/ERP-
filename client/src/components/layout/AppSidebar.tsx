@@ -1,30 +1,4 @@
 import { Link, useLocation } from "react-router-dom";
-import {
-  LayoutDashboard,
-  Users,
-  Briefcase,
-  FileText,
-  Package,
-  Building2,
-  UserCog,
-  Calendar,
-  BarChart3,
-  MessageSquare,
-  Hash,
-  Percent,
-  DollarSign,
-  Globe,
-  ShieldCheck,
-  Banknote,
-  BookOpen,
-  ClipboardList,
-  BadgeIndianRupee,
-  CalendarCheck,
-  CalendarOff,
-  Contact,
-  ReceiptText,
-  Bell,
-} from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   Sidebar,
@@ -37,130 +11,75 @@ import {
   SidebarMenu,
   SidebarMenuItem,
   SidebarMenuButton,
+  useSidebar,
 } from "@/components/ui/sidebar";
-interface NavItem {
-  title: string;
-  href: string;
-  icon: any;
-  permission?: string;
-}
-
-interface NavGroup {
-  label: string;
-  items: NavItem[];
-}
+import { BrandLogo, BrandMark } from "@/components/brand/BrandMark";
+import { NAVIGATION } from "./navigation";
+import { cn } from "@/lib/utils";
 
 export function AppSidebar() {
   const location = useLocation();
-  const { hasPermission } = useAuth();
-
-  const navigationGroups: NavGroup[] = [
-    {
-      label: "Main",
-      items: [
-        { title: "Dashboard", href: "/", icon: LayoutDashboard, permission: "Dashboard" },
-        { title: "Customers", href: "/customers", icon: Users, permission: "Customers" },
-        { title: "Jobs", href: "/jobs", icon: Briefcase, permission: "Jobs" },
-      ],
-    },
-    {
-      label: "Invoicing",
-      items: [
-        { title: "Quotations", href: "/quotations", icon: ClipboardList, permission: "Quotations" },
-        { title: "Invoice Management", href: "/invoices", icon: FileText, permission: "Invoicing" },
-        // { title: "Invoice Management (View No GST)", href: "/invoices-no-gst", icon: FileText, permission: "Invoicing (View No GST)" },
-      ],
-    },
-    {
-      label: "Inventory & Vendors",
-      items: [
-        { title: "Inventory", href: "/inventory", icon: Package, permission: "Inventory" },
-        { title: "Vendors", href: "/vendors", icon: Building2, permission: "Vendors" },
-        { title: "Purchase Bills", href: "/purchase-bills", icon: ReceiptText, permission: "Purchase Bills" },
-      ],
-    },
-    {
-      label: "Operations",
-      items: [
-        { title: "Staff & Tasks", href: "/staff", icon: UserCog, permission: "Staff & Tasks" },
-        { title: "Calendar", href: "/calendar", icon: Calendar, permission: "Calendar" },
-      ],
-    },
-    {
-      label: "Finance",
-      items: [
-        // { title: "Payments", href: "/payments", icon: DollarSign, permission: "Payments" },
-        { title: "Accounts", href: "/accounts", icon: Banknote, permission: "Accounts" },
-      ],
-    },
-    {
-      label: "Human Resources",
-      items: [
-        { title: "Employees", href: "/employees", icon: Contact, permission: "Human Resources" },
-        { title: "Attendance", href: "/attendance", icon: CalendarCheck, permission: "Human Resources" },
-        { title: "Leave Requests", href: "/leaves", icon: CalendarOff, permission: "Human Resources" },
-        { title: "Payroll", href: "/payroll", icon: BadgeIndianRupee, permission: "Payroll" },
-      ],
-    },
-    {
-      label: "Configuration",
-      items: [
-        { title: "HSN Codes", href: "/hsn-codes", icon: Hash, permission: "HSN Codes" },
-        { title: "SAC Codes", href: "/sac-codes", icon: Percent, permission: "SAC Codes" },
-      ],
-    },
-    {
-      label: "Communication",
-      items: [
-        { title: "Payment Reminders", href: "/payment-reminders", icon: Bell, permission: "Payment Reminders" },
-        { title: "WhatsApp", href: "/whatsapp", icon: MessageSquare, permission: "WhatsApp" },
-        // { title: "Customer Portal", href: "/portal", icon: Globe, permission: "Customer Portal" },
-      ],
-    },
-    {
-      label: "Reports & Settings",
-      items: [
-        // { title: "Reports", href: "/reports", icon: BarChart3, permission: "Reports" },
-      ],
-    },
-  ];
-
-  const filterItemsByPermission = (items: NavItem[]) => {
-    return items.filter(item => !item.permission || hasPermission(item.permission));
-  };
+  const { user, hasPermission } = useAuth();
+  const { state, isMobile, setOpenMobile } = useSidebar();
+  const collapsed = state === "collapsed" && !isMobile;
 
   return (
-    <Sidebar>
-      <SidebarHeader className="border-b border-sidebar-border px-4 py-4">
-        <div className="flex items-center gap-2">
-          <span className="text-lg font-bold">
-            <span className="text-orange-500">Serp</span>
-            <span className="text-black">Y</span>
-          </span>
-        </div>
+    <Sidebar collapsible="icon" className="border-r border-sidebar-border">
+      <SidebarHeader className="h-14 justify-center border-b border-sidebar-border px-3 group-data-[collapsible=icon]:px-2">
+        <Link
+          to="/"
+          className="flex items-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+          aria-label="Terralabs ERP home"
+          onClick={() => isMobile && setOpenMobile(false)}
+        >
+          {collapsed ? <BrandMark className="h-7 w-7" /> : <BrandLogo tone="light" />}
+        </Link>
       </SidebarHeader>
 
-      <SidebarContent>
-        {navigationGroups.map((group) => {
-          const visibleItems = filterItemsByPermission(group.items);
-
-          // Don't render group if no items are visible
-          if (visibleItems.length === 0) return null;
+      <SidebarContent className="gap-0 py-2">
+        {NAVIGATION.map((group) => {
+          const seesWholeTeam = user?.role === "admin" || user?.canViewAllData === true;
+          const items = group.items.filter(
+            (item) => (!item.permission || (Array.isArray(item.permission) ? item.permission.some((p) => hasPermission(p)) : hasPermission(item.permission))) && (!item.orgViewOnly || seesWholeTeam)
+          );
+          if (items.length === 0) return null;
 
           return (
-            <SidebarGroup key={group.label}>
-              <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+            <SidebarGroup key={group.label} className="px-2 py-1.5">
+              <SidebarGroupLabel className="h-6 px-2.5 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-sidebar-muted">
+                {group.label}
+              </SidebarGroupLabel>
               <SidebarGroupContent>
-                <SidebarMenu>
-                  {visibleItems.map((item) => {
+                <SidebarMenu className="gap-px">
+                  {items.map((item) => {
                     const isActive = location.pathname === item.href;
-
                     return (
                       <SidebarMenuItem key={item.href}>
-                        <SidebarMenuButton asChild isActive={isActive}>
-                          <Link to={item.href}>
+                        <SidebarMenuButton
+                          asChild
+                          isActive={isActive}
+                          tooltip={item.title}
+                          className={cn(
+                            "relative h-9 gap-2.5 rounded-md px-2.5 text-[13px] font-medium text-sidebar-foreground transition-colors md:h-8",
+                            "hover:bg-white/[0.06] hover:text-white",
+                            "focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+                            "data-[active=true]:bg-sidebar-primary/[0.14] data-[active=true]:font-semibold data-[active=true]:text-white",
+                            "[&>svg]:text-sidebar-muted hover:[&>svg]:text-sidebar-foreground data-[active=true]:[&>svg]:text-sidebar-primary"
+                          )}
+                        >
+                          <Link
+                            to={item.href}
+                            aria-current={isActive ? "page" : undefined}
+                            onClick={() => isMobile && setOpenMobile(false)}
+                          >
+                            {isActive && (
+                              <span
+                                className="absolute inset-y-1.5 left-0 w-[3px] rounded-r-full bg-sidebar-primary group-data-[collapsible=icon]:inset-y-1"
+                                aria-hidden
+                              />
+                            )}
                             <item.icon />
-                            <span>{item.title}</span>
+                            <span className="truncate">{item.title}</span>
                           </Link>
                         </SidebarMenuButton>
                       </SidebarMenuItem>
@@ -173,10 +92,22 @@ export function AppSidebar() {
         })}
       </SidebarContent>
 
-      <SidebarFooter className="border-t border-sidebar-border p-2">
-        <div className="text-xs text-muted-foreground px-2 py-1">
-          Version 1.0.0
-        </div>
+      <SidebarFooter className="border-t border-sidebar-border p-3">
+        {collapsed ? (
+          <div className="cmyk-strip mx-auto h-1 w-6 rounded-full" />
+        ) : (
+          <div className="space-y-1.5">
+            {user?.companyName && (
+              <div className="truncate text-xs font-medium text-sidebar-foreground" title={user.companyName}>
+                {user.companyName}
+              </div>
+            )}
+            <div className="flex items-center justify-between text-[11px] text-sidebar-muted">
+              <span>Terralabs ERP · v2.0</span>
+              <span className="cmyk-strip h-1 w-8 rounded-full" aria-hidden />
+            </div>
+          </div>
+        )}
       </SidebarFooter>
     </Sidebar>
   );

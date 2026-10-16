@@ -1,3 +1,4 @@
+import { localDate } from "@/lib/format";
 // Export utilities for CSV and PDF generation
 export const exportToCSV = (data: any[], filename: string, headers?: string[]) => {
   if (!data || data.length === 0) {
@@ -166,7 +167,7 @@ export const generateInvoiceQR = (invoice: any) => {
     seller_gstin: invoice.business_gstin || '',
     buyer_gstin: invoice.customer_gstin || '',
     invoice_number: invoice.invoice_number,
-    invoice_date: new Date(invoice.created_at).toISOString().split('T')[0],
+    invoice_date: localDate(invoice.created_at),
     total_amount: invoice.total_amount,
     taxable_amount: invoice.subtotal || 0,
     cgst_amount: invoice.cgst_amount || 0,

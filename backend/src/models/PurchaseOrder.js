@@ -26,6 +26,19 @@ const purchaseOrderSchema = new mongoose.Schema({
     enum: ['draft', 'sent', 'acknowledged', 'partial', 'completed', 'cancelled'],
     default: 'draft'
   },
+  // The business it belongs to.
+  dataScope: {
+    type: String,
+    index: true
+  },
+  // Who received the last delivery against it.
+  receipts: [{
+    receivedAt: { type: Date, default: Date.now },
+    receivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    receivedByName: String,
+    reference: String,
+    lines: [{ inventoryId: mongoose.Schema.Types.ObjectId, itemName: String, quantity: Number }]
+  }],
   expectedDelivery: {
     type: Date
   },
@@ -46,7 +59,7 @@ const purchaseOrderSchema = new mongoose.Schema({
     quantity: {
       type: Number,
       required: true,
-      min: 1
+      min: 0
     },
     unitCost: {
       type: Number,
@@ -159,15 +172,15 @@ purchaseOrderSchema.methods.updateReceivedQuantities = function (receivedItems) 
 };
 
 // Static method to generate PO number
-purchaseOrderSchema.statics.generatePONumber = async function (userId) {
+purchaseOrderSchema.statics.generatePONumber = async function () {
   const today = new Date();
   const year = today.getFullYear();
   const month = String(today.getMonth() + 1).padStart(2, '0');
 
-  // Find the last PO for this user in current month
+  // PO numbers are unique across all businesses (unique index), so the
+  // sequence continues from the latest number this month, whoever made it.
   const lastPO = await this.findOne({
-    userId: new mongoose.Types.ObjectId(userId),
-    poNumber: { $regex: `^PO-${year}${month}` }
+    poNumber: { $regex: `^PO-${year}${month}-` }
   }).sort({ poNumber: -1 });
 
   let sequence = 1;

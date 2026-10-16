@@ -1,10 +1,12 @@
 const express = require('express');
 const { body, query } = require('express-validator');
+const { validate } = require('../middleware/validate');
 const { protect } = require('../middleware/auth');
 const PaymentReminder = require('../models/PaymentReminder');
 const Invoice = require('../models/Invoice');
 const Customer = require('../models/Customer');
 const Settings = require('../models/Settings');
+const { settingsOwnerId, businessSettings } = require('../utils/businessSettings');
 const { sendWhatsAppMessage, buildTemplateVariables } = require('../utils/metaWhatsApp');
 const { staffScopeQuery } = require('../utils/dataScopeHelper');
 
@@ -207,7 +209,7 @@ router.get('/overdue-invoices', protect, async (req, res) => {
     const now = new Date();
 
     // Get settings for reminder configuration
-    const settings = await Settings.getOrCreateSettings(userId);
+    const settings = await businessSettings(req.user);
     const reminderConfig = settings.paymentReminders || {};
     const maxReminders = reminderConfig.maxReminders || 5;
 
@@ -344,7 +346,7 @@ router.post('/send/:invoiceId', protect, [
   body('metaTemplateName').optional({ nullable: true }).isString(),
   body('metaTemplateLanguage').optional({ nullable: true }).isString(),
   body('templateVariableMapping').optional({ nullable: true }).isObject()
-], async (req, res) => {
+], validate, async (req, res) => {
   try {
     const userId = req.user._id;
     const dataScope = req.user.dataScope;
@@ -376,7 +378,7 @@ router.post('/send/:invoiceId', protect, [
     }
 
     // Get settings for template
-    const settings = await Settings.getOrCreateSettings(userId);
+    const settings = await businessSettings(req.user);
     const reminderConfig = settings.paymentReminders || {};
     const maxReminders = reminderConfig.maxReminders || 5;
 
@@ -435,7 +437,7 @@ router.post('/send-bulk', protect, async (req, res) => {
     const now = new Date();
 
     // Get settings
-    const settings = await Settings.getOrCreateSettings(userId);
+    const settings = await businessSettings(req.user);
     const reminderConfig = settings.paymentReminders || {};
     const maxReminders = reminderConfig.maxReminders || 5;
     const daysAfterDue = reminderConfig.daysAfterDue || 1;
@@ -539,7 +541,7 @@ router.post('/send-bulk', protect, async (req, res) => {
 // @access  Private
 router.get('/settings', protect, async (req, res) => {
   try {
-    const settings = await Settings.getOrCreateSettings(req.user._id);
+    const settings = await businessSettings(req.user);
     // .paymentReminders is a raw nested path, not a subdocument — accessing it directly bypasses
     // the document's toJSON/flattenMaps, so templateVariableMapping (a Map) would serialize to
     // "{}" in the response even though it's saved correctly. Go through toObject() to flatten it.
@@ -571,15 +573,15 @@ router.get('/settings', protect, async (req, res) => {
 // @desc    Update payment reminder settings
 // @access  Private
 router.put('/settings', protect, [
-  body('enabled').optional().isBoolean(),
-  body('daysAfterDue').optional().isInt({ min: 0 }),
-  body('reminderInterval').optional().isInt({ min: 1 }),
-  body('maxReminders').optional().isInt({ min: 1, max: 20 }),
-  body('messageTemplate').optional().isString(),
-  body('autoSend').optional().isBoolean(),
-  body('metaTemplateName').optional().isString(),
-  body('templateVariableMapping').optional().isObject()
-], async (req, res) => {
+  body('enabled').optional({ values: 'falsy' }).isBoolean(),
+  body('daysAfterDue').optional({ values: 'falsy' }).isInt({ min: 0 }),
+  body('reminderInterval').optional({ values: 'falsy' }).isInt({ min: 1 }),
+  body('maxReminders').optional({ values: 'falsy' }).isInt({ min: 1, max: 20 }),
+  body('messageTemplate').optional({ values: 'falsy' }).isString(),
+  body('autoSend').optional({ values: 'falsy' }).isBoolean(),
+  body('metaTemplateName').optional({ values: 'falsy' }).isString(),
+  body('templateVariableMapping').optional({ values: 'falsy' }).isObject()
+], validate, async (req, res) => {
   try {
     const { enabled, daysAfterDue, reminderInterval, maxReminders, messageTemplate, autoSend, metaTemplateName, templateVariableMapping } = req.body;
 
@@ -594,7 +596,7 @@ router.put('/settings', protect, [
     if (templateVariableMapping !== undefined) updateData['paymentReminders.templateVariableMapping'] = templateVariableMapping;
 
     const settings = await Settings.findOneAndUpdate(
-      { userId: req.user._id },
+      { userId: await settingsOwnerId(req.user) },
       { $set: updateData },
       { new: true, upsert: true, runValidators: true }
     );

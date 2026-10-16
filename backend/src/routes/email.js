@@ -15,7 +15,7 @@ const getEmailTemplate = (template, data) => {
           <html>
           <head>
             <meta charset="utf-8">
-            <title>Welcome to SerpY ERP</title>
+            <title>Welcome to Terralabs ERP</title>
             <style>
               body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
               .container { max-width: 600px; margin: 0 auto; padding: 20px; }
@@ -29,13 +29,13 @@ const getEmailTemplate = (template, data) => {
           <body>
             <div class="container">
               <div class="header">
-                <h1>Welcome to SerpY ERP</h1>
+                <h1>Welcome to Terralabs ERP</h1>
                 <p>Your Enterprise Resource Planning System</p>
               </div>
               
               <div class="content">
                 <h2>Dear ${data.fullName},</h2>
-                <p>Welcome to ${data.companyName}! Your account has been created and you can now access the SerpY ERP system.</p>
+                <p>Welcome to ${data.companyName}! Your account has been created and you can now access the Terralabs ERP system.</p>
                 
                 <div class="credentials">
                   <h3>Your Login Credentials:</h3>
@@ -45,7 +45,7 @@ const getEmailTemplate = (template, data) => {
                 </div>
                 
                 <p>Please click the button below to login to your account:</p>
-                <a href="${data.loginUrl}" class="button">Login to SerpY ERP</a>
+                <a href="${data.loginUrl}" class="button">Login to Terralabs ERP</a>
                 
                 <p><strong>Important:</strong> For security reasons, please change your password after your first login.</p>
                 
@@ -62,11 +62,11 @@ const getEmailTemplate = (template, data) => {
           </html>
         `,
         text: `
-          Welcome to SerpY ERP
+          Welcome to Terralabs ERP
           
           Dear ${data.fullName},
           
-          Welcome to ${data.companyName}! Your account has been created and you can now access the SerpY ERP system.
+          Welcome to ${data.companyName}! Your account has been created and you can now access the Terralabs ERP system.
           
           Your Login Credentials:
           Email: ${data.email}
@@ -92,9 +92,11 @@ const getEmailTemplate = (template, data) => {
 };
 
 // @route   POST /api/email/send
-// @desc    Send email
-// @access  Private (or public for staff creation)
-router.post('/send', async (req, res) => {
+// @desc    Send a templated email
+// @access  Private (admin/manager). This used to accept unauthenticated
+//          requests (and any string as a "token"), which made it an open relay
+//          for mail sent in the business's name.
+router.post('/send', protect, authorize('admin', 'manager'), async (req, res) => {
   try {
     const { to, subject, template, data } = req.body;
 
@@ -106,7 +108,6 @@ router.post('/send', async (req, res) => {
       });
     }
 
-    // For staff creation, allow without authentication
     if (template === 'staff-welcome') {
       // Create transporter
       const transporter = createTransporter();
@@ -116,7 +117,7 @@ router.post('/send', async (req, res) => {
 
       // Email options
       const mailOptions = {
-        from: getFromAddress(process.env.COMPANY_NAME || 'SerpY ERP'),
+        from: getFromAddress(process.env.COMPANY_NAME || 'Terralabs ERP'),
         to: Array.isArray(to) ? to.join(', ') : to,
         subject: subject,
         html: emailContent.html,
@@ -139,15 +140,6 @@ router.post('/send', async (req, res) => {
       return;
     }
 
-    // For other templates, require authentication
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({
-        status: 'error',
-        message: 'Access denied. No token provided.'
-      });
-    }
-
     // Create transporter
     const transporter = createTransporter();
 
@@ -156,7 +148,7 @@ router.post('/send', async (req, res) => {
 
     // Email options
     const mailOptions = {
-      from: getFromAddress(process.env.COMPANY_NAME || 'SerpY ERP'),
+      from: getFromAddress(process.env.COMPANY_NAME || 'Terralabs ERP'),
       to: Array.isArray(to) ? to.join(', ') : to,
       subject: subject,
       html: emailContent.html,
@@ -219,9 +211,9 @@ router.post('/send-staff-credentials', protect, authorize('admin', 'manager'), a
 
     // Email options
     const mailOptions = {
-      from: getFromAddress(process.env.COMPANY_NAME || 'SerpY ERP'),
+      from: getFromAddress(process.env.COMPANY_NAME || 'Terralabs ERP'),
       to: Array.isArray(to) ? to.join(', ') : to,
-      subject: 'Welcome to SerpY ERP - Your Login Credentials',
+      subject: 'Welcome to Terralabs ERP - Your Login Credentials',
       html: emailContent.html,
       text: emailContent.text
     };
@@ -255,6 +247,11 @@ router.post('/send-staff-credentials', protect, authorize('admin', 'manager'), a
 // @desc    Test email configuration without auth (for development)
 // @access  Public
 router.post('/test-public', async (req, res) => {
+  // Development aid only: an unauthenticated "send a test email to anyone"
+  // endpoint must not exist on a deployed server.
+  if (process.env.NODE_ENV !== 'development') {
+    return res.status(404).json({ status: 'error', message: 'Not found' });
+  }
   try {
     const { to } = req.body;
 
@@ -273,14 +270,14 @@ router.post('/test-public', async (req, res) => {
 
     // Send test email
     const mailOptions = {
-      from: getFromAddress(process.env.COMPANY_NAME || 'SerpY ERP'),
+      from: getFromAddress(process.env.COMPANY_NAME || 'Terralabs ERP'),
       to: to,
-      subject: 'SerpY ERP - Email Configuration Test',
+      subject: 'Terralabs ERP - Email Configuration Test',
       html: `
         <h2>Email Configuration Test</h2>
         <p>This is a test email to verify that the email configuration is working correctly.</p>
         <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
-        <p><strong>System:</strong> SerpY ERP</p>
+        <p><strong>System:</strong> Terralabs ERP</p>
       `,
       text: `
         Email Configuration Test
@@ -288,7 +285,7 @@ router.post('/test-public', async (req, res) => {
         This is a test email to verify that the email configuration is working correctly.
         
         Time: ${new Date().toLocaleString()}
-        System: SerpY ERP
+        System: Terralabs ERP
       `
     };
 
@@ -338,14 +335,14 @@ router.post('/test', protect, authorize('admin'), async (req, res) => {
 
     // Send test email
     const mailOptions = {
-      from: getFromAddress(process.env.COMPANY_NAME || 'SerpY ERP'),
+      from: getFromAddress(process.env.COMPANY_NAME || 'Terralabs ERP'),
       to: to,
-      subject: 'SerpY ERP - Email Configuration Test',
+      subject: 'Terralabs ERP - Email Configuration Test',
       html: `
         <h2>Email Configuration Test</h2>
         <p>This is a test email to verify that the email configuration is working correctly.</p>
         <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
-        <p><strong>System:</strong> SerpY ERP</p>
+        <p><strong>System:</strong> Terralabs ERP</p>
       `,
       text: `
         Email Configuration Test
@@ -353,7 +350,7 @@ router.post('/test', protect, authorize('admin'), async (req, res) => {
         This is a test email to verify that the email configuration is working correctly.
         
         Time: ${new Date().toLocaleString()}
-        System: SerpY ERP
+        System: Terralabs ERP
       `
     };
 

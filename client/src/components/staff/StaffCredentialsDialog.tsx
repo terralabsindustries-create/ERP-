@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -37,7 +37,8 @@ export function StaffCredentialsDialog({ open, onOpenChange, staff, onStaffUpdat
   const { toast } = useToast();
 
   // Reset form when dialog opens/closes
-  useState(() => {
+  // Clear the form whenever the dialog closes.
+  useEffect(() => {
     if (!open) {
       setEmailData({ newEmail: "", confirmEmail: "" });
       setPasswordData({ newPassword: "", confirmPassword: "" });
@@ -244,13 +245,13 @@ export function StaffCredentialsDialog({ open, onOpenChange, staff, onStaffUpdat
                 <div className="flex items-center gap-2 text-sm">
                   {emailData.newEmail === emailData.confirmEmail ? (
                     <>
-                      <CheckCircle className="h-4 w-4 text-green-500" />
-                      <span className="text-green-600">Email addresses match</span>
+                      <CheckCircle className="h-4 w-4 text-success" />
+                      <span className="text-success-strong">Email addresses match</span>
                     </>
                   ) : (
                     <>
-                      <AlertCircle className="h-4 w-4 text-red-500" />
-                      <span className="text-red-600">Email addresses do not match</span>
+                      <AlertCircle className="h-4 w-4 text-destructive" />
+                      <span className="text-destructive-strong">Email addresses do not match</span>
                     </>
                   )}
                 </div>
@@ -324,13 +325,13 @@ export function StaffCredentialsDialog({ open, onOpenChange, staff, onStaffUpdat
                 <div className="flex items-center gap-2 text-sm">
                   {passwordData.newPassword === passwordData.confirmPassword ? (
                     <>
-                      <CheckCircle className="h-4 w-4 text-green-500" />
-                      <span className="text-green-600">Passwords match</span>
+                      <CheckCircle className="h-4 w-4 text-success" />
+                      <span className="text-success-strong">Passwords match</span>
                     </>
                   ) : (
                     <>
-                      <AlertCircle className="h-4 w-4 text-red-500" />
-                      <span className="text-red-600">Passwords do not match</span>
+                      <AlertCircle className="h-4 w-4 text-destructive" />
+                      <span className="text-destructive-strong">Passwords do not match</span>
                     </>
                   )}
                 </div>

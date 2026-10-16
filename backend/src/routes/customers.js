@@ -1,9 +1,13 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const { body, query } = require('express-validator');
+const { validate } = require('../middleware/validate');
 const Customer = require('../models/Customer');
 const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
-const { requirePermission } = require('../middleware/requirePermission');
+const { requirePermission, userCan } = require('../middleware/requirePermission');
+const Invoice = require('../models/Invoice');
+const { orgScope } = require('../utils/accessScope');
 const { createDataScopeQuery } = require('../utils/dataScopeHelper');
 
 const router = express.Router();
@@ -11,25 +15,25 @@ const router = express.Router();
 // Validation rules
 const customerValidation = [
   body('name').notEmpty().withMessage('Customer name is required').trim(),
-  // checkFalsy: express-validator's bare .optional() only skips undefined, not
+  // checkFalsy: express-validator's bare .optional({ values: 'falsy' }) only skips undefined, not
   // "" — and .normalizeEmail() runs even after .isEmail() fails (no .bail()),
   // turning an empty string into the literal string "@". That corrupted value
   // then collides with the very next customer created without an email, since
   // the create route treats any truthy email as one to de-duplicate on.
-  body('email').optional({ checkFalsy: true }).isEmail().normalizeEmail(),
-  body('phone').optional().isMobilePhone(),
-  body('customerType').optional().isIn(['Individual', 'Business', 'Corporate', 'Walk-in']),
+  body('email').optional({ values: 'falsy' }).isEmail().normalizeEmail(),
+  body('phone').optional({ values: 'falsy' }).matches(/^\+?[\d\s()-]{7,20}$/).withMessage('Enter a valid phone number'),
+  body('customerType').optional({ values: 'falsy' }).isIn(['Individual', 'Business', 'Corporate', 'Walk-in']),
 ];
 
 // @route   GET /api/customers
 // @desc    Get all customers for the authenticated user
 // @access  Private
 router.get('/', protect, [
-  query('status').optional().isIn(['active', 'inactive', 'blacklisted']),
-  query('search').optional().trim(),
-  query('page').optional().isInt({ min: 1 }),
-  query('limit').optional().isInt({ min: 1, max: 100 }),
-], async (req, res) => {
+  query('status').optional({ values: 'falsy' }).isIn(['all', 'active', 'inactive', 'blacklisted']),
+  query('search').optional({ values: 'falsy' }).trim(),
+  query('page').optional({ values: 'falsy' }).isInt({ min: 1 }),
+  query('limit').optional({ values: 'falsy' }).isInt({ min: 1, max: 100 }),
+], validate, async (req, res) => {
   try {
     const {
       status = 'active',
@@ -75,11 +79,38 @@ router.get('/', protect, [
     
     // Get total count
     const totalCustomers = await Customer.countDocuments(query);
-    
+
+    // What each customer has been billed and still owes, from their issued
+    // invoices — only for logins that may see invoices (and No GST ones only
+    // with that permission too).
+    let billing = {};
+    if (customers.length && userCan(req.user, 'Invoicing')) {
+      const rows = await Invoice.aggregate([
+        {
+          $match: {
+            ...orgScope(req.user),
+            customerId: { $in: customers.map((c) => c._id) },
+            status: { $nin: ['draft', 'cancelled'] },
+            ...(userCan(req.user, 'Invoicing (View No GST)') ? {} : { noGst: { $ne: true } })
+          }
+        },
+        {
+          $group: {
+            _id: '$customerId',
+            invoiced: { $sum: '$totalAmount' },
+            outstanding: { $sum: { $ifNull: ['$balanceAmount', 0] } },
+            invoices: { $sum: 1 },
+            lastInvoiceDate: { $max: '$invoiceDate' }
+          }
+        }
+      ]);
+      billing = Object.fromEntries(rows.map((r) => [String(r._id), { invoiced: r.invoiced, outstanding: r.outstanding, invoices: r.invoices, lastInvoiceDate: r.lastInvoiceDate }]));
+    }
+
     res.status(200).json({
       status: 'success',
       data: {
-        customers,
+        customers: customers.map((c) => ({ ...c.toJSON(), billing: billing[String(c._id)] || null })),
         pagination: {
           current: parseInt(page),
           total: Math.ceil(totalCustomers / limit),
@@ -108,14 +139,7 @@ router.get('/:id', protect, async (req, res) => {
       ? { _id: req.params.id, dataScope: req.user.dataScope }
       : { _id: req.params.id, userId: req.user._id };
 
-    const customer = await Customer.findOne(query)
-      .populate('createdBy', 'fullName email')
-      .populate('wallet')
-      .populate({
-        path: 'activityLogs',
-        options: { sort: { createdAt: -1 }, limit: 10 }
-      });
-    console.log('customer',customer)
+    const customer = mongoose.isValidObjectId(req.params.id) ? await Customer.findOne(query).populate('createdBy', 'fullName email') : null;
     if (!customer) {
       return res.status(404).json({
         status: 'error',
@@ -142,7 +166,7 @@ router.get('/:id', protect, async (req, res) => {
 // @route   POST /api/customers
 // @desc    Create new customer
 // @access  Private
-router.post('/', protect, requirePermission('Customers: Create & Edit'), customerValidation, async (req, res) => {
+router.post('/', protect, requirePermission('Customers: Create & Edit'), customerValidation, validate, async (req, res) => {
   try {
 
     console.log('REQUEST BODY IS WORKING', req.body)
@@ -215,7 +239,7 @@ router.post('/', protect, requirePermission('Customers: Create & Edit'), custome
 // @route   PUT /api/customers/:id
 // @desc    Update customer
 // @access  Private
-router.put('/:id', protect, requirePermission('Customers: Create & Edit'), customerValidation, async (req, res) => {
+router.put('/:id', protect, requirePermission('Customers: Create & Edit'), customerValidation, validate, async (req, res) => {
   try {
     // Use dataScope if available, fallback to userId during migration
     const findQuery = req.user.dataScope

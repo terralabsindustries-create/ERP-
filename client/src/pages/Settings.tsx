@@ -41,7 +41,7 @@ const Settings = () => {
       // The apiClient.request method returns data.data || data
       // So if backend returns { status: 'success', data: { settings: {...} } }
       // We get { settings: {...} }
-      const fetchedSettings = response?.settings || response || {};
+      const fetchedSettings = (response as { settings?: Record<string, any> })?.settings || (response as Record<string, any>) || {};
       console.log('📋 Extracted settings:', JSON.stringify(fetchedSettings, null, 2));
 
       setSettings(fetchedSettings);
@@ -150,6 +150,22 @@ const Settings = () => {
       setSaving(true);
       console.log('💾 Saving company settings...');
 
+      const companyName = String(companySettings.companyName || '').trim();
+      const gstNumber = String(companySettings.gstNumber || '').trim().toUpperCase();
+      const panNumber = String(companySettings.panNumber || '').trim().toUpperCase();
+      if (!companyName) {
+        toast({ title: "Company name is required", variant: "destructive" });
+        return;
+      }
+      if (gstNumber && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstNumber)) {
+        toast({ title: "Invalid GST number", description: "Enter a 15-character GSTIN, or leave this optional field empty.", variant: "destructive" });
+        return;
+      }
+      if (panNumber && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(panNumber)) {
+        toast({ title: "Invalid PAN number", description: "Enter a 10-character PAN, or leave this optional field empty.", variant: "destructive" });
+        return;
+      }
+
       let paymentQRCode = companySettings.paymentQRCode;
 
       // If a new QR code file was selected, use the base64 data
@@ -167,6 +183,9 @@ const Settings = () => {
 
       const dataToSave = {
         ...companySettings,
+        companyName,
+        gstNumber,
+        panNumber,
         paymentQRCode,
         companyLogo
       };
@@ -192,8 +211,8 @@ const Settings = () => {
     } catch (error) {
       console.error('❌ Error saving settings:', error);
       toast({
-        title: "Error",
-        description: "Failed to save settings",
+        title: "Could not save company settings",
+        description: error instanceof Error ? error.message : "Please check the company details and try again.",
         variant: "destructive",
       });
     } finally {
@@ -206,23 +225,13 @@ const Settings = () => {
   }
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
+    <div className="page-frame max-w-5xl">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
+        <h1 className="page-title">Settings</h1>
         <p className="text-muted-foreground">Manage your printing business preferences</p>
       </div>
 
       <Tabs defaultValue="company" className="w-full">
-        <TabsList className="grid w-full grid-cols-2">
-          <TabsTrigger value="company">
-            <Building className="h-4 w-4 mr-2" />
-            Company
-          </TabsTrigger>
-          <TabsTrigger value="notifications">
-            <Bell className="h-4 w-4 mr-2" />
-            Notifications
-          </TabsTrigger>
-        </TabsList>
 
         {/* Company Settings Tab */}
         <TabsContent value="company" className="space-y-4">
@@ -232,7 +241,7 @@ const Settings = () => {
               <CardDescription>Update your company details and payment information</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="companyName">Company Name *</Label>
                   <Input
@@ -253,7 +262,7 @@ const Settings = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="companyEmail">Email</Label>
                   <Input
@@ -271,7 +280,9 @@ const Settings = () => {
                     value={companySettings.gstNumber}
                     onChange={(e) => setCompanySettings({ ...companySettings, gstNumber: e.target.value })}
                     placeholder="22AAAAA0000A1Z5"
+                    maxLength={15}
                   />
+                  <p className="text-xs text-muted-foreground">Optional · 15-character GSTIN</p>
                 </div>
               </div>
 
@@ -282,8 +293,10 @@ const Settings = () => {
                   value={companySettings.panNumber}
                   onChange={(e) => setCompanySettings({ ...companySettings, panNumber: e.target.value })}
                   placeholder="AAAAA0000A"
+                    maxLength={10}
                   className="max-w-xs"
                 />
+                  <p className="text-xs text-muted-foreground">Optional · 10-character PAN</p>
               </div>
 
               <Separator />
@@ -310,7 +323,7 @@ const Settings = () => {
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="addrCity">City</Label>
                     <Input
@@ -331,7 +344,7 @@ const Settings = () => {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="addrState">State</Label>
                     <Input
@@ -414,7 +427,7 @@ const Settings = () => {
                           size="sm"
                           onClick={() => document.getElementById('logo-upload')?.click()}
                         >
-                          <Upload className="h-4 w-4 mr-2" />
+                          <Upload className="h-4 w-4" />
                           Browse Files
                         </Button>
                       </div>
@@ -437,7 +450,7 @@ const Settings = () => {
                   </div>
                 </div>
                 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="bankName">Bank Name</Label>
                     <Input
@@ -458,7 +471,7 @@ const Settings = () => {
                   </div>
                 </div>
                 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="ifscCode">IFSC Code</Label>
                     <Input
@@ -558,7 +571,7 @@ const Settings = () => {
                           size="sm"
                           onClick={() => document.getElementById('qr-upload')?.click()}
                         >
-                          <Upload className="h-4 w-4 mr-2" />
+                          <Upload className="h-4 w-4" />
                           Browse Files
                         </Button>
                       </div>
@@ -572,7 +585,7 @@ const Settings = () => {
 
               <div className="flex justify-end">
                 <Button onClick={saveCompanySettings} disabled={saving}>
-                  <Save className="h-4 w-4 mr-2" />
+                  <Save className="h-4 w-4" />
                   {saving ? "Saving..." : "Save Company Settings"}
                 </Button>
               </div>
@@ -580,32 +593,6 @@ const Settings = () => {
           </Card>
         </TabsContent>
 
-        {/* Notifications Tab */}
-        <TabsContent value="notifications" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Notification Preferences</CardTitle>
-              <CardDescription>Manage how you receive notifications</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label htmlFor="emailNotifications">Email Notifications</Label>
-                  <p className="text-sm text-muted-foreground">Receive updates via email</p>
-                </div>
-                <Switch id="emailNotifications" />
-              </div>
-              <Separator />
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label htmlFor="orderAlerts">Order Status Alerts</Label>
-                  <p className="text-sm text-muted-foreground">Get notified when order status changes</p>
-                </div>
-                <Switch id="orderAlerts" defaultChecked />
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
       </Tabs>
     </div>
   );

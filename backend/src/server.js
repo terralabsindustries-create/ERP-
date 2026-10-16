@@ -1,58 +1,9 @@
 require('dotenv').config();
-const express = require('express');
+// Dates are reckoned in India time (day boundaries for overdue, "today",
+// monthly figures) unless the host sets TZ explicitly.
+process.env.TZ = process.env.TZ || 'Asia/Kolkata';
 const mongoose = require('mongoose');
-const cors = require('cors');
-const helmet = require('helmet');
-const compression = require('compression');
-const morgan = require('morgan');
-const mongoSanitize = require('express-mongo-sanitize');
-const xss = require('xss-clean');
-const path = require('path');
-
-
-const app = express();
-
-// Security Middleware
-app.use(helmet());
-app.use(compression());
-
-// CORS configuration
-app.use(cors({
-  origin: [
-    process.env.FRONTEND_URL || 'https://serpy.synxautomate.com',
-    'https://serpy-silk.vercel.app',
-    'http://localhost:8081',
-    'http://localhost:8080',
-    'https://app.serpy.in',
-    // The Electron desktop app serves the same bundle over its own scheme, so
-    // its requests arrive from this fixed origin (see desktop/main.cjs).
-    'app://serpy'
-  ],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
-
-
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// Data sanitization against NoSQL query injection
-app.use(mongoSanitize());
-
-// Data sanitization against XSS
-app.use(xss());
-
-// Logging middleware
-if (process.env.NODE_ENV === 'development') {
-  app.use(morgan('dev'));
-}
-
-// Serve static files from public/temp directory for temporary PDFs
-app.use('/temp', express.static(path.join(__dirname, '../public/temp')));
-
-// Serve static files from client build directory
-app.use('/assets', express.static(path.join(__dirname, '../../client/dist/assets')));
+const app = require('./app');
 
 // Database connection
 let mongoUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/print_arts_flow';
@@ -65,50 +16,6 @@ mongoose.connect(mongoUri)
     process.exit(1);
   });
 
-// Routes
-app.use('/api/auth', require('./routes/auth'));
-app.use('/api/customers', require('./routes/customers'));
-app.use('/api/jobs', require('./routes/jobs'));
-app.use('/api/walk-in-jobs', require('./routes/walkInJobs'));
-app.use('/api/quotations', require('./routes/quotations'));
-app.use('/api/invoices', require('./routes/invoices'));
-app.use('/api/payments', require('./routes/payments'));
-app.use('/api/inventory', require('./routes/inventory'));
-app.use('/api/categories', require('./routes/categories'));
-app.use('/api/units', require('./routes/units'));
-app.use('/api/purchase-orders', require('./routes/purchaseOrders'));
-app.use('/api/purchase-bills', require('./routes/purchaseBills'));
-app.use('/api/vendors', require('./routes/vendors'));
-app.use('/api/staff', require('./routes/staff'));
-app.use('/api/tasks', require('./routes/tasks'));
-app.use('/api/hsn-codes', require('./routes/hsnCodes'));
-app.use('/api/sac-codes', require('./routes/sacCodes'));
-app.use('/api/accounts', require('./routes/accounts'));
-app.use('/api/costs', require('./routes/costs'));
-app.use('/api/proofs', require('./routes/proofs'));
-app.use('/api/whatsapp', require('./routes/whatsapp'));
-app.use('/api/embedded-signup', require('./routes/embeddedSignup'));
-app.use('/api/reports', require('./routes/reports'));
-app.use('/api/files', require('./routes/files'));
-app.use('/api/dashboard', require('./routes/dashboard'));
-app.use('/api/emergency-orders', require('./routes/emergencyOrders'));
-app.use('/api/deliveries', require('./routes/deliveries'));
-app.use('/api/time-entries', require('./routes/timeEntries'));
-app.use('/api/calendar', require('./routes/calendar'));
-app.use('/api/discounts', require('./routes/discounts'));
-app.use('/api/portal', require('./routes/portal'));
-app.use('/api/activity-log', require('./routes/activityLog'));
-app.use('/api/users', require('./routes/users'));
-app.use('/api/settings', require('./routes/settings'));
-app.use('/api/email', require('./routes/email'));
-app.use('/api/razorpay', require('./routes/razorpay'));
-// HR & Payroll
-app.use('/api/hr/employees', require('./routes/employees'));
-app.use('/api/hr/attendance', require('./routes/attendance'));
-app.use('/api/hr/leaves', require('./routes/leaves'));
-app.use('/api/hr/payroll', require('./routes/payroll'));
-app.use('/api/payment-reminders', require('./routes/paymentReminders'));
-
 // Auto-check for overdue invoices and send reminders (runs every hour)
 const PaymentReminder = require('./models/PaymentReminder');
 const Invoice = require('./models/Invoice');
@@ -116,6 +23,7 @@ const Customer = require('./models/Customer');
 const Settings = require('./models/Settings');
 const User = require('./models/User');
 const { buildAndSendReminder } = require('./routes/paymentReminders');
+const { settingsOwnerId } = require('./utils/businessSettings');
 
 async function autoCheckPaymentReminders() {
   try {
@@ -129,6 +37,9 @@ async function autoCheckPaymentReminders() {
         const userId = settings.userId;
         const user = await User.findById(userId);
         if (!user || !user.isActive) continue;
+        // Reminder rules belong to the business owner's settings; skip stray
+        // copies other logins of the same business may have saved earlier.
+        if (String(await settingsOwnerId(user)) !== String(user._id)) continue;
 
         const dataScope = user.dataScope;
         const config = settings.paymentReminders;
@@ -183,85 +94,6 @@ async function autoCheckPaymentReminders() {
 setInterval(autoCheckPaymentReminders, 3600000);
 // Also run once after a short delay on startup
 setTimeout(autoCheckPaymentReminders, 30000);
-
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-  res.status(200).json({
-    status: 'success',
-    message: 'SerpY ERP API is running',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development'
-  });
-});
-
-// Global error handler
-app.use((err, req, res, next) => {
-  // Mongoose validation error
-  if (err.name === 'ValidationError') {
-    const errors = Object.values(err.errors).map(e => e.message);
-    return res.status(400).json({
-      status: 'error',
-      message: 'Validation Error',
-      errors
-    });
-  }
-
-  // Mongoose duplicate key error
-  if (err.code === 11000) {
-    return res.status(400).json({
-      status: 'error',
-      message: 'Duplicate field value'
-    });
-  }
-
-  // JWT errors
-  if (err.name === 'JsonWebTokenError') {
-    return res.status(401).json({
-      status: 'error',
-      message: 'Invalid token'
-    });
-  }
-
-  if (err.name === 'TokenExpiredError') {
-    return res.status(401).json({
-      status: 'error',
-      message: 'Token expired'
-    });
-  }
-
-  // Default error
-  res.status(err.statusCode || 500).json({
-    status: 'error',
-    message: err.message || 'Internal server error',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
-  });
-});
-
-// Serve the frontend app in production.
-// Registered AFTER every /api route: Express matches in order, so a catch-all
-// mounted earlier would answer API requests before they ever reach a router.
-if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../../client/dist')));
-  
-  // Serve index.html for all non-API routes
-  app.get('*', (req, res) => {
-    if (req.path.startsWith('/api') || req.path.startsWith('/temp')) {
-      return res.status(404).json({
-        status: 'error',
-        message: `Route ${req.originalUrl} not found`
-      });
-    }
-    res.sendFile(path.join(__dirname, '../../client/dist/index.html'));
-  });
-}
-
-// 404 handler for API routes only
-app.use('/api/*', (req, res) => {
-  res.status(404).json({
-    status: 'error',
-    message: `API Route ${req.originalUrl} not found`
-  });
-});
 
 const PORT = process.env.PORT || 4001;
 

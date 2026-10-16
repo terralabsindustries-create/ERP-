@@ -1,13 +1,20 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const { query } = require('express-validator');
 const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/requirePermission');
+const { validate } = require('../middleware/validate');
 
 const router = express.Router();
 
-const ENTITY_TYPES = ['customer', 'job', 'invoice', 'payment', 'inventory', 'vendor', 'staff', 'task', 'delivery', 'emergency_order', 'walk_in_job', 'proof', 'time_entry', 'event', 'discount_rule', 'customer_pricing', 'hsn_code', 'account_transaction', 'cheque', 'cost', 'user', 'system'];
-const ACTION_TYPES = ['create', 'read', 'update', 'delete', 'login', 'logout', 'export', 'import', 'approve', 'reject', 'assign', 'complete', 'cancel', 'start', 'pause', 'stop', 'upload', 'download', 'send', 'receive'];
+// Same list as the model's enum.
+const ENTITY_TYPES = ActivityLog.schema.path('entityType').enumValues;
+const ACTION_TYPES = ActivityLog.schema.path('actionType').enumValues;
+
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// A date-only "to" includes that whole day.
+const endOf = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? new Date(new Date(`${d}T00:00:00`).getTime() + 864e5 - 1) : new Date(d));
 
 // Tenant filter, same fallback pattern used across the rest of the app
 // (see utils/dataScopeHelper.js): accounts with a dataScope share it between
@@ -27,17 +34,12 @@ const buildListQuery = (user, { entityType, actionType, severity, performedBy, d
   if (dateFrom || dateTo) {
     q.createdAt = {};
     if (dateFrom) q.createdAt.$gte = new Date(dateFrom);
-    if (dateTo) q.createdAt.$lte = new Date(dateTo);
+    if (dateTo) q.createdAt.$lte = endOf(dateTo);
   }
 
   if (search) {
-    q.$or = [
-      { action: { $regex: search, $options: 'i' } },
-      { description: { $regex: search, $options: 'i' } },
-      { entityName: { $regex: search, $options: 'i' } },
-      { performedByName: { $regex: search, $options: 'i' } },
-      { tags: { $in: [new RegExp(search, 'i')] } }
-    ];
+    const rx = new RegExp(escapeRegex(search), 'i');
+    q.$or = [{ action: rx }, { description: rx }, { entityName: rx }, { performedByName: rx }, { tags: { $in: [rx] } }];
   }
 
   return q;
@@ -60,7 +62,7 @@ router.get('/', protect, [
   ...listFilterValidators,
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 })
-], async (req, res) => {
+], validate, async (req, res) => {
   try {
     const {
       page = 1,
@@ -112,7 +114,7 @@ router.get('/', protect, [
 // @access  Private
 router.get('/stats/summary', protect, [
   query('days').optional().isInt({ min: 1, max: 365 })
-], async (req, res) => {
+], validate, async (req, res) => {
   try {
     const days = parseInt(req.query.days) || 30;
     const stats = await ActivityLog.getActivityStats(scopeQueryFor(req.user), days);
@@ -136,7 +138,7 @@ router.get('/stats/summary', protect, [
 // @access  Private
 router.get('/recent', protect, [
   query('limit').optional().isInt({ min: 1, max: 50 })
-], async (req, res) => {
+], validate, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
 
@@ -168,7 +170,7 @@ router.get('/recent', protect, [
 router.get('/critical', protect, [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 })
-], async (req, res) => {
+], validate, async (req, res) => {
   try {
     const { page = 1, limit = 20 } = req.query;
 
@@ -216,7 +218,7 @@ router.get('/critical', protect, [
 // @route   GET /api/activity-log/export
 // @desc    Export activity log entries matching the current filters as an .xlsx file
 // @access  Private
-router.get('/export', protect, requirePermission('Activity Log: Export'), listFilterValidators, async (req, res) => {
+router.get('/export', protect, requirePermission('Activity Log: Export'), listFilterValidators, validate, async (req, res) => {
   try {
     const listQuery = buildListQuery(req.user, req.query);
 
@@ -287,7 +289,7 @@ router.get('/export', protect, requirePermission('Activity Log: Export'), listFi
 router.get('/entity/:entityType/:entityId', protect, [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 })
-], async (req, res) => {
+], validate, async (req, res) => {
   try {
     const { entityType, entityId } = req.params;
     const { page = 1, limit = 20 } = req.query;
@@ -332,7 +334,7 @@ router.get('/entity/:entityType/:entityId', protect, [
 router.get('/user/:userId', protect, [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 })
-], async (req, res) => {
+], validate, async (req, res) => {
   try {
     const { userId } = req.params;
     const { page = 1, limit = 20 } = req.query;
@@ -369,6 +371,7 @@ router.get('/user/:userId', protect, [
 // @access  Private
 router.get('/:id', protect, async (req, res) => {
   try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ status: 'error', message: 'Activity log entry not found' });
     const activity = await ActivityLog.findOne({ _id: req.params.id, ...scopeQueryFor(req.user) })
       .populate('performedBy', 'fullName email')
       .populate('relatedCustomer', 'name')
@@ -408,7 +411,7 @@ router.delete('/:id', protect, async (req, res) => {
       });
     }
 
-    const activity = await ActivityLog.findOne({ _id: req.params.id, ...scopeQueryFor(req.user) });
+    const activity = mongoose.isValidObjectId(req.params.id) ? await ActivityLog.findOne({ _id: req.params.id, ...scopeQueryFor(req.user) }) : null;
 
     if (!activity) {
       return res.status(404).json({

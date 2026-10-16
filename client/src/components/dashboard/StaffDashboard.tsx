@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { differenceInCalendarDays, format } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   Plus,
   FileText,
-  DollarSign,
+  IndianRupee,
   Briefcase,
   TrendingUp,
   Calendar,
@@ -15,7 +15,8 @@ import {
   CheckCircle,
   AlertCircle,
   Loader2,
-  User
+  User,
+  Wallet
 } from "lucide-react";
 import {
   Select,
@@ -28,6 +29,11 @@ import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
 import { CreateQuotationDialog } from "@/components/quotations/CreateQuotationDialog";
 import { CalendarReminders } from "@/components/staff/CalendarReminders";
 import { formatCurrency } from "@/lib/utils";
+import { PageShell } from "@/components/layout/PageShell";
+import { JobStatusBadge } from "@/components/jobs/JobStatusBadge";
+import { Link } from "react-router-dom";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { Panel } from "@/components/common/Panel";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -49,8 +55,19 @@ interface Task {
   jobTitle?: string;
 }
 
+/** GET /api/jobs/mine — jobs this person handles or has tasks on. */
+interface MyJob {
+  _id: string;
+  title: string;
+  status: string;
+  dueDate?: string;
+  customerId?: { name?: string };
+}
+
 export function StaffDashboard() {
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
+  const canCreateJob = hasPermission("Jobs: Create & Edit");
+  const canQuote = hasPermission("Quotations: Create & Edit");
   const { toast } = useToast();
   const [showCreateJob, setShowCreateJob] = useState(false);
   const [totalDesignCharge, setTotalDesignCharge] = useState(0);
@@ -70,52 +87,38 @@ export function StaffDashboard() {
   console.log('🎯 User ID:', (user as any)?.id || (user as any)?._id);
   console.log('🎯 User role:', user?.role);
 
+  // Design charges on the job tickets this login created (GET /api/jobs/staff/stats).
+  // This replaced a calculation over the business's whole accounts ledger,
+  // which showed staff the company's income and was not their earnings.
   const fetchStaffStats = useCallback(async () => {
     try {
       setLoading(true);
-      console.log('📊 Fetching staff revenue for period:', selectedPeriod);
-
-      // Fetch revenue/earnings from accounts ledger
-      const response = await apiClient.get(`/accounts/ledger?period=${selectedPeriod}`) as any;
-      console.log('📊 API response:', response);
-
-      // Handle response - calculate net revenue from ledger data
-      const ledgerData = response?.data || response || [];
-      console.log('📊 Ledger data:', ledgerData);
-      
-      // Calculate total income and expenses from ledger
-      let totalIncome = 0;
-      let totalExpenses = 0;
-      
-      if (Array.isArray(ledgerData)) {
-        totalIncome = ledgerData
-          .filter((entry: any) => entry.type === 'income' || entry.amount > 0)
-          .reduce((sum: number, entry: any) => sum + Math.abs(entry.amount || 0), 0);
-          
-        totalExpenses = ledgerData
-          .filter((entry: any) => entry.type === 'expense' || entry.amount < 0)
-          .reduce((sum: number, entry: any) => sum + Math.abs(entry.amount || 0), 0);
-      }
-      
-      const netRevenue = totalIncome - totalExpenses;
-      console.log('📊 Calculated - Income:', totalIncome, 'Expenses:', totalExpenses, 'Net Revenue:', netRevenue);
-      
-      setTotalDesignCharge(netRevenue);
-      console.log('✅ Net revenue set to:', netRevenue);
+      const response = (await apiClient.get('/jobs/staff/stats', { period: selectedPeriod })) as { totalDesignCharge?: number };
+      setTotalDesignCharge(response?.totalDesignCharge || 0);
     } catch (error: unknown) {
-      console.error('❌ Error fetching revenue:', error);
-      const errorMessage = error instanceof Error ? error.message : "Failed to load revenue statistics";
       toast({
-        title: "Error",
-        description: errorMessage,
+        title: "Earnings could not be loaded",
+        description: error instanceof Error ? error.message : undefined,
         variant: "destructive",
       });
       setTotalDesignCharge(0);
     } finally {
       setLoading(false);
-      console.log('📊 Loading complete. Net revenue:', totalDesignCharge);
     }
   }, [selectedPeriod, toast]);
+
+  const [myJobs, setMyJobs] = useState<MyJob[] | null>(null);
+  const fetchMyJobs = useCallback(async () => {
+    try {
+      setMyJobs(((await apiClient.getMyJobs()).jobs || []) as MyJob[]);
+    } catch {
+      setMyJobs([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (user) fetchStaffStats();
+  }, [user, fetchStaffStats]);
 
   // Fetch today's schedule for the logged-in staff
   const fetchTodaySchedule = useCallback(async () => {
@@ -144,9 +147,6 @@ export function StaffDashboard() {
         schedules = response;
       } else if (response.data && Array.isArray(response.data)) {
         console.log('📅 Response has data array');
-        schedules = response.data;
-      } else if (response.success && response.data && Array.isArray(response.data)) {
-        console.log('📅 Response has success + data array');
         schedules = response.data;
       } else if (response.schedules && Array.isArray(response.schedules)) {
         console.log('📅 Response has schedules array');
@@ -242,9 +242,9 @@ export function StaffDashboard() {
     
     if (user && (user as any).id) {
       console.log('🎯 About to call fetchStaffStats, fetchTodaySchedule, fetchAssignedTasks');
-      fetchStaffStats();
       fetchTodaySchedule();
       fetchAssignedTasks();
+      fetchMyJobs();
     } else {
       console.log('🎯 User or user ID not available, skipping API calls');
     }
@@ -279,293 +279,196 @@ export function StaffDashboard() {
     }
   };
 
+  const openTasks = assignedTasks.filter(t => t.status !== 'completed');
+  const overdueTasks = openTasks.filter(t => t.dueDate && differenceInCalendarDays(new Date(t.dueDate), new Date()) < 0);
+  const dueTodayTasks = openTasks.filter(t => t.dueDate && differenceInCalendarDays(new Date(t.dueDate), new Date()) === 0);
+  const priorityTasks = [...assignedTasks].sort((a, b) => {
+    const aDone = a.status === 'completed' ? 1 : 0;
+    const bDone = b.status === 'completed' ? 1 : 0;
+    return aDone - bDone || new Date(a.dueDate || '9999-12-31').getTime() - new Date(b.dueDate || '9999-12-31').getTime();
+  });
+  const STATUS_LABEL: Record<string, string> = { pending: "Pending", in_progress: "In progress", completed: "Completed", overdue: "Overdue" };
+  const loadingRow = (
+    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+      <Loader2 className="h-4 w-4 animate-spin" />
+      Loading…
+    </div>
+  );
+
   return (
-    <div className="p-3 md:p-4">
-      {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl md:text-3xl font-bold text-foreground mb-2">
-          Welcome, {user?.fullName}
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Staff Dashboard - Quick actions and your earnings
-        </p>
-      </div>
+    <PageShell>
+      <PageHeader
+        eyebrow={format(new Date(), "EEEE, d MMMM yyyy")}
+        title={`Welcome, ${user?.fullName || "there"}`}
+        description="Your shift, tasks and earnings at a glance"
+        actions={
+          canCreateJob || canQuote ? (
+            <>
+              {canCreateJob && (
+                <Button onClick={() => setShowCreateJob(true)}>
+                  <Plus />
+                  New Job Ticket
+                </Button>
+              )}
+              {canQuote && (
+                <CreateQuotationDialog onQuotationCreated={handleQuotationCreated}>
+                  <Button variant="outline">
+                    <FileText />
+                    Create Quotation
+                  </Button>
+                </CreateQuotationDialog>
+              )}
+            </>
+          ) : undefined
+        }
+      />
 
-      {/* Quick Actions */}
-      <div className="mb-6">
-        <h2 className="text-lg font-semibold text-foreground mb-3">Quick Actions</h2>
-        <div className="flex flex-wrap items-center gap-3">
-          {/* Quick Job */}
-          <Button
-            onClick={() => setShowCreateJob(true)}
-            size="lg"
-            className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white shadow-lg transition-all duration-200 hover:scale-105"
-          >
-            <Plus className="h-5 w-5 mr-2" />
-            Quick Job
-          </Button>
-
-          {/* Create Quotation */}
-          <CreateQuotationDialog onQuotationCreated={handleQuotationCreated}>
-            <Button
-              size="lg"
-              className="bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white shadow-lg transition-all duration-200 hover:scale-105"
-            >
-              <FileText className="h-5 w-5 mr-2" />
-              Create Quotation
-            </Button>
-          </CreateQuotationDialog>
+      {!loadingTasks && (overdueTasks.length > 0 || dueTodayTasks.length > 0) && (
+        <div role="status" className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-warning/35 bg-warning-soft px-3 py-2 text-sm font-medium text-warning-strong">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          {overdueTasks.length > 0 && <span>{overdueTasks.length} overdue task{overdueTasks.length === 1 ? '' : 's'}</span>}
+          {dueTodayTasks.length > 0 && <span>{dueTodayTasks.length} due today</span>}
         </div>
-      </div>
+      )}
 
-      {/* Earnings Section with Filter */}
-      <div className="mb-4">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold text-foreground">Your Earnings</h2>
-          <div className="flex items-center gap-2">
-            <Calendar className="h-4 w-4 text-muted-foreground" />
+      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {/* Earnings, with its period filter */}
+        <Panel
+          title="Earnings"
+          icon={Wallet}
+          action={
             <Select value={selectedPeriod} onValueChange={(value: 'weekly' | 'monthly' | 'yearly' | 'all') => setSelectedPeriod(value)}>
-              <SelectTrigger className="w-[140px]">
+              <SelectTrigger className="h-8 w-[116px]" aria-label="Earnings period">
                 <SelectValue placeholder="Select period" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent align="end">
                 <SelectItem value="all">All Time</SelectItem>
                 <SelectItem value="weekly">This Week</SelectItem>
                 <SelectItem value="monthly">This Month</SelectItem>
                 <SelectItem value="yearly">This Year</SelectItem>
               </SelectContent>
             </Select>
-          </div>
-        </div>
-      </div>
-
-      {/* Total Revenue Card */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <Card className="relative overflow-hidden border-0 shadow-elevated bg-gradient-to-br from-[#27AE60] to-[#2ECC71] text-white col-span-1 lg:col-span-1">
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center">
-                  <DollarSign className="w-5 h-5" />
-                </div>
-                <CardTitle className="text-white font-semibold text-base">
-                  Total Revenue
-                </CardTitle>
-              </div>
-              <div className="text-2xl">💰</div>
+          }
+        >
+          <div className="relative p-4 sm:p-5">
+            <div className="num text-3xl font-semibold tracking-tight">
+              {loading ? <span className="inline-block h-8 w-28 animate-pulse rounded bg-muted" /> : formatCurrency(totalDesignCharge)}
             </div>
-          </CardHeader>
-          <CardContent className="pt-2 pb-4">
-            <div className="text-3xl md:text-4xl font-bold mb-2">
-              {loading ? "..." : formatCurrency(totalDesignCharge)}
-            </div>
-            <p className="text-white/80 text-sm font-medium">
-              {selectedPeriod === 'all' && 'Your total revenue from all time'}
-              {selectedPeriod === 'weekly' && 'Revenue from last 7 days'}
-              {selectedPeriod === 'monthly' && 'Revenue from last 30 days'}
-              {selectedPeriod === 'yearly' && 'Revenue from last year'}
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              Design charges on job tickets you created
+              {selectedPeriod === 'weekly' && ' in the last 7 days'}
+              {selectedPeriod === 'monthly' && ' in the last 30 days'}
+              {selectedPeriod === 'yearly' && ' in the last year'}
             </p>
-            {/* Decorative elements */}
-            <div className="absolute -bottom-4 -right-4 w-20 h-20 bg-white/10 rounded-full"></div>
-            <div className="absolute -top-2 -right-2 w-12 h-12 bg-white/10 rounded-full"></div>
-          </CardContent>
-        </Card>
+          </div>
+        </Panel>
 
-        
-        {/* Payment Dues Card */}
-        <Card className="border-0 shadow-card bg-card hover:shadow-elevated transition-all duration-300">
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Payment Dues
-              </CardTitle>
-              <Briefcase className="w-4 h-4 text-muted-foreground" />
-            </div>
-          </CardHeader>
-          <CardContent className="pt-0">
-            {loadingTasks ? (
-              <div className="flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span className="text-sm text-muted-foreground">Loading...</span>
-              </div>
-            ) : assignedTasks.length > 0 ? (
-              <div className="space-y-2">
-                <div className="text-lg font-bold text-foreground">
-                  {assignedTasks.filter(t => t.status === 'pending' && t.dueDate).length}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Payment dues pending
-                </p>
-                <div className="space-y-1 max-h-20 overflow-y-auto">
-                  {assignedTasks
-                    .filter(t => t.status === 'pending' && t.dueDate)
-                    .slice(0, 3)
-                    .map((task) => (
-                      <div key={task._id} className="flex items-center gap-2 text-xs">
-                        <Badge variant="destructive" className="text-xs">
-                          Due
-                        </Badge>
-                        <span className="truncate flex-1">{task.title}</span>
-                        <span className="text-orange-600">
-                          {new Date(task.dueDate).toLocaleDateString()}
-                        </span>
-                      </div>
-                    ))}
-                  {assignedTasks.filter(t => t.status === 'pending' && t.dueDate).length > 3 && (
-                    <p className="text-xs text-muted-foreground">
-                      +{assignedTasks.filter(t => t.status === 'pending' && t.dueDate).length - 3} more dues
-                    </p>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <CheckCircle className="h-4 w-4" />
-                  <span className="text-sm font-medium">No payment dues</span>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  All payments are up to date
-                </p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-        <Card className="border-0 shadow-card bg-card hover:shadow-elevated transition-all duration-300">
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Today's Schedule
-              </CardTitle>
-              <CalendarDays className="w-4 h-4 text-muted-foreground" />
-            </div>
-          </CardHeader>
-          <CardContent className="pt-0">
+        {/* Today's schedule */}
+        <Panel title="Today's schedule" icon={CalendarDays}>
+          <div className="p-4 sm:p-5">
             {loadingSchedule ? (
-              <div className="flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span className="text-sm text-muted-foreground">Loading...</span>
-              </div>
+              loadingRow
             ) : todaySchedule ? (
               <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <Clock className="h-4 w-4 text-blue-600" />
-                  <span className="text-sm font-medium">
-                    {todaySchedule.startTime} - {todaySchedule.endTime}
-                  </span>
+                <div className="num flex items-center gap-2 text-xl font-semibold">
+                  <Clock className="h-4 w-4 text-primary" />
+                  {todaySchedule.startTime} – {todaySchedule.endTime}
                 </div>
-                <Badge variant="outline" className="capitalize">
-                  {todaySchedule.shiftType} Shift
+                <Badge variant="info" className="capitalize">
+                  {todaySchedule.shiftType} shift
                 </Badge>
               </div>
             ) : assignedTasks.length > 0 ? (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 text-orange-600">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-sm font-medium text-warning-strong">
                   <AlertCircle className="h-4 w-4" />
-                  <span className="text-sm font-medium">Flexible Schedule</span>
+                  Flexible schedule
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Work on your {assignedTasks.length} assigned task{assignedTasks.length !== 1 ? 's' : ''}
                 </p>
               </div>
             ) : (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 text-muted-foreground">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                   <AlertCircle className="h-4 w-4" />
-                  <span className="text-sm font-medium">No Schedule Set</span>
+                  No schedule set
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Contact admin to set up your work schedule
-                </p>
+                <p className="text-xs text-muted-foreground">Contact admin to set up your work schedule</p>
               </div>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </Panel>
 
-        {/* Assigned Tasks Card */}
-        <Card className="border-0 shadow-card bg-card hover:shadow-elevated transition-all duration-300">
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Your Tasks
-              </CardTitle>
-              <CheckCircle className="w-4 h-4 text-muted-foreground" />
-            </div>
-          </CardHeader>
-          <CardContent className="pt-0">
+        {/* Assigned tasks */}
+        <Panel title="Your tasks" icon={CheckCircle} count={loadingTasks ? undefined : assignedTasks.length}>
+          <div className="p-4 sm:p-5">
             {loadingTasks ? (
-              <div className="flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span className="text-sm text-muted-foreground">Loading...</span>
-              </div>
+              loadingRow
             ) : assignedTasks.length > 0 ? (
-              <div className="space-y-2">
-                <div className="text-lg font-bold text-foreground">
-                  {assignedTasks.length}
-                </div>
+              <div className="space-y-3">
                 <p className="text-xs text-muted-foreground">
-                  {assignedTasks.filter(t => t.status === 'pending').length} pending, 
-                  {assignedTasks.filter(t => t.status === 'in_progress').length} in progress
+                  <span className="font-semibold text-foreground">{assignedTasks.filter(t => t.status === 'pending').length}</span> pending ·{" "}
+                  <span className="font-semibold text-foreground">{assignedTasks.filter(t => t.status === 'in_progress').length}</span> in progress
                 </p>
-                <div className="space-y-1 max-h-20 overflow-y-auto">
-                  {assignedTasks.slice(0, 3).map((task) => (
-                    <div key={task._id} className="flex items-center gap-2 text-xs">
-                      <Badge variant={getTaskStatusColor(task.status)} className="text-xs">
-                        {task.status}
-                      </Badge>
-                      <span className="truncate flex-1">{task.title}</span>
-                    </div>
+                <ul className="space-y-1.5">
+                  {priorityTasks.slice(0, 3).map((task) => (
+                    <li key={task._id} className="flex items-center gap-2 text-xs">
+                      <Badge variant={getTaskStatusColor(task.status)}>{STATUS_LABEL[task.status] || task.status}</Badge>
+                      <Link to={`/tasks/${task._id}`} className="min-w-0 flex-1 truncate hover:underline">{task.title}</Link>
+                      {task.dueDate && !Number.isNaN(new Date(task.dueDate).getTime()) && (
+                        <span className="num shrink-0 text-muted-foreground">{format(new Date(task.dueDate), 'd MMM')}</span>
+                      )}
+                    </li>
                   ))}
-                  {assignedTasks.length > 3 && (
-                    <p className="text-xs text-muted-foreground">
-                      +{assignedTasks.length - 3} more tasks
-                    </p>
-                  )}
-                </div>
+                </ul>
+                {assignedTasks.length > 3 && (
+                  <p className="text-xs text-muted-foreground">+{assignedTasks.length - 3} more tasks</p>
+                )}
               </div>
             ) : (
-              <div className="flex items-center gap-2 text-muted-foreground">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <CheckCircle className="h-4 w-4" />
-                <span className="text-sm">No assigned tasks</span>
+                No assigned tasks
               </div>
             )}
-          </CardContent>
-        </Card>
-      </div>
+          </div>
+        </Panel>
+
+        {/* Jobs this person handles or has tasks on */}
+        <Panel title="My jobs" icon={Briefcase} count={myJobs ? myJobs.length : undefined} description="Jobs you handle or have tasks on">
+          {myJobs === null ? (
+            <div className="p-4 sm:p-5">{loadingRow}</div>
+          ) : myJobs.length === 0 ? (
+            <div className="p-4 text-sm text-muted-foreground sm:p-5">No open jobs assigned to you.</div>
+          ) : (
+            <ul className="max-h-60 divide-y overflow-y-auto">
+              {myJobs.slice(0, 8).map((job) => {
+                const late = job.dueDate && differenceInCalendarDays(new Date(job.dueDate), new Date()) < 0;
+                return (
+                  <li key={job._id} className="px-4 py-2.5 sm:px-5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-sm font-medium">{job.title}</span>
+                      {job.dueDate && (
+                        <span className={late ? "shrink-0 text-xs font-semibold text-destructive-strong" : "shrink-0 text-xs text-muted-foreground"}>
+                          {format(new Date(job.dueDate), "d MMM")}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <JobStatusBadge status={job.status} />
+                      <span className="truncate text-xs text-muted-foreground">{job.customerId?.name || ""}</span>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </Panel>
+      </section>
 
       {/* Calendar & Reminders Section */}
       <CalendarReminders onTaskUpdate={fetchAssignedTasks} />
-
-      {/* Info Section */}
-      <Card className="mt-6 border-0 shadow-card bg-card">
-        <CardHeader>
-          <CardTitle className="text-base font-semibold text-foreground">
-            Staff Dashboard Features
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-2 text-sm text-muted-foreground">
-            <p>
-              <strong>Today's Schedule:</strong> View your current day's shift timing and type
-            </p>
-            <p>
-              <strong>Your Tasks:</strong> See all tasks assigned to you with status and priority
-            </p>
-            <p>
-              <strong>Calendar & Reminders:</strong> Manage your tasks with due dates and status updates
-            </p>
-            <p>
-              <strong>Quick Job:</strong> Create new jobs quickly and efficiently
-            </p>
-            <p>
-              <strong>Create Quotation:</strong> Generate quotations for potential clients
-            </p>
-            <p>
-              <strong>Total Design Charge:</strong> View your cumulative earnings from all your work
-            </p>
-          </div>
-        </CardContent>
-      </Card>
 
       {/* Dialogs */}
       <CreateJobDialog
@@ -575,6 +478,6 @@ export function StaffDashboard() {
         customers={customers}
         onCustomersUpdate={() => { }}
       />
-    </div>
+    </PageShell>
   );
 }

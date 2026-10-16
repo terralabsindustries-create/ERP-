@@ -32,7 +32,7 @@ import {
   Phone,
   MapPin,
   Hash,
-  DollarSign,
+  IndianRupee,
   Package,
   Percent,
   Settings,
@@ -43,17 +43,21 @@ import { getTemplateBodyText, getTemplateVariableNumbers } from "@/lib/whatsappT
 import { useToast } from "@/hooks/use-toast";
 import { EditInvoiceDialog } from "./EditInvoiceDialog";
 import { useNavigate } from "react-router-dom";
+import { AREA_UNITS, areaText, isAreaUnit, sizeLabel } from "@/lib/billing";
+import { formatINR } from "@/lib/format";
 
 interface InvoiceItem {
   itemName: string;
   description?: string;
   quantity: number;
+  unit?: string;
   unitPrice: number;
   totalAmount: number;
-  hsnCode: string;
-  gstRate: number;
-  gstAmount: number;
-  itemTotal: number;
+  itemType?: string;
+  length?: number;
+  width?: number;
+  areaPerPiece?: number;
+  totalSquareFeet?: number;
 }
 
 interface Invoice {
@@ -76,16 +80,15 @@ interface Invoice {
   dueDate: string;
   items: InvoiceItem[];
   subtotal: number;
+  designCharge?: number;
   discountAmount: number;
-  taxableAmount: number;
   totalGstAmount: number;
   totalAmount: number;
   amountPaid: number;
   balanceDue: number;
   status: 'draft' | 'sent' | 'paid' | 'overdue' | 'cancelled' | 'refunded';
   paymentStatus: 'pending' | 'partial' | 'paid' | 'overdue';
-  isInterState: boolean;
-  noGst: boolean;
+  noGst?: boolean;
   notes?: string;
   termsAndConditions?: string;
   createdAt: string;
@@ -318,11 +321,6 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
                 </DialogDescription>
               </div>
               <div className="flex items-center gap-2">
-                {invoice.noGst && (
-                  <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
-                    No GST
-                  </Badge>
-                )}
                 <Badge variant={paymentStatusConfig.variant}>
                   {paymentStatusConfig.label}
                 </Badge>
@@ -402,12 +400,6 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
                 </div>
                 <div className="space-y-2">
                   <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Inter-State:</span>
-                    <Badge variant={invoice.isInterState ? "default" : "secondary"}>
-                      {invoice.isInterState ? "Yes (IGST)" : "No (CGST+SGST)"}
-                    </Badge>
-                  </div>
-                  <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Created:</span>
                     <span className="font-semibold">{new Date(invoice.createdAt).toLocaleDateString()}</span>
                   </div>
@@ -425,25 +417,35 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
-                  {invoice.items.map((item, index) => (
-                    <div key={index} className="border rounded-lg p-4 space-y-2">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <h4 className="font-semibold">{item.itemName}</h4>
-                          {item.description && (
-                            <p className="text-sm text-muted-foreground">{item.description}</p>
-                          )}
+                  {invoice.items.map((item, index) => {
+                    // Older area lines may say "pieces"; they were priced per sq ft.
+                    const isArea = item.itemType === 'Square Feet';
+                    const unit = isArea && !isAreaUnit(item.unit) ? 'sqft' : item.unit;
+                    const size = sizeLabel({ unit, length: item.length, width: item.width });
+                    const perPiece = item.areaPerPiece || (size ? (item.length || 0) * (item.width || 0) : 0);
+                    return (
+                      <div key={index} className="border rounded-lg p-4 space-y-2">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <h4 className="font-semibold">{item.itemName}</h4>
+                            {item.description && (
+                              <p className="text-sm text-muted-foreground">{item.description}</p>
+                            )}
+                          </div>
+                          <span className="font-semibold">{formatINR(item.totalAmount || 0)}</span>
                         </div>
-                        <span className="font-semibold">₹{item.itemTotal.toLocaleString()}</span>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm text-muted-foreground">
+                          {size && <div>Size: {size} ({areaText(perPiece, unit)} each)</div>}
+                          {isArea && <div>Area: {areaText(item.totalSquareFeet || 0, unit)}</div>}
+                          <div>Qty: {item.quantity}{!isArea && item.unit && item.unit !== 'pieces' ? ` ${item.unit}` : ''}</div>
+                          <div>
+                            Rate: {formatINR(item.unitPrice || 0)}
+                            {isArea && isAreaUnit(unit) ? ` / ${AREA_UNITS[unit].label}` : ''}
+                          </div>
+                        </div>
                       </div>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm text-muted-foreground">
-                        <div>Qty: {item.quantity}</div>
-                        <div>Unit Price: ₹{item.unitPrice.toLocaleString()}</div>
-                        <div>HSN: {item.hsnCode}</div>
-                        <div>GST: {item.gstRate}% (₹{item.gstAmount.toLocaleString()})</div>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>
@@ -452,46 +454,47 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg flex items-center gap-2">
-                  <DollarSign className="h-5 w-5" />
+                  <IndianRupee className="h-5 w-5" />
                   Payment Summary
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Subtotal:</span>
-                  <span>₹{invoice.subtotal.toLocaleString()}</span>
+                  <span className="text-muted-foreground">Items subtotal:</span>
+                  <span>{formatINR(invoice.subtotal || 0)}</span>
                 </div>
+                {(invoice.designCharge || 0) > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Design charge:</span>
+                    <span>{formatINR(invoice.designCharge || 0)}</span>
+                  </div>
+                )}
                 {invoice.discountAmount > 0 && (
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Discount:</span>
-                    <span className="text-red-600">-₹{invoice.discountAmount.toLocaleString()}</span>
+                    <span className="text-destructive-strong">-{formatINR(invoice.discountAmount)}</span>
                   </div>
                 )}
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Taxable Amount:</span>
-                  <span>₹{invoice.taxableAmount.toLocaleString()}</span>
-                </div>
-                {!invoice.noGst && (
+                {/* Only invoices issued before GST was removed carry any. */}
+                {!invoice.noGst && (invoice.totalGstAmount || 0) > 0 && (
                   <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">
-                      Total GST ({invoice.isInterState ? 'IGST' : 'CGST+SGST'}):
-                    </span>
-                    <span>₹{invoice.totalGstAmount.toLocaleString()}</span>
+                    <span className="text-muted-foreground">GST (issued before GST was removed):</span>
+                    <span>{formatINR(invoice.totalGstAmount)}</span>
                   </div>
                 )}
                 <div className="border-t pt-2 flex justify-between font-semibold">
                   <span>Total Amount:</span>
-                  <span className="text-lg">₹{invoice.totalAmount.toLocaleString()}</span>
+                  <span className="text-lg">{formatINR(invoice.totalAmount || 0)}</span>
                 </div>
                 {invoice.amountPaid > 0 && (
                   <>
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Amount Paid:</span>
-                      <span className="text-green-600">₹{invoice.amountPaid.toLocaleString()}</span>
+                      <span className="text-success-strong">₹{invoice.amountPaid.toLocaleString()}</span>
                     </div>
                     <div className="flex justify-between font-semibold">
                       <span>Balance Due:</span>
-                      <span className="text-orange-600">₹{invoice.balanceDue.toLocaleString()}</span>
+                      <span className="text-warning-strong">₹{invoice.balanceDue.toLocaleString()}</span>
                     </div>
                   </>
                 )}
@@ -634,7 +637,7 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
               />
             </div>
             {!loadingTemplates && !metaIntegrationEnabled && (
-              <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-3">
+              <div className="text-sm text-warning-strong bg-warning-soft border border-warning/30 rounded p-3">
                 WhatsApp Business API isn't connected yet. Go to Settings → WhatsApp to connect it before sending invoices.
               </div>
             )}
@@ -735,7 +738,7 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
       <Dialog open={showCompanySettingsDialog} onOpenChange={setShowCompanySettingsDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-amber-600">
+            <DialogTitle className="flex items-center gap-2 text-warning-strong">
               <AlertTriangle className="h-5 w-5" />
               Company Settings Required
             </DialogTitle>
@@ -744,16 +747,15 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-              <p className="text-sm text-amber-800">
+            <div className="bg-warning-soft border border-warning/30 rounded-lg p-4">
+              <p className="text-sm text-warning-strong">
                 Please go to <strong>Settings &gt; Company</strong> and add your company information including:
               </p>
-              <ul className="text-sm text-amber-700 mt-2 ml-4 list-disc">
+              <ul className="text-sm text-warning-strong mt-2 ml-4 list-disc">
                 <li>Company Name</li>
                 <li>Company Address</li>
                 <li>Phone Number</li>
                 <li>Email</li>
-                <li>GST Number (if applicable)</li>
               </ul>
             </div>
           </div>
@@ -779,7 +781,7 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
       <EditInvoiceDialog
         open={showEditDialog}
         onOpenChange={handleEditDialogClose}
-        invoice={invoice}
+        invoice={invoice as unknown as React.ComponentProps<typeof EditInvoiceDialog>["invoice"]}
         onInvoiceUpdated={onInvoiceUpdated}
       />
     </>

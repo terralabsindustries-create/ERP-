@@ -1,31 +1,36 @@
 const express = require('express');
 const { body, query } = require('express-validator');
+const { validate } = require('../middleware/validate');
 const Vendor = require('../models/Vendor');
 const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
-const { requirePermission } = require('../middleware/requirePermission');
+const { requirePermission, userCan } = require('../middleware/requirePermission');
+const PurchaseBill = require('../models/PurchaseBill');
+const { canViewAllStaffData } = require('../utils/dataScopeHelper');
+
+const { orgUserFilter } = require('../utils/accessScope');
 
 const router = express.Router();
 
 // Validation rules
 const vendorValidation = [
   body('name').notEmpty().withMessage('Vendor name is required').trim(),
-  body('email').optional().isEmail().normalizeEmail(),
-  body('phone').optional().isMobilePhone(),
-  body('vendorType').optional().isIn(['supplier', 'service_provider', 'contractor', 'other']),
-  body('status').optional().isIn(['active', 'inactive', 'blacklisted'])
+  body('email').optional({ values: 'falsy' }).isEmail().normalizeEmail(),
+  body('phone').optional({ values: 'falsy' }).matches(/^\+?[\d\s()-]{7,20}$/).withMessage('Enter a valid phone number'),
+  body('vendorType').optional({ values: 'falsy' }).isIn(['Supplier', 'Service Provider', 'Contractor', 'Other']),
+  body('status').optional({ values: 'falsy' }).isIn(['active', 'inactive', 'blacklisted'])
 ];
 
 // @route   GET /api/vendors
 // @desc    Get all vendors for the authenticated user
 // @access  Private
 router.get('/', protect, [
-  query('vendorType').optional().isIn(['supplier', 'service_provider', 'contractor', 'other']),
-  query('status').optional().isIn(['active', 'inactive', 'blacklisted']),
-  query('search').optional().trim(),
-  query('page').optional().isInt({ min: 1 }),
-  query('limit').optional().isInt({ min: 1, max: 100 })
-], async (req, res) => {
+  query('vendorType').optional({ values: 'falsy' }).isIn(['all', 'Supplier', 'Service Provider', 'Contractor', 'Other']),
+  query('status').optional({ values: 'falsy' }).isIn(['all', 'active', 'inactive', 'blacklisted']),
+  query('search').optional({ values: 'falsy' }).trim(),
+  query('page').optional({ values: 'falsy' }).isInt({ min: 1 }),
+  query('limit').optional({ values: 'falsy' }).isInt({ min: 1, max: 100 })
+], validate, async (req, res) => {
   try {
     const {
       vendorType,
@@ -38,7 +43,7 @@ router.get('/', protect, [
     } = req.query;
     
     // Build query - filter by authenticated user
-    const query = { userId: req.user._id };
+    const query = { ...(await orgUserFilter(req.user)) };
 
     if (vendorType && vendorType !== 'all') {
       query.vendorType = vendorType;
@@ -72,11 +77,31 @@ router.get('/', protect, [
     
     // Get total count
     const totalVendors = await Vendor.countDocuments(query);
-    
+
+    // Billed and still owed per supplier, from the purchase bills this login
+    // may see (the stored totals on the vendor are not kept up to date).
+    let bills = {};
+    if (vendors.length && userCan(req.user, 'Purchase Bills')) {
+      const scope = canViewAllStaffData(req.user) ? await orgUserFilter(req.user) : { userId: req.user._id };
+      const rows = await PurchaseBill.aggregate([
+        { $match: { ...scope, vendorId: { $in: vendors.map((v) => v._id) }, status: { $ne: 'cancelled' } } },
+        {
+          $group: {
+            _id: '$vendorId',
+            billed: { $sum: '$totalAmount' },
+            outstanding: { $sum: { $ifNull: ['$balanceAmount', 0] } },
+            bills: { $sum: 1 },
+            lastBillDate: { $max: '$billDate' }
+          }
+        }
+      ]);
+      bills = Object.fromEntries(rows.map((r) => [String(r._id), { billed: r.billed, outstanding: r.outstanding, bills: r.bills, lastBillDate: r.lastBillDate }]));
+    }
+
     res.status(200).json({
       status: 'success',
       data: {
-        vendors,
+        vendors: vendors.map((v) => ({ ...v.toJSON(), purchases: bills[String(v._id)] || null })),
         pagination: {
           current: parseInt(page),
           total: Math.ceil(totalVendors / limit),
@@ -146,7 +171,7 @@ router.get('/:id', protect, async (req, res) => {
   try {
     const vendor = await Vendor.findOne({
       _id: req.params.id,
-      userId: req.user._id
+      ...(await orgUserFilter(req.user))
     });
     
     if (!vendor) {
@@ -175,7 +200,7 @@ router.get('/:id', protect, async (req, res) => {
 // @route   POST /api/vendors
 // @desc    Create new vendor
 // @access  Private
-router.post('/', protect, requirePermission('Vendors: Create & Edit'), vendorValidation, async (req, res) => {
+router.post('/', protect, requirePermission('Vendors: Create & Edit'), vendorValidation, validate, async (req, res) => {
   try {
     const vendorData = {
       ...req.body,
@@ -218,10 +243,10 @@ router.post('/', protect, requirePermission('Vendors: Create & Edit'), vendorVal
 // @route   PUT /api/vendors/:id
 // @desc    Update vendor
 // @access  Private
-router.put('/:id', protect, requirePermission('Vendors: Create & Edit'), vendorValidation, async (req, res) => {
+router.put('/:id', protect, requirePermission('Vendors: Create & Edit'), vendorValidation, validate, async (req, res) => {
   try {
     const vendor = await Vendor.findOneAndUpdate(
-      { _id: req.params.id },
+      { _id: req.params.id, ...(await orgUserFilter(req.user)) },
       req.body,
       { new: true, runValidators: true }
     );
@@ -272,7 +297,7 @@ router.delete('/:id', protect, requirePermission('Vendors: Delete'), async (req,
   try {
     const vendor = await Vendor.findOneAndDelete({
       _id: req.params.id,
-      userId: req.user._id
+      ...(await orgUserFilter(req.user))
     });
     
     if (!vendor) {
@@ -316,17 +341,18 @@ router.delete('/:id', protect, requirePermission('Vendors: Delete'), async (req,
 router.get('/stats/summary', protect, async (req, res) => {
   try {
     const userId = req.user._id;
+    const scope = await orgUserFilter(req.user);
     
     const [totalVendors, activeVendors, inactiveVendors, blacklistedVendors] = await Promise.all([
-      Vendor.countDocuments({ userId }),
-      Vendor.countDocuments({ userId, status: 'active' }),
-      Vendor.countDocuments({ userId, status: 'inactive' }),
-      Vendor.countDocuments({ userId, status: 'blacklisted' })
+      Vendor.countDocuments({ ...scope }),
+      Vendor.countDocuments({ ...scope, status: 'active' }),
+      Vendor.countDocuments({ ...scope, status: 'inactive' }),
+      Vendor.countDocuments({ ...scope, status: 'blacklisted' })
     ]);
     
     // Get vendor type distribution
     const vendorTypeStats = await Vendor.aggregate([
-      { $match: { userId: require('mongoose').Types.ObjectId(userId) } },
+      { $match: { ...scope } },
       { $group: { _id: '$vendorType', count: { $sum: 1 } } },
       { $sort: { count: -1 } }
     ]);
@@ -360,7 +386,7 @@ router.get('/:id/performance', protect, async (req, res) => {
   try {
     const vendor = await Vendor.findOne({
       _id: req.params.id,
-      userId: req.user._id
+      ...(await orgUserFilter(req.user))
     }).select('name performanceMetrics communicationHistory paymentHistory');
     
     if (!vendor) {
@@ -395,11 +421,11 @@ router.get('/:id/performance', protect, async (req, res) => {
 // @desc    Update vendor performance metrics
 // @access  Private
 router.put('/:id/performance', protect, [
-  body('onTimeDelivery').optional().isFloat({ min: 0, max: 100 }),
-  body('qualityRating').optional().isFloat({ min: 1, max: 5 }),
-  body('communicationRating').optional().isFloat({ min: 1, max: 5 }),
-  body('priceCompetitiveness').optional().isFloat({ min: 1, max: 5 })
-], async (req, res) => {
+  body('onTimeDelivery').optional({ values: 'falsy' }).isFloat({ min: 0, max: 100 }),
+  body('qualityRating').optional({ values: 'falsy' }).isFloat({ min: 1, max: 5 }),
+  body('communicationRating').optional({ values: 'falsy' }).isFloat({ min: 1, max: 5 }),
+  body('priceCompetitiveness').optional({ values: 'falsy' }).isFloat({ min: 1, max: 5 })
+], validate, async (req, res) => {
   try {
     const { onTimeDelivery, qualityRating, communicationRating, priceCompetitiveness } = req.body;
     
@@ -407,7 +433,7 @@ router.put('/:id/performance', protect, [
     const overallScore = (qualityRating + communicationRating + priceCompetitiveness) / 3;
     
     const vendor = await Vendor.findOneAndUpdate(
-      { _id: req.params.id },
+      { _id: req.params.id, ...(await orgUserFilter(req.user)) },
       {
         $set: {
           'performanceMetrics.onTimeDelivery': onTimeDelivery,
@@ -454,14 +480,14 @@ router.put('/:id/performance', protect, [
 router.post('/:id/communication', protect, [
   body('type').isIn(['Email', 'Phone', 'Meeting', 'WhatsApp', 'Other']),
   body('subject').notEmpty().trim(),
-  body('notes').optional().trim(),
+  body('notes').optional({ values: 'falsy' }).trim(),
   body('initiatedBy').isIn(['Vendor', 'Company', 'Both'])
-], async (req, res) => {
+], validate, async (req, res) => {
   try {
     const { type, subject, notes, initiatedBy } = req.body;
     
     const vendor = await Vendor.findOneAndUpdate(
-      { _id: req.params.id },
+      { _id: req.params.id, ...(await orgUserFilter(req.user)) },
       {
         $push: {
           communicationHistory: {
@@ -505,16 +531,16 @@ router.post('/:id/communication', protect, [
 // @access  Private
 router.post('/:id/payment', protect, [
   body('amount').isFloat({ min: 0 }),
-  body('invoiceNumber').optional().trim(),
+  body('invoiceNumber').optional({ values: 'falsy' }).trim(),
   body('paymentMethod').isIn(['Bank Transfer', 'Cheque', 'Cash', 'UPI', 'Other']),
   body('status').isIn(['Pending', 'Paid', 'Overdue', 'Cancelled']),
-  body('notes').optional().trim()
-], async (req, res) => {
+  body('notes').optional({ values: 'falsy' }).trim()
+], validate, async (req, res) => {
   try {
     const { amount, invoiceNumber, paymentMethod, status, notes } = req.body;
     
     const vendor = await Vendor.findOneAndUpdate(
-      { _id: req.params.id },
+      { _id: req.params.id, ...(await orgUserFilter(req.user)) },
       {
         $push: {
           paymentHistory: {

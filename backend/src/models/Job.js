@@ -135,7 +135,7 @@ const jobSchema = new mongoose.Schema({
   },
   assignedOperator: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Staff'
+    ref: 'User' // logins are the staff
   },
   // Print specifications
   printSpecs: {
@@ -208,7 +208,7 @@ jobSchema.index({ title: 'text', description: 'text' });
 jobSchema.index({ status: 1, priority: 1 });
 jobSchema.index({ customerId: 1 });
 jobSchema.index({ userId: 1 });
-jobSchema.index({ dataScope: 1 });
+// dataScope alone is indexed on the field itself (index: true).
 jobSchema.index({ dataScope: 1, status: 1 });
 jobSchema.index({ dueDate: 1 });
 jobSchema.index({ createdAt: -1 });

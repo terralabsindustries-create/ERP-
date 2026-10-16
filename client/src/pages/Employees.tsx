@@ -1,10 +1,8 @@
 import { useState, useEffect } from "react";
-import { Plus, Search, Edit, Trash2, Users, UserCheck, Building2, Wallet } from "lucide-react";
+import { Pencil, Plus, Trash2, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -12,12 +10,14 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
+import { EmptyState } from "@/components/common/EmptyState";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { PageShell } from "@/components/layout/PageShell";
+import { ConfirmDialog, DataCard, DataTable, EntityCell, FilterSelect, MetricBar, SearchField, Stack, StatusPill, Toolbar, ViewTabs, type Column, type PillTone } from "@/components/data";
+import { fmtDate, formatINR, plural } from "@/lib/format";
 
 const emptyEmployee = () => ({
   name: "", email: "", phone: "", gender: "", dateOfBirth: "", address: "",
@@ -41,6 +41,8 @@ export default function Employees() {
   const [editing, setEditing] = useState<any>(null);
   const [form, setForm] = useState<any>(emptyEmployee());
   const [saving, setSaving] = useState(false);
+  const [department, setDepartment] = useState("all");
+  const [deleting, setDeleting] = useState<any>(null);
   const { toast } = useToast();
 
   useEffect(() => { fetchAll(); }, []);
@@ -118,17 +120,17 @@ export default function Employees() {
     }
   };
 
-  const remove = async (emp: any) => {
-    const warning = emp.linkedUserId
-      ? `Delete employee "${emp.name}"? Their login is removed as well, freeing ${emp.email} to be invited again. This cannot be undone.`
-      : `Delete employee "${emp.name}"? This cannot be undone.`;
-    if (!confirm(warning)) return;
+  const remove = async () => {
+    const emp = deleting;
+    if (!emp) return;
     try {
       const response: any = await apiClient.deleteEmployee(emp._id || emp.id);
       toast({ title: "Deleted", description: response?.message || "Employee removed" });
+      setDeleting(null);
       fetchAll();
     } catch (e: any) {
       toast({ title: "Error", description: e.message || "Failed to delete", variant: "destructive" });
+      throw e;
     }
   };
 
@@ -136,88 +138,129 @@ export default function Employees() {
   const setDed = (k: string, v: string) => setForm({ ...form, deductions: { ...form.deductions, [k]: Number(v) || 0 } });
   const setBank = (k: string, v: string) => setForm({ ...form, bankDetails: { ...form.bankDetails, [k]: v } });
 
-  const statusColor: any = { active: "default", inactive: "secondary", terminated: "destructive", "on-leave": "outline" };
+  const STATUS: Record<string, { label: string; tone: PillTone }> = {
+    active: { label: "Active", tone: "success" },
+    "on-leave": { label: "On leave", tone: "warning" },
+    inactive: { label: "Inactive", tone: "neutral" },
+    terminated: { label: "Left", tone: "danger" }
+  };
+  const TYPE: Record<string, string> = { "full-time": "Full-time", "part-time": "Part-time", contract: "Contract", intern: "Intern" };
+  const seesSalary = employees.some((e) => e.netSalary !== undefined);
+  const departments = Array.from(new Set(employees.map((e) => e.department).filter(Boolean))).sort() as string[];
+  const rows = employees.filter((e) => department === "all" || e.department === department);
+
+  const columns: Column<any>[] = [
+    {
+      id: "name",
+      header: "Employee",
+      cell: (e) => <EntityCell avatar={e.name} title={e.name} subtitle={e.email || e.phone} />,
+      sortValue: (e) => (e.name || "").toLowerCase(),
+      className: "min-w-[220px]"
+    },
+    { id: "code", header: "Code", cell: (e) => <span className="font-mono text-xs">{e.employeeCode || "—"}</span>, sortValue: (e) => e.employeeCode || "", hideBelow: "lg" },
+    { id: "role", header: "Role", cell: (e) => <Stack top={e.designation || "—"} bottom={e.department} />, sortValue: (e) => e.designation || "" },
+    { id: "type", header: "Type", cell: (e) => TYPE[e.employmentType] || e.employmentType || "—", hideBelow: "xl" },
+    { id: "joined", header: "Joined", cell: (e) => <span className="whitespace-nowrap">{fmtDate(e.dateOfJoining)}</span>, sortValue: (e) => e.dateOfJoining || "", hideBelow: "lg" },
+    ...(seesSalary
+      ? [{ id: "net", header: "Net / month", align: "right" as const, cell: (e: any) => <span className="font-medium">{inr(e.netSalary)}</span>, sortValue: (e: any) => e.netSalary || 0 }]
+      : []),
+    {
+      id: "status",
+      header: "Status",
+      cell: (e) => {
+        const st = STATUS[e.status] || { label: e.status, tone: "neutral" as PillTone };
+        return <StatusPill tone={st.tone}>{st.label}</StatusPill>;
+      },
+      sortValue: (e) => e.status,
+      className: "w-[110px]"
+    }
+  ];
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Employees</h1>
-          <p className="text-muted-foreground">Manage your team, salary structure and details</p>
-        </div>
-        <Button onClick={openCreate}><Plus className="h-4 w-4 mr-2" />Add Employee</Button>
+    <PageShell>
+      <PageHeader
+        eyebrow="People"
+        title="Employees"
+        description="Everyone on the payroll — role, department, salary structure and bank details."
+        actions={
+          <Button onClick={openCreate}>
+            <Plus />
+            Add employee
+          </Button>
+        }
+      />
+
+      <MetricBar
+        loading={loading}
+        metrics={[
+          { label: "Employees", value: stats.total ?? 0, hint: `${stats.active ?? 0} active` },
+          { label: "On leave", value: employees.filter((e) => e.status === "on-leave").length, hint: "Marked on leave", tone: "warning" },
+          { label: "Departments", value: stats.departments ?? departments.length, hint: departments.slice(0, 3).join(" · ") || "—" },
+          ...(stats.monthlyPayroll !== null && stats.monthlyPayroll !== undefined
+            ? [{ label: "Monthly payroll", value: formatINR(stats.monthlyPayroll, { compact: stats.monthlyPayroll >= 1e5 }), hint: "Net pay of active staff", tone: "info" as const }]
+            : [])
+        ]}
+      />
+
+      <div className="space-y-4">
+        <ViewTabs
+          value={statusFilter}
+          onChange={setStatusFilter}
+          tabs={[
+            { value: "all", label: "All" },
+            { value: "active", label: "Active" },
+            { value: "on-leave", label: "On leave" },
+            { value: "inactive", label: "Inactive" },
+            { value: "terminated", label: "Left" }
+          ]}
+        />
+
+        <DataCard
+          toolbar={
+            <Toolbar search={<SearchField value={search} onChange={setSearch} placeholder="Search name, code or designation" />}>
+              {departments.length > 1 && <FilterSelect label="Department" value={department} onChange={setDepartment} options={departments.map((d) => ({ value: d, label: d }))} />}
+            </Toolbar>
+          }
+          footer={!loading && rows.length > 0 && plural(rows.length, "employee")}
+        >
+          <DataTable
+            columns={columns}
+            rows={rows}
+            rowKey={(e) => e._id || e.id}
+            loading={loading}
+            onRowClick={openEdit}
+            actions={(e) => [
+              { label: "Edit employee", icon: Pencil, onClick: () => openEdit(e) },
+              { label: "Delete employee", icon: Trash2, destructive: true, separated: true, onClick: () => setDeleting(e) }
+            ]}
+            actionsLabel={(e) => `Actions for ${e.name}`}
+            defaultSort={{ id: "name", dir: "asc" }}
+            mobile={(e) => (
+              <div className="flex items-start justify-between gap-3">
+                <EntityCell avatar={e.name} title={e.name} subtitle={[e.designation, e.department].filter(Boolean).join(" · ") || e.phone} />
+                <StatusPill tone={(STATUS[e.status] || { tone: "neutral" }).tone as PillTone}>{(STATUS[e.status] || { label: e.status }).label}</StatusPill>
+              </div>
+            )}
+            empty={
+              search || statusFilter !== "all" ? (
+                <EmptyState compact icon={Users} title="No employees in this view" />
+              ) : (
+                <EmptyState
+                  icon={Users}
+                  title="No employees yet"
+                  description="Add the people on your payroll, with their salary structure, to run payroll and track attendance."
+                  action={
+                    <Button onClick={openCreate}>
+                      <Plus />
+                      Add employee
+                    </Button>
+                  }
+                />
+              )
+            }
+          />
+        </DataCard>
       </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard icon={<Users className="h-5 w-5" />} label="Total Employees" value={stats.total ?? 0} />
-        <StatCard icon={<UserCheck className="h-5 w-5" />} label="Active" value={stats.active ?? 0} />
-        <StatCard icon={<Building2 className="h-5 w-5" />} label="Departments" value={stats.departments ?? 0} />
-        <StatCard icon={<Wallet className="h-5 w-5" />} label="Monthly Payroll" value={inr(stats.monthlyPayroll ?? 0)} />
-      </div>
-
-      {/* Filters */}
-      <Card>
-        <CardContent className="pt-6 flex flex-col sm:flex-row gap-3">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input className="pl-9" placeholder="Search by name, code, designation…"
-              value={search} onChange={(e) => setSearch(e.target.value)} />
-          </div>
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-full sm:w-48"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Status</SelectItem>
-              <SelectItem value="active">Active</SelectItem>
-              <SelectItem value="inactive">Inactive</SelectItem>
-              <SelectItem value="on-leave">On Leave</SelectItem>
-              <SelectItem value="terminated">Terminated</SelectItem>
-            </SelectContent>
-          </Select>
-        </CardContent>
-      </Card>
-
-      {/* Table */}
-      <Card>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Code</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>Designation</TableHead>
-                <TableHead>Department</TableHead>
-                <TableHead className="text-right">Net Salary</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">Loading…</TableCell></TableRow>
-              ) : employees.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No employees yet. Click "Add Employee" to get started.</TableCell></TableRow>
-              ) : employees.map((emp) => (
-                <TableRow key={emp._id || emp.id}>
-                  <TableCell className="font-mono text-xs">{emp.employeeCode}</TableCell>
-                  <TableCell>
-                    <div className="font-medium">{emp.name}</div>
-                    <div className="text-xs text-muted-foreground">{emp.email || emp.phone}</div>
-                  </TableCell>
-                  <TableCell>{emp.designation || "-"}</TableCell>
-                  <TableCell>{emp.department || "-"}</TableCell>
-                  <TableCell className="text-right font-medium">{inr(emp.netSalary)}</TableCell>
-                  <TableCell><Badge variant={statusColor[emp.status] || "secondary"}>{emp.status}</Badge></TableCell>
-                  <TableCell className="text-right">
-                    <Button variant="ghost" size="icon" onClick={() => openEdit(emp)}><Edit className="h-4 w-4" /></Button>
-                    <Button variant="ghost" size="icon" onClick={() => remove(emp)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
 
       {/* Create / Edit dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -323,21 +366,19 @@ export default function Employees() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
-  );
-}
 
-function StatCard({ icon, label, value }: { icon: any; label: string; value: any }) {
-  return (
-    <Card>
-      <CardContent className="pt-6 flex items-center gap-3">
-        <div className="h-10 w-10 rounded-lg bg-primary/10 text-primary flex items-center justify-center">{icon}</div>
-        <div>
-          <div className="text-sm text-muted-foreground">{label}</div>
-          <div className="text-xl font-bold">{value}</div>
-        </div>
-      </CardContent>
-    </Card>
+      <ConfirmDialog
+        open={!!deleting}
+        onOpenChange={(o) => !o && setDeleting(null)}
+        title={`Delete ${deleting?.name}?`}
+        description={
+          deleting?.linkedUserId
+            ? `Their login is removed as well, freeing ${deleting.email} to be invited again. Payroll and attendance history go with the record. This can't be undone.`
+            : "Payroll and attendance history go with the record. This can't be undone."
+        }
+        onConfirm={remove}
+      />
+    </PageShell>
   );
 }
 

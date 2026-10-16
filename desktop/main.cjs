@@ -1,5 +1,5 @@
 /**
- * SerpY desktop shell.
+ * Terralabs ERP desktop shell.
  *
  * The window loads the very same React bundle the website serves — there is no
  * second copy of the UI. The only difference is how the files are handed to the
@@ -95,7 +95,7 @@ async function startBackendOrQuit() {
       // it belongs in the editor, not in a dialog.
       if (!app.isPackaged) {
         dialog.showErrorBox(
-          'SerpY — backend failed to start',
+          'Terralabs ERP — backend failed to start',
           `${error.message}\n\nConfiguration file:\n${CONFIG_FILE}`
         );
         return null;
@@ -103,8 +103,8 @@ async function startBackendOrQuit() {
 
       const message = isMissingConfig
         ? `This build is missing its database configuration (${CONFIG_FILE} not found).\n\n` +
-          'Reinstall the latest version of SerpY, or contact support.'
-        : `SerpY could not reach the database.\n\n${error.message}\n\n` +
+          'Reinstall the latest version of Terralabs ERP, or contact support.'
+        : `Terralabs ERP could not reach the database.\n\n${error.message}\n\n` +
           'Check your internet connection and try again.';
 
       // A missing bundled file will never appear on retry — only a live
@@ -112,7 +112,7 @@ async function startBackendOrQuit() {
       const buttons = isMissingConfig ? ['Quit'] : ['Retry', 'Quit'];
       const { response } = await dialog.showMessageBox({
         type: 'error',
-        title: 'SerpY — could not start',
+        title: 'Terralabs ERP — could not start',
         message,
         buttons,
         defaultId: 0,
@@ -133,7 +133,7 @@ function createWindow() {
     minHeight: 640,
     show: false,
     backgroundColor: '#ffffff',
-    title: 'SerpY',
+    title: 'Terralabs ERP',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -152,7 +152,7 @@ function createWindow() {
     win.loadURL(`${APP_ORIGIN}/`);
   } else {
     dialog.showErrorBox(
-      'SerpY — build missing',
+      'Terralabs ERP — build missing',
       `No UI bundle found at:\n${DIST_DIR}\n\nRun "npm run build:renderer" in the desktop folder first.`
     );
     app.quit();
@@ -278,7 +278,7 @@ function buildMenu() {
         },
         { type: 'separator' },
         {
-          label: 'Open SerpY on the web',
+          label: 'Open Terralabs ERP on the web',
           click: () => shell.openExternal('https://app.serpy.in')
         }
       ]

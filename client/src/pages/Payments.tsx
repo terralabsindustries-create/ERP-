@@ -1,182 +1,245 @@
-import { useState, useEffect } from "react";
-import { Search, Plus, CreditCard, Clock, CheckCircle, XCircle } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { CheckCircle, CreditCard, Plus, RotateCcw, Trash2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/common/EmptyState";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { PageShell } from "@/components/layout/PageShell";
+import { ConfirmDialog, DataCard, DataTable, EntityCell, FilterSelect, MetricBar, Pagination, SearchField, StatusPill, Toolbar, ViewTabs, type Column, type PillTone } from "@/components/data";
 import { CreatePaymentDialog } from "@/components/payments/CreatePaymentDialog";
-import { PaymentCard } from "@/components/payments/PaymentCard";
-import apiClient from "@/lib/apiClient";
+import { METHOD_LABELS, STATUS_META, invoiceNumberOf, type PaymentRecord, type PaymentStatus, type PaymentSummary } from "@/components/payments/paymentMeta";
+import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useDebounced } from "@/hooks/useDebounced";
+import apiClient from "@/lib/apiClient";
+import { fmtDate, formatINR, plural } from "@/lib/format";
+
+const PAGE_SIZE = 25;
+
+interface PaymentsResponse {
+  payments: PaymentRecord[];
+  /** Per status, over the search and method filter (not the status view). */
+  summary: PaymentSummary;
+  pagination: { current: number; total: number; totalPayments: number };
+}
+
+const TONE: Record<PaymentStatus, PillTone> = { completed: "success", pending: "warning", failed: "danger", cancelled: "neutral", refunded: "info" };
+const LABEL: Record<PaymentStatus, string> = { completed: "Received", pending: "Pending", failed: "Failed", cancelled: "Cancelled", refunded: "Refunded" };
+type View = PaymentStatus | "all";
 
 export default function Payments() {
-  const [payments, setPayments] = useState<any[]>([]);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const { hasPermission } = useAuth();
   const { toast } = useToast();
+  const canRecord = hasPermission("Payments: Record Payment");
+  const canDelete = hasPermission("Payments: Delete");
+  const [data, setData] = useState<PaymentsResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const q = useDebounced(search.trim());
+  const [view, setView] = useState<View>("all");
+  const [method, setMethod] = useState("all");
+  const [page, setPage] = useState(1);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [deleting, setDeleting] = useState<PaymentRecord | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const p: Record<string, string> = { page: String(page), limit: String(PAGE_SIZE) };
+      if (q) p.search = q;
+      if (view !== "all") p.status = view;
+      if (method !== "all") p.paymentMethod = method;
+      setData((await apiClient.getPayments(p)) as PaymentsResponse);
+    } catch (error) {
+      toast({ title: "Payments could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  }, [page, q, view, method, toast]);
 
   useEffect(() => {
-    fetchPayments();
-  }, []);
+    load();
+  }, [load]);
+  useEffect(() => setPage(1), [q, view, method]);
 
-  const fetchPayments = async () => {
+  const setStatus = async (p: PaymentRecord, status: PaymentStatus) => {
     try {
-      const response = await apiClient.getPayments();
-      console.log('💳 Payments response:', response);
-      setPayments(response.data?.payments || []);
+      await apiClient.updatePayment(p._id, { status });
+      toast({ title: `Payment marked ${STATUS_META[status].label.toLowerCase()}` });
+      load();
     } catch (error) {
-      console.error('Error fetching payments:', error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch payments",
-        variant: "destructive",
-      });
+      toast({ title: "Not updated", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     }
   };
 
-  const filteredPayments = payments.filter(payment => {
-    const customerName = payment.customers?.name || '';
-    const invoiceNumber = payment.invoices?.invoice_number || '';
-    const matchesSearch = (payment.reference_number || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         customerName.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === "all" || payment.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
-
-  const stats = {
-    total: payments.reduce((sum, payment) => sum + (payment.amount || 0), 0),
-    completed: payments.filter(p => p.status === "completed").reduce((sum, payment) => sum + (payment.amount || 0), 0),
-    pending: payments.filter(p => p.status === "pending").reduce((sum, payment) => sum + (payment.amount || 0), 0),
-    failed: payments.filter(p => p.status === "failed").reduce((sum, payment) => sum + (payment.amount || 0), 0)
+  const remove = async () => {
+    if (!deleting) return;
+    try {
+      await apiClient.deletePayment(deleting._id);
+      toast({ title: "Payment deleted", description: invoiceNumberOf(deleting) ? `${invoiceNumberOf(deleting)}'s balance was updated.` : undefined });
+      setDeleting(null);
+      load();
+    } catch (error) {
+      toast({ title: "Not deleted", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      throw error;
+    }
   };
 
+  const s = data?.summary;
+  const rows = data?.payments || [];
+  const total = data?.pagination.totalPayments || 0;
+  const amt = (n = 0) => formatINR(n, { compact: n >= 1e5 });
+  const customerOf = (p: PaymentRecord) => p.customerName || (typeof p.customerId === "object" && p.customerId ? p.customerId.name : "—");
+
+  const columns: Column<PaymentRecord>[] = [
+    { id: "date", header: "Date", cell: (p) => <span className="whitespace-nowrap">{fmtDate(p.paymentDate)}</span>, sortValue: (p) => p.paymentDate, className: "w-[120px]" },
+    {
+      id: "customer",
+      header: "Customer",
+      cell: (p) => <EntityCell avatar={customerOf(p)} title={customerOf(p)} subtitle={<span className="font-mono">{p.paymentId}</span>} />,
+      sortValue: (p) => customerOf(p).toLowerCase(),
+      className: "min-w-[220px]"
+    },
+    {
+      id: "invoice",
+      header: "Invoice",
+      cell: (p) => (invoiceNumberOf(p) ? <span className="font-mono text-[13px]">{invoiceNumberOf(p)}</span> : <span className="text-muted-foreground">On account</span>),
+      hideBelow: "md"
+    },
+    { id: "method", header: "Method", cell: (p) => METHOD_LABELS[p.paymentMethod] || p.paymentMethod, sortValue: (p) => p.paymentMethod, hideBelow: "lg" },
+    {
+      id: "ref",
+      header: "Reference",
+      cell: (p) => <span className="block max-w-[180px] truncate text-muted-foreground">{p.referenceNumber || "—"}</span>,
+      hideBelow: "xl"
+    },
+    { id: "amount", header: "Amount", align: "right", cell: (p) => <span className="font-semibold">{formatINR(p.amount)}</span>, sortValue: (p) => p.amount },
+    { id: "status", header: "Status", cell: (p) => <StatusPill tone={TONE[p.status]}>{LABEL[p.status]}</StatusPill>, className: "w-[110px]" }
+  ];
+
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-8">
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Payment Management</h1>
-          <p className="text-muted-foreground">Track and manage customer payments</p>
-        </div>
-        <Button onClick={() => setIsCreateDialogOpen(true)} variant="gradient" size="lg" className="gap-2">
-          <Plus className="h-4 w-4" />
-          Record Payment
-        </Button>
-      </div>
-
-      {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Payments</CardTitle>
-            <CreditCard className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">₹{stats.total.toLocaleString()}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Completed</CardTitle>
-            <CheckCircle className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">₹{stats.completed.toLocaleString()}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Pending</CardTitle>
-            <Clock className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-yellow-600">₹{stats.pending.toLocaleString()}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Failed</CardTitle>
-            <XCircle className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-red-600">₹{stats.failed.toLocaleString()}</div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Search and Filters */}
-      <div className="flex flex-col gap-4 md:flex-row">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search payments..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-10"
-          />
-        </div>
-        <div className="flex gap-2">
-          <Button
-            variant={statusFilter === "all" ? "default" : "outline"}
-            onClick={() => setStatusFilter("all")}
-            size="sm"
-          >
-            All
-          </Button>
-          <Button
-            variant={statusFilter === "completed" ? "default" : "outline"}
-            onClick={() => setStatusFilter("completed")}
-            size="sm"
-          >
-            Completed
-          </Button>
-          <Button
-            variant={statusFilter === "pending" ? "default" : "outline"}
-            onClick={() => setStatusFilter("pending")}
-            size="sm"
-          >
-            Pending
-          </Button>
-          <Button
-            variant={statusFilter === "failed" ? "default" : "outline"}
-            onClick={() => setStatusFilter("failed")}
-            size="sm"
-          >
-            Failed
-          </Button>
-        </div>
-      </div>
-
-      {/* Payments Grid */}
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {filteredPayments.map((payment) => (
-          <PaymentCard 
-            key={payment.id} 
-            payment={{
-              ...payment,
-              paymentId: payment.reference_number || payment.id,
-              invoiceId: payment.invoices?.invoice_number || 'N/A',
-              customerName: payment.customers?.name || 'Unknown Customer',
-              date: payment.payment_date || payment.created_at,
-              method: payment.payment_method,
-              reference: payment.reference_number
-            }} 
-          />
-        ))}
-      </div>
-
-      {filteredPayments.length === 0 && (
-        <div className="text-center py-12">
-          <CreditCard className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-          <h3 className="text-lg font-semibold mb-2">No payments found</h3>
-          <p className="text-muted-foreground">No payments match your current filters.</p>
-        </div>
-      )}
-
-      <CreatePaymentDialog
-        open={isCreateDialogOpen}
-        onOpenChange={setIsCreateDialogOpen}
+    <PageShell>
+      <PageHeader
+        eyebrow="Billing & finance"
+        title="Payments"
+        description="Money received from customers and the invoices it was set against."
+        actions={
+          canRecord && (
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus />
+              Record payment
+            </Button>
+          )
+        }
       />
-    </div>
+
+      <MetricBar
+        loading={!data}
+        metrics={[
+          { label: "Received", value: amt(s?.completed.amount), hint: plural(s?.completed.count || 0, "payment"), tone: "success", onClick: () => setView(view === "completed" ? "all" : "completed"), active: view === "completed" },
+          {
+            label: "Pending",
+            value: amt(s?.pending.amount),
+            hint: s?.pending.count ? `${s.pending.count} awaiting clearance` : "Nothing pending",
+            tone: s?.pending.count ? "warning" : "default",
+            onClick: () => setView(view === "pending" ? "all" : "pending"),
+            active: view === "pending"
+          },
+          {
+            label: "Failed",
+            value: amt(s?.failed.amount),
+            hint: `${s?.failed.count || 0} bounced or failed`,
+            tone: s?.failed.count ? "danger" : "default",
+            onClick: () => setView(view === "failed" ? "all" : "failed"),
+            active: view === "failed"
+          },
+          { label: "Refunded", value: amt(s?.refunded.amount), hint: plural(s?.refunded.count || 0, "payment") }
+        ]}
+      />
+
+      <div className="space-y-4">
+        <ViewTabs<View>
+          value={view}
+          onChange={setView}
+          tabs={[
+            { value: "all", label: "All", count: s?.all.count },
+            { value: "completed", label: "Received", count: s?.completed.count },
+            { value: "pending", label: "Pending", count: s?.pending.count, tone: "warning" },
+            { value: "failed", label: "Failed", count: s?.failed.count, tone: "danger" },
+            { value: "refunded", label: "Refunded", count: s?.refunded.count },
+            { value: "cancelled", label: "Cancelled", count: s?.cancelled.count }
+          ]}
+        />
+
+        <DataCard
+          toolbar={
+            <Toolbar search={<SearchField value={search} onChange={setSearch} placeholder="Search customer, invoice, payment no. or reference" />}>
+              <FilterSelect label="Method" value={method} onChange={setMethod} options={Object.entries(METHOD_LABELS).map(([value, label]) => ({ value, label }))} />
+            </Toolbar>
+          }
+          footer={!loading && total > 0 && <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} noun="payments" />}
+        >
+          <DataTable
+            columns={columns}
+            rows={rows}
+            rowKey={(p) => p._id}
+            loading={loading}
+            actions={(p) => [
+              { label: "Mark received", icon: CheckCircle, onClick: () => setStatus(p, "completed"), hidden: !canRecord || p.status === "completed" },
+              { label: "Mark failed (bounced)", icon: XCircle, onClick: () => setStatus(p, "failed"), hidden: !canRecord || p.status !== "completed" },
+              { label: "Mark refunded", icon: RotateCcw, onClick: () => setStatus(p, "refunded"), hidden: !canRecord || p.status !== "completed" },
+              { label: "Delete payment", icon: Trash2, destructive: true, separated: true, onClick: () => setDeleting(p), hidden: !canDelete }
+            ]}
+            actionsLabel={(p) => `Actions for ${p.paymentId}`}
+            mobile={(p) => (
+              <div className="space-y-1">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="truncate font-medium">{customerOf(p)}</span>
+                  <span className="num font-semibold">{formatINR(p.amount)}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                  <span>
+                    {fmtDate(p.paymentDate)} · {METHOD_LABELS[p.paymentMethod] || p.paymentMethod}
+                    {invoiceNumberOf(p) ? ` · ${invoiceNumberOf(p)}` : ""}
+                  </span>
+                  <StatusPill tone={TONE[p.status]}>{LABEL[p.status]}</StatusPill>
+                </div>
+              </div>
+            )}
+            empty={
+              q || view !== "all" || method !== "all" ? (
+                <EmptyState compact icon={CreditCard} title="No payments in this view" description="Try another search, status or method." />
+              ) : (
+                <EmptyState
+                  icon={CreditCard}
+                  title="No payments recorded yet"
+                  description="Payments you record against invoices appear here, and update the invoice's balance."
+                  action={
+                    canRecord && (
+                      <Button onClick={() => setCreateOpen(true)}>
+                        <Plus />
+                        Record payment
+                      </Button>
+                    )
+                  }
+                />
+              )
+            }
+          />
+        </DataCard>
+      </div>
+
+      <CreatePaymentDialog open={createOpen} onOpenChange={setCreateOpen} onPaymentCreated={load} />
+      <ConfirmDialog
+        open={!!deleting}
+        onOpenChange={(o) => !o && setDeleting(null)}
+        title="Delete this payment?"
+        description={
+          deleting
+            ? `${formatINR(deleting.amount)} from ${customerOf(deleting)}.${invoiceNumberOf(deleting) && deleting.status === "completed" ? ` ${invoiceNumberOf(deleting)} will show this amount as due again.` : ""}`
+            : undefined
+        }
+        onConfirm={remove}
+      />
+    </PageShell>
   );
 }

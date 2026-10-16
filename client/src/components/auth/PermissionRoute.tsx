@@ -2,6 +2,7 @@ import React from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { AlertCircle } from 'lucide-react';
+import { buttonVariants } from '@/components/ui/button';
 
 interface PermissionRouteProps {
   children: React.ReactNode;
@@ -18,10 +19,10 @@ export function PermissionRoute({ children, permission }: PermissionRouteProps) 
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
+      <div className="flex items-center justify-center min-h-[60vh]">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-muted-foreground">Loading...</p>
+          <div className="animate-spin rounded-full h-8 w-8 border-2 border-muted border-t-primary mx-auto mb-3"></div>
+          <p className="text-sm text-muted-foreground">Loading…</p>
         </div>
       </div>
     );
@@ -38,16 +39,16 @@ export function PermissionRoute({ children, permission }: PermissionRouteProps) 
       : permission;
 
     return (
-      <div className="flex items-center justify-center min-h-screen p-4">
-        <Card className="w-full max-w-md shadow-elevated">
+      <div className="flex items-center justify-center min-h-[60vh] p-4">
+        <Card className="w-full max-w-md">
           <CardHeader className="text-center space-y-3">
             <div className="flex justify-center">
-              <div className="p-3 bg-destructive/10 rounded-full">
-                <AlertCircle className="h-8 w-8 text-destructive" />
+              <div className="p-3 bg-destructive-soft rounded-full">
+                <AlertCircle className="h-6 w-6 text-destructive-strong" />
               </div>
             </div>
-            <CardTitle className="text-2xl">Access Denied</CardTitle>
-            <CardDescription className="text-base">
+            <CardTitle className="text-xl">Access denied</CardTitle>
+            <CardDescription>
               You don't have permission to access this section
             </CardDescription>
           </CardHeader>
@@ -55,10 +56,7 @@ export function PermissionRoute({ children, permission }: PermissionRouteProps) 
             <p className="text-sm text-muted-foreground mb-4">
               Required permission: <span className="font-semibold text-foreground">{permissionText}</span>
             </p>
-            <a
-              href="/"
-              className="inline-block px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
-            >
+            <a href="/" className={buttonVariants()}>
               Go to Dashboard
             </a>
           </CardContent>

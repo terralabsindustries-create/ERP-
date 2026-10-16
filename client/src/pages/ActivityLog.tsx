@@ -1,44 +1,32 @@
 import { useCallback, useEffect, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { format } from "date-fns";
+import { Activity, Download, Loader2, RefreshCw, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Activity,
-  AlertTriangle,
-  Clock,
-  Download,
-  RefreshCw,
-  Search,
-  Trash2,
-  Users,
-  X,
-} from "lucide-react";
-import { format } from "date-fns";
-import apiClient from "@/lib/apiClient";
-import { useToast } from "@/hooks/use-toast";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { EmptyState } from "@/components/common/EmptyState";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { PageShell } from "@/components/layout/PageShell";
+import { ConfirmDialog, DataCard, DataTable, EntityCell, FilterSelect, MetricBar, Pagination, SearchField, Stack, StatusPill, Tag, Toolbar, type Column, type PillTone } from "@/components/data";
 import { useAuth } from "@/contexts/AuthContext";
+import { useToast } from "@/hooks/use-toast";
+import { useDebounced } from "@/hooks/useDebounced";
+import apiClient from "@/lib/apiClient";
+import { fmtRelative, humanize, plural } from "@/lib/format";
 
 interface ActivityEntry {
   _id: string;
   action: string;
   description: string;
   entityType: string;
-  entityId: string;
+  entityId?: string;
   entityName?: string;
   performedBy?: { _id: string; fullName?: string; email?: string } | null;
   performedByName: string;
   actionType: string;
   changes?: { before?: unknown; after?: unknown; fields?: string[] };
   severity: "low" | "medium" | "high" | "critical";
+  ipAddress?: string;
   tags?: string[];
   createdAt: string;
 }
@@ -50,474 +38,328 @@ interface ActivityStats {
   criticalActivities: number;
 }
 
-const ENTITY_TYPES = ["customer", "job", "invoice", "payment", "inventory", "vendor", "staff", "task", "delivery", "emergency_order", "walk_in_job", "proof", "time_entry", "event", "discount_rule", "customer_pricing", "hsn_code", "account_transaction", "cheque", "cost", "user", "system"];
-const ACTION_TYPES = ["create", "read", "update", "delete", "login", "logout", "export", "import", "approve", "reject", "assign", "complete", "cancel", "start", "pause", "stop", "upload", "download", "send", "receive"];
-const SEVERITIES = ["low", "medium", "high", "critical"] as const;
-
-const prettify = (s: string) => s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-
-const severityBadgeVariant = (severity: string) => {
-  switch (severity) {
-    case "critical":
-      return "destructive" as const;
-    case "high":
-      return "destructive" as const;
-    case "medium":
-      return "secondary" as const;
-    default:
-      return "outline" as const;
-  }
+const PAGE_SIZE = 25;
+const ENTITY_TYPES = ["customer", "job", "invoice", "payment", "inventory", "vendor", "staff", "task", "delivery", "emergency_order", "walk_in_job", "proof", "time_entry", "event", "hsn_code", "account_transaction", "cost", "user", "access_role", "team", "system"];
+const ACTION_TYPES = ["create", "update", "delete", "login", "logout", "export", "import", "approve", "reject", "assign", "complete", "cancel", "start", "pause", "stop", "upload", "download", "send", "receive"];
+const SEVERITY: Record<ActivityEntry["severity"], { label: string; tone: PillTone }> = {
+  low: { label: "Low", tone: "neutral" },
+  medium: { label: "Medium", tone: "info" },
+  high: { label: "High", tone: "warning" },
+  critical: { label: "Critical", tone: "danger" }
 };
+const ENTITY_LABEL: Record<string, string> = { emergency_order: "Rush order", walk_in_job: "Counter job", time_entry: "Time entry", hsn_code: "HSN code", account_transaction: "Account entry", access_role: "Role", inventory: "Stock item", vendor: "Supplier", event: "Calendar event" };
+const entityLabel = (t: string) => ENTITY_LABEL[t] || humanize(t);
 
-const actionTypeBadgeVariant = (actionType: string) => {
-  switch (actionType) {
-    case "create":
-      return "default" as const;
-    case "update":
-      return "secondary" as const;
-    case "delete":
-      return "destructive" as const;
-    default:
-      return "outline" as const;
-  }
-};
+/** Shows a changed value readably: strings as-is, objects as indented JSON. */
+const show = (v: unknown) => (v === undefined || v === null || v === "" ? "—" : typeof v === "object" ? JSON.stringify(v, null, 2) : String(v));
 
-const EMPTY_FILTERS = {
-  search: "",
-  entityType: "all",
-  actionType: "all",
-  severity: "all",
-  dateFrom: "",
-  dateTo: "",
-};
-
-const ActivityLog = () => {
-  const [activities, setActivities] = useState<ActivityEntry[]>([]);
-  const [stats, setStats] = useState<ActivityStats | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [exporting, setExporting] = useState(false);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-
-  const [filters, setFilters] = useState(EMPTY_FILTERS);
-  const [page, setPage] = useState(1);
-  const [pagination, setPagination] = useState({ current: 1, total: 1, totalActivities: 0 });
-
-  const { toast } = useToast();
+export default function ActivityLog() {
   const { user, hasPermission } = useAuth();
-
+  const { toast } = useToast();
   const canExport = hasPermission("Activity Log: Export");
   const canDelete = user?.role === "admin";
 
-  const activeFilterParams = useCallback(
+  const [rows, setRows] = useState<ActivityEntry[]>([]);
+  const [total, setTotal] = useState(0);
+  const [stats, setStats] = useState<ActivityStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const q = useDebounced(search.trim());
+  const [entity, setEntity] = useState("all");
+  const [action, setAction] = useState("all");
+  const [severity, setSeverity] = useState("all");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [page, setPage] = useState(1);
+  const [detail, setDetail] = useState<ActivityEntry | null>(null);
+  const [deleting, setDeleting] = useState<ActivityEntry | null>(null);
+  const [exporting, setExporting] = useState(false);
+
+  const filters = useCallback(
     () => ({
-      ...(filters.search ? { search: filters.search } : {}),
-      ...(filters.entityType !== "all" ? { entityType: filters.entityType } : {}),
-      ...(filters.actionType !== "all" ? { actionType: filters.actionType } : {}),
-      ...(filters.severity !== "all" ? { severity: filters.severity } : {}),
-      ...(filters.dateFrom ? { dateFrom: filters.dateFrom } : {}),
-      ...(filters.dateTo ? { dateTo: filters.dateTo } : {}),
+      search: q || undefined,
+      entityType: entity !== "all" ? entity : undefined,
+      actionType: action !== "all" ? action : undefined,
+      severity: severity !== "all" ? severity : undefined,
+      dateFrom: from || undefined,
+      dateTo: to || undefined
     }),
-    [filters]
+    [q, entity, action, severity, from, to]
   );
 
-  const fetchActivities = useCallback(
-    async (showSpinner = false) => {
-      if (showSpinner) setRefreshing(true);
-      try {
-        const response = await apiClient.getActivityLog({
-          ...activeFilterParams(),
-          page,
-          limit: 20,
-        });
-        setActivities(response.data?.activities || []);
-        setPagination(response.data?.pagination || { current: 1, total: 1, totalActivities: 0 });
-      } catch (error) {
-        console.error("Error fetching activities:", error);
-        toast({
-          title: "Error",
-          description: "Failed to fetch activity logs",
-          variant: "destructive",
-        });
-      } finally {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    },
-    [activeFilterParams, page, toast]
-  );
-
-  const fetchStats = useCallback(async () => {
+  const load = useCallback(async () => {
+    setLoading(true);
     try {
-      const response = await apiClient.getActivityStats(30);
-      setStats(response.data?.stats || null);
+      const res = (await apiClient.get("/activity-log", { ...filters(), page, limit: PAGE_SIZE })) as { activities?: ActivityEntry[]; pagination?: { totalActivities?: number } };
+      setRows(res?.activities || []);
+      setTotal(res?.pagination?.totalActivities ?? 0);
     } catch (error) {
-      console.error("Error fetching activity stats:", error);
+      toast({ title: "The activity log could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  }, [filters, page, toast]);
+
+  const loadStats = useCallback(async () => {
+    try {
+      const res = (await apiClient.getActivityStats(30)) as { stats?: ActivityStats };
+      setStats(res?.stats || null);
+    } catch {
+      setStats(null);
     }
   }, []);
 
   useEffect(() => {
-    fetchActivities();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, filters]);
-
+    load();
+  }, [load]);
   useEffect(() => {
-    fetchStats();
-  }, [fetchStats]);
+    loadStats();
+  }, [loadStats]);
+  useEffect(() => setPage(1), [q, entity, action, severity, from, to]);
 
-  // Reset to page 1 whenever filters change
-  const updateFilter = (key: keyof typeof filters, value: string) => {
-    setFilters((prev) => ({ ...prev, [key]: value }));
-    setPage(1);
+  const filtered = !!(q || entity !== "all" || action !== "all" || severity !== "all" || from || to);
+  const clear = () => {
+    setSearch("");
+    setEntity("all");
+    setAction("all");
+    setSeverity("all");
+    setFrom("");
+    setTo("");
   };
 
-  const clearFilters = () => {
-    setFilters(EMPTY_FILTERS);
-    setPage(1);
-  };
-
-  const hasActiveFilters = Object.entries(filters).some(([key, value]) =>
-    key === "entityType" || key === "actionType" || key === "severity" ? value !== "all" : value !== ""
-  );
-
-  const handleExport = async () => {
+  const exportLog = async () => {
     setExporting(true);
     try {
-      await apiClient.downloadActivityLog(activeFilterParams());
-      toast({ title: "Exported", description: "Activity log exported successfully" });
+      await apiClient.downloadActivityLog(filters());
+      toast({ title: "Activity log exported" });
     } catch (error) {
-      console.error("Error exporting activity log:", error);
-      toast({
-        title: "Export failed",
-        description: "Could not export the activity log",
-        variant: "destructive",
-      });
+      toast({ title: "Export failed", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     } finally {
       setExporting(false);
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm("Delete this activity log entry? This cannot be undone.")) return;
-    setDeletingId(id);
+  const remove = async () => {
+    if (!deleting) return;
     try {
-      await apiClient.deleteActivityLogEntry(id);
-      toast({ title: "Deleted", description: "Activity log entry deleted" });
-      fetchActivities();
-      fetchStats();
+      await apiClient.deleteActivityLogEntry(deleting._id);
+      toast({ title: "Entry deleted" });
+      setDeleting(null);
+      setDetail(null);
+      load();
+      loadStats();
     } catch (error) {
-      console.error("Error deleting activity entry:", error);
-      toast({
-        title: "Error",
-        description: "Failed to delete activity log entry",
-        variant: "destructive",
-      });
-    } finally {
-      setDeletingId(null);
+      toast({ title: "Not deleted", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      throw error;
     }
   };
 
-  const formatTimeAgo = (timestamp: string) => {
-    const diffMs = Date.now() - new Date(timestamp).getTime();
-    const diffMins = Math.floor(diffMs / (1000 * 60));
-    if (diffMins < 1) return "Just now";
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffMins < 1440) return `${Math.floor(diffMins / 60)}h ago`;
-    return `${Math.floor(diffMins / 1440)}d ago`;
-  };
-
-  const topActionType = stats?.activitiesByType?.[0];
+  const who = (a: ActivityEntry) => a.performedBy?.fullName || a.performedByName || "System";
   const topUser = stats?.activitiesByUser?.[0];
+  const topAction = stats?.activitiesByType?.[0];
+
+  const columns: Column<ActivityEntry>[] = [
+    {
+      id: "when",
+      header: "When",
+      cell: (a) => <Stack top={<span className="whitespace-nowrap">{fmtRelative(a.createdAt)}</span>} bottom={format(new Date(a.createdAt), "d MMM yyyy, h:mm a")} />,
+      className: "w-[170px]"
+    },
+    { id: "who", header: "Who", cell: (a) => <EntityCell avatar={who(a)} title={<span className="font-normal">{who(a)}</span>} />, hideBelow: "md", className: "w-[200px]" },
+    {
+      id: "what",
+      header: "What happened",
+      cell: (a) => <Stack top={<span className="font-medium">{a.action}</span>} bottom={a.description} />,
+      className: "min-w-[260px]"
+    },
+    {
+      id: "record",
+      header: "Record",
+      cell: (a) => (
+        <div className="flex min-w-0 flex-col items-start gap-0.5">
+          <Tag>{entityLabel(a.entityType)}</Tag>
+          {a.entityName && <span className="max-w-[200px] truncate text-xs text-muted-foreground">{a.entityName}</span>}
+        </div>
+      ),
+      hideBelow: "lg"
+    },
+    { id: "severity", header: "Severity", cell: (a) => <StatusPill tone={SEVERITY[a.severity]?.tone}>{SEVERITY[a.severity]?.label || a.severity}</StatusPill>, hideBelow: "xl", className: "w-[110px]" }
+  ];
 
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-6">
-      <div className="flex flex-wrap justify-between items-center gap-3">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Activity Log</h1>
-          <p className="text-muted-foreground">Track all system activities and user actions</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              fetchActivities(true);
-              fetchStats();
-            }}
-            disabled={refreshing}
-          >
-            <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
-          {canExport && (
-            <Button variant="outline" size="sm" onClick={handleExport} disabled={exporting}>
-              <Download className="h-4 w-4 mr-2" />
-              {exporting ? "Exporting..." : "Export"}
+    <PageShell>
+      <PageHeader
+        eyebrow="Account"
+        title="Activity log"
+        description="Who did what, and when, across your business."
+        actions={
+          <>
+            <Button
+              variant="outline"
+              onClick={() => {
+                load();
+                loadStats();
+              }}
+            >
+              <RefreshCw />
+              Refresh
             </Button>
-          )}
-        </div>
-      </div>
-
-      {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Activity className="h-4 w-4" />
-              Total (30d)
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats?.totalActivities ?? "—"}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4" />
-              Critical / High (30d)
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats?.criticalActivities ?? "—"}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Users className="h-4 w-4" />
-              Most Active User
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-lg font-bold truncate">{topUser?.userName ?? "—"}</div>
-            {topUser && <p className="text-xs text-muted-foreground">{topUser.count} actions</p>}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Top Action</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-lg font-bold capitalize">{topActionType?._id ?? "—"}</div>
-            {topActionType && <p className="text-xs text-muted-foreground">{topActionType.count} times</p>}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Filters */}
-      <Card>
-        <CardContent className="pt-6 space-y-3">
-          <div className="flex flex-wrap gap-3">
-            <div className="relative flex-1 min-w-[200px]">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search action, description, entity, user..."
-                className="pl-8"
-                value={filters.search}
-                onChange={(e) => updateFilter("search", e.target.value)}
-              />
-            </div>
-            <Select value={filters.entityType} onValueChange={(v) => updateFilter("entityType", v)}>
-              <SelectTrigger className="w-40">
-                <SelectValue placeholder="Entity" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Entities</SelectItem>
-                {ENTITY_TYPES.map((t) => (
-                  <SelectItem key={t} value={t}>
-                    {prettify(t)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={filters.actionType} onValueChange={(v) => updateFilter("actionType", v)}>
-              <SelectTrigger className="w-36">
-                <SelectValue placeholder="Action" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Actions</SelectItem>
-                {ACTION_TYPES.map((t) => (
-                  <SelectItem key={t} value={t}>
-                    {prettify(t)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={filters.severity} onValueChange={(v) => updateFilter("severity", v)}>
-              <SelectTrigger className="w-32">
-                <SelectValue placeholder="Severity" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Severities</SelectItem>
-                {SEVERITIES.map((s) => (
-                  <SelectItem key={s} value={s}>
-                    {prettify(s)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2">
-              <label className="text-sm text-muted-foreground">From</label>
-              <Input
-                type="date"
-                className="w-40"
-                value={filters.dateFrom}
-                onChange={(e) => updateFilter("dateFrom", e.target.value)}
-              />
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="text-sm text-muted-foreground">To</label>
-              <Input
-                type="date"
-                className="w-40"
-                value={filters.dateTo}
-                onChange={(e) => updateFilter("dateTo", e.target.value)}
-              />
-            </div>
-            {hasActiveFilters && (
-              <Button variant="ghost" size="sm" onClick={clearFilters}>
-                <X className="h-4 w-4 mr-1" />
-                Clear filters
+            {canExport && (
+              <Button variant="outline" onClick={exportLog} disabled={exporting}>
+                {exporting ? <Loader2 className="animate-spin" /> : <Download />}
+                Export
               </Button>
             )}
+          </>
+        }
+      />
+
+      <MetricBar
+        loading={!stats}
+        metrics={[
+          { label: "Actions in 30 days", value: (stats?.totalActivities ?? 0).toLocaleString("en-IN") },
+          {
+            label: "Critical",
+            value: stats?.criticalActivities ?? 0,
+            hint: "In the last 30 days",
+            tone: stats?.criticalActivities ? "danger" : "default",
+            onClick: () => setSeverity(severity === "critical" ? "all" : "critical"),
+            active: severity === "critical"
+          },
+          { label: "Most active", value: topUser?.userName || "—", hint: topUser ? plural(topUser.count, "action") : undefined },
+          { label: "Most common", value: topAction ? humanize(topAction._id) : "—", hint: topAction ? `${topAction.count.toLocaleString("en-IN")} times` : undefined }
+        ]}
+      />
+
+      <DataCard
+        toolbar={
+          <div className="space-y-2">
+            <Toolbar search={<SearchField value={search} onChange={setSearch} placeholder="Search action, record or person" />}>
+              <FilterSelect label="Record" value={entity} onChange={setEntity} options={ENTITY_TYPES.map((t) => ({ value: t, label: entityLabel(t) }))} />
+              <FilterSelect label="Action" value={action} onChange={setAction} options={ACTION_TYPES.map((t) => ({ value: t, label: humanize(t) }))} />
+              <FilterSelect label="Severity" value={severity} onChange={setSeverity} options={Object.entries(SEVERITY).map(([value, s]) => ({ value, label: s.label }))} />
+            </Toolbar>
+            <div className="flex flex-wrap items-center gap-2 text-[13px]">
+              <span className="text-muted-foreground">From</span>
+              <Input type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} className="h-9 w-[150px]" aria-label="From date" />
+              <span className="text-muted-foreground">to</span>
+              <Input type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} className="h-9 w-[150px]" aria-label="To date" />
+              {filtered && (
+                <Button variant="ghost" size="sm" onClick={clear}>
+                  <X />
+                  Clear filters
+                </Button>
+              )}
+            </div>
           </div>
-        </CardContent>
-      </Card>
-
-      {/* Activity Feed */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>
-            Activities
-            {pagination.totalActivities > 0 && (
-              <span className="text-muted-foreground font-normal text-sm ml-2">
-                ({pagination.totalActivities} total)
-              </span>
-            )}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <div className="space-y-3">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <Skeleton key={i} className="h-16 w-full" />
-              ))}
-            </div>
-          ) : activities.length === 0 ? (
-            <p className="text-center text-muted-foreground py-10">No activity found for the selected filters.</p>
-          ) : (
-            <div className="space-y-3">
-              {activities.map((activity) => {
-                const isExpanded = expandedId === activity._id;
-                const hasChanges = activity.changes && (activity.changes.before || activity.changes.after);
-                return (
-                  <div key={activity._id} className="rounded-lg border">
-                    <div
-                      className="flex items-start gap-3 p-3 cursor-pointer hover:bg-muted/40"
-                      onClick={() => hasChanges && setExpandedId(isExpanded ? null : activity._id)}
-                    >
-                      <div className="flex-1 space-y-1 min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="font-medium">{activity.action}</p>
-                          <Badge variant={actionTypeBadgeVariant(activity.actionType)}>{activity.actionType}</Badge>
-                          <Badge variant="outline">{prettify(activity.entityType)}</Badge>
-                          {activity.severity !== "low" && (
-                            <Badge variant={severityBadgeVariant(activity.severity)}>{activity.severity}</Badge>
-                          )}
-                        </div>
-                        <p className="text-sm text-muted-foreground">{activity.description}</p>
-                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                          <span className="font-medium text-foreground">{activity.performedByName}</span>
-                          {activity.entityName && (
-                            <>
-                              <span>•</span>
-                              <span>{activity.entityName}</span>
-                            </>
-                          )}
-                          <span>•</span>
-                          <Clock className="h-3 w-3" />
-                          <span title={format(new Date(activity.createdAt), "PPpp")}>
-                            {formatTimeAgo(activity.createdAt)}
-                          </span>
-                        </div>
-                      </div>
-                      {canDelete && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="text-muted-foreground hover:text-destructive"
-                          disabled={deletingId === activity._id}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDelete(activity._id);
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      )}
-                    </div>
-                    {isExpanded && hasChanges && (
-                      <div className="border-t bg-muted/20 p-3 text-xs space-y-2">
-                        {activity.changes?.fields && activity.changes.fields.length > 0 && (
-                          <p className="text-muted-foreground">
-                            Changed fields: <span className="font-medium">{activity.changes.fields.join(", ")}</span>
-                          </p>
-                        )}
-                        <div className="grid md:grid-cols-2 gap-3">
-                          <div>
-                            <p className="font-medium mb-1">Before</p>
-                            <pre className="bg-background rounded p-2 overflow-x-auto">
-                              {JSON.stringify(activity.changes?.before ?? {}, null, 2)}
-                            </pre>
-                          </div>
-                          <div>
-                            <p className="font-medium mb-1">After</p>
-                            <pre className="bg-background rounded p-2 overflow-x-auto">
-                              {JSON.stringify(activity.changes?.after ?? {}, null, 2)}
-                            </pre>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {!loading && pagination.total > 1 && (
-            <div className="flex items-center justify-between mt-4 pt-4 border-t">
-              <p className="text-sm text-muted-foreground">
-                Page {pagination.current} of {pagination.total}
-              </p>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={pagination.current <= 1}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={pagination.current >= pagination.total}
-                  onClick={() => setPage((p) => p + 1)}
-                >
-                  Next
-                </Button>
+        }
+        footer={!loading && total > 0 && <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} noun="entries" />}
+      >
+        <DataTable
+          columns={columns}
+          rows={rows}
+          rowKey={(a) => a._id}
+          loading={loading}
+          onRowClick={(a) => setDetail(a)}
+          actions={(a) => [{ label: "Delete entry", icon: Trash2, destructive: true, onClick: () => setDeleting(a), hidden: !canDelete }]}
+          actionsLabel={(a) => `Actions for ${a.action}`}
+          mobile={(a) => (
+            <div className="space-y-1">
+              <div className="flex items-start justify-between gap-3">
+                <span className="font-medium">{a.action}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">{fmtRelative(a.createdAt)}</span>
+              </div>
+              <div className="line-clamp-2 text-xs text-muted-foreground">{a.description}</div>
+              <div className="text-xs text-muted-foreground">
+                {who(a)} · {entityLabel(a.entityType)}
               </div>
             </div>
           )}
-        </CardContent>
-      </Card>
-    </div>
-  );
-};
+          empty={
+            <EmptyState
+              compact={filtered}
+              icon={Activity}
+              title={filtered ? "Nothing matches these filters" : "No activity yet"}
+              description={filtered ? "Try a wider date range or fewer filters." : "Changes people make — new jobs, invoices, payments, logins — are recorded here."}
+            />
+          }
+        />
+      </DataCard>
 
-export default ActivityLog;
+      <Sheet open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
+        <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-lg">
+          {detail && (
+            <>
+              <SheetHeader className="border-b px-5 py-4">
+                <SheetTitle>{detail.action}</SheetTitle>
+                <SheetDescription>{format(new Date(detail.createdAt), "EEEE d MMMM yyyy, h:mm:ss a")}</SheetDescription>
+              </SheetHeader>
+              <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5 text-sm">
+                <p>{detail.description}</p>
+                <dl className="grid grid-cols-[120px_1fr] gap-x-3 gap-y-2">
+                  <dt className="text-muted-foreground">By</dt>
+                  <dd>
+                    {who(detail)}
+                    {detail.performedBy?.email ? <span className="text-muted-foreground"> · {detail.performedBy.email}</span> : null}
+                  </dd>
+                  <dt className="text-muted-foreground">Record</dt>
+                  <dd>
+                    {entityLabel(detail.entityType)}
+                    {detail.entityName ? ` · ${detail.entityName}` : ""}
+                  </dd>
+                  <dt className="text-muted-foreground">Action</dt>
+                  <dd>{humanize(detail.actionType)}</dd>
+                  <dt className="text-muted-foreground">Severity</dt>
+                  <dd>
+                    <StatusPill tone={SEVERITY[detail.severity]?.tone}>{SEVERITY[detail.severity]?.label}</StatusPill>
+                  </dd>
+                  {detail.ipAddress && (
+                    <>
+                      <dt className="text-muted-foreground">IP address</dt>
+                      <dd className="font-mono text-xs">{detail.ipAddress}</dd>
+                    </>
+                  )}
+                  {!!detail.tags?.length && (
+                    <>
+                      <dt className="text-muted-foreground">Tags</dt>
+                      <dd className="flex flex-wrap gap-1">
+                        {detail.tags.map((t) => (
+                          <Tag key={t}>{t}</Tag>
+                        ))}
+                      </dd>
+                    </>
+                  )}
+                </dl>
+                {detail.changes && (detail.changes.before !== undefined || detail.changes.after !== undefined) && (
+                  <section className="space-y-2">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Changes{detail.changes.fields?.length ? ` · ${detail.changes.fields.join(", ")}` : ""}</h3>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <div className="rounded-md border bg-muted/30 p-3">
+                        <div className="mb-1 text-xs font-medium text-muted-foreground">Before</div>
+                        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-xs">{show(detail.changes.before)}</pre>
+                      </div>
+                      <div className="rounded-md border bg-muted/30 p-3">
+                        <div className="mb-1 text-xs font-medium text-muted-foreground">After</div>
+                        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-xs">{show(detail.changes.after)}</pre>
+                      </div>
+                    </div>
+                  </section>
+                )}
+              </div>
+              {canDelete && (
+                <div className="flex justify-end border-t px-5 py-3">
+                  <Button variant="outline" className="text-destructive-strong" onClick={() => setDeleting(detail)}>
+                    <Trash2 />
+                    Delete entry
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
+
+      <ConfirmDialog open={!!deleting} onOpenChange={(o) => !o && setDeleting(null)} title="Delete this log entry?" description="The record of this action is removed for everyone. This can't be undone." onConfirm={remove} />
+    </PageShell>
+  );
+}

@@ -1,5 +1,7 @@
 const express = require('express');
+const crypto = require('crypto');
 const { body, query } = require('express-validator');
+const { validate } = require('../middleware/validate');
 const { protect } = require('../middleware/auth');
 const PaymentReminder = require('../models/PaymentReminder');
 
@@ -31,105 +33,19 @@ async function applyWhatsAppStatusUpdate(status) {
   }
 }
 
-// WhatsApp message template schema (stored in memory for now, could be moved to database)
-const messageTemplates = [
-  {
-    id: 'proof_approval',
-    name: 'Proof Approval',
-    category: 'job_updates',
-    template: 'Hi {{customerName}}, your proof for job {{jobNumber}} is ready for approval. Please review and confirm. - {{businessName}}',
-    variables: ['customerName', 'jobNumber', 'businessName']
-  },
-  {
-    id: 'job_completed',
-    name: 'Job Completed',
-    category: 'job_updates',
-    template: 'Hi {{customerName}}, your job {{jobNumber}} has been completed and is ready for pickup. - {{businessName}}',
-    variables: ['customerName', 'jobNumber', 'businessName']
-  },
-  {
-    id: 'payment_reminder',
-    name: 'Payment Reminder',
-    category: 'payments',
-    template: 'Hi {{customerName}}, this is a friendly reminder that payment of ₹{{amount}} is due for invoice {{invoiceNumber}}. - {{businessName}}',
-    variables: ['customerName', 'amount', 'invoiceNumber', 'businessName']
-  },
-  {
-    id: 'delivery_update',
-    name: 'Delivery Update',
-    category: 'delivery',
-    template: 'Hi {{customerName}}, your order {{jobNumber}} is out for delivery. Expected delivery time: {{deliveryTime}}. - {{businessName}}',
-    variables: ['customerName', 'jobNumber', 'deliveryTime', 'businessName']
-  },
-  {
-    id: 'welcome_message',
-    name: 'Welcome Message',
-    category: 'general',
-    template: 'Welcome to {{businessName}}! Thank you for choosing our printing services. We\'ll keep you updated on your order status.',
-    variables: ['businessName']
-  }
-];
-
-// @route   GET /api/whatsapp/stats
-// @desc    Get WhatsApp integration statistics
-// @access  Private
-router.get('/stats', protect, async (req, res) => {
-  try {
-    // TODO: Implement real WhatsApp API integration
-    // For now, return mock statistics
-    const stats = {
-      messagesSent: 0,
-      deliveryRate: 98.4,
-      responseRate: 76.2,
-      activeContacts: 0,
-      templatesUsed: messageTemplates.length,
-      lastSync: new Date().toISOString()
-    };
-    
-    res.status(200).json({
-      status: 'success',
-      data: { stats }
-    });
-  } catch (error) {
-    console.error('Get WhatsApp stats error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while fetching WhatsApp statistics'
-    });
-  }
-});
-
-// @route   GET /api/whatsapp/templates
-// @desc    Get WhatsApp message templates
-// @access  Private
-router.get('/templates', protect, async (req, res) => {
-  try {
-    res.status(200).json({
-      status: 'success',
-      data: { templates: messageTemplates }
-    });
-  } catch (error) {
-    console.error('Get WhatsApp templates error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while fetching WhatsApp templates'
-    });
-  }
-});
-
 // @route   POST /api/whatsapp/send
 // @desc    Send WhatsApp message
 // @access  Private
 router.post('/send', protect, [
-  body('phoneNumber').isMobilePhone().withMessage('Valid phone number is required'),
+  body('phoneNumber').matches(/^\+?[\d\s()-]{7,20}$/).withMessage('Enter a valid phone number'),
   body('templateId').notEmpty().withMessage('Template ID is required'),
   body('variables').isObject().withMessage('Variables must be an object'),
-  body('customerId').optional().isMongoId()
-], async (req, res) => {
+  body('customerId').optional({ values: 'falsy' }).isMongoId()
+], validate, async (req, res) => {
   try {
-    const { phoneNumber, templateId, variables, customerId } = req.body;
+    const { phoneNumber, templateId, variables, customerId, language } = req.body;
     
-    const settings = await Settings.findOne({ userId: req.user._id });
+    const settings = await Settings.findOne({ userId: await settingsOwnerId(req.user) });
     const { wabaId, phoneNumberId, accessToken } = settings?.whatsappIntegration || {};
     
     if (!phoneNumberId || !accessToken) {
@@ -139,8 +55,10 @@ router.post('/send', protect, [
     // Prepare components if variables exist
     const components = [];
     if (variables && Object.keys(variables).length > 0) {
-      // Create an array of parameters from the variables object values
-      const parameters = Object.values(variables).map(val => ({ type: "text", text: String(val) }));
+      // {{1}}, {{2}}… in order, whatever order the keys arrived in
+      const parameters = Object.keys(variables)
+        .sort((a, b) => Number(a) - Number(b))
+        .map((k) => ({ type: "text", text: String(variables[k]) }));
       components.push({
         type: "body",
         parameters
@@ -160,7 +78,7 @@ router.post('/send', protect, [
         type: "template",
         template: {
           name: templateId,
-          language: { code: "en_US" },
+          language: { code: typeof language === 'string' && /^[a-z]{2}(_[A-Z]{2})?$/.test(language) ? language : "en_US" },
           ...(components.length > 0 && { components })
         }
       })
@@ -184,82 +102,6 @@ router.post('/send', protect, [
     res.status(500).json({
       status: 'error',
       message: 'Server error while sending WhatsApp message'
-    });
-  }
-});
-
-// @route   POST /api/whatsapp/send-bulk
-// @desc    Send bulk WhatsApp messages
-// @access  Private
-router.post('/send-bulk', protect, [
-  body('recipients').isArray({ min: 1 }).withMessage('Recipients array is required'),
-  body('recipients.*.phoneNumber').isMobilePhone().withMessage('Valid phone number is required'),
-  body('recipients.*.templateId').notEmpty().withMessage('Template ID is required'),
-  body('recipients.*.variables').isObject().withMessage('Variables must be an object')
-], async (req, res) => {
-  try {
-    const { recipients } = req.body;
-    
-    const results = [];
-    const errors = [];
-    
-    for (const recipient of recipients) {
-      try {
-        const template = messageTemplates.find(t => t.id === recipient.templateId);
-        if (!template) {
-          errors.push({
-            phoneNumber: recipient.phoneNumber,
-            error: 'Template not found'
-          });
-          continue;
-        }
-        
-        // Replace variables in template
-        let message = template.template;
-        Object.keys(recipient.variables).forEach(key => {
-          const placeholder = `{{${key}}}`;
-          message = message.replace(new RegExp(placeholder, 'g'), recipient.variables[key]);
-        });
-        
-        // TODO: Implement actual WhatsApp API call
-        const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-        
-        results.push({
-          messageId,
-          status: 'sent',
-          phoneNumber: recipient.phoneNumber,
-          message,
-          templateId: recipient.templateId,
-          sentAt: new Date().toISOString()
-        });
-        
-      } catch (error) {
-        errors.push({
-          phoneNumber: recipient.phoneNumber,
-          error: error.message
-        });
-      }
-    }
-    
-    res.status(200).json({
-      status: 'success',
-      message: `Bulk messages processed. ${results.length} sent, ${errors.length} failed`,
-      data: {
-        results,
-        errors,
-        summary: {
-          total: recipients.length,
-          sent: results.length,
-          failed: errors.length
-        }
-      }
-    });
-    
-  } catch (error) {
-    console.error('Send bulk WhatsApp messages error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while sending bulk WhatsApp messages'
     });
   }
 });
@@ -289,6 +131,19 @@ router.get('/webhook', (req, res) => {
 // @desc    WhatsApp webhook endpoint (for receiving messages)
 // @access  Public
 router.post('/webhook', async (req, res) => {
+  // Meta signs every webhook with the app secret (X-Hub-Signature-256). Without
+  // this check anyone could post fake delivery/read updates.
+  const secret = process.env.FACEBOOK_APP_SECRET;
+  if (secret) {
+    const given = String(req.get('x-hub-signature-256') || '');
+    const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(req.rawBody || Buffer.from('')).digest('hex');
+    const valid = given.length === expected.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+    if (!valid) {
+      console.warn('WhatsApp webhook ignored: signature does not match FACEBOOK_APP_SECRET');
+      return res.status(403).json({ error: 'Invalid signature' });
+    }
+  }
+
   // Acknowledge immediately — Meta retries aggressively (and eventually disables the webhook)
   // if it doesn't get a fast 200, so processing happens after the response is sent.
   res.status(200).json({ status: 'ok' });
@@ -318,38 +173,20 @@ router.post('/webhook', async (req, res) => {
   }
 });
 
-// @route   GET /api/whatsapp/contacts
-// @desc    Get WhatsApp contacts
-// @access  Private
-router.get('/contacts', protect, async (req, res) => {
-  try {
-    // TODO: Implement real WhatsApp contacts API
-    const contacts = [];
-    
-    res.status(200).json({
-      status: 'success',
-      data: { contacts }
-    });
-  } catch (error) {
-    console.error('Get WhatsApp contacts error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while fetching WhatsApp contacts'
-    });
-  }
-});
-
 const Settings = require('../models/Settings');
+const { settingsOwnerId, businessSettings } = require('../utils/businessSettings');
 
 // @route   GET /api/whatsapp/settings
 // @desc    Get WhatsApp Business API settings
 // @access  Private
 router.get('/settings', protect, async (req, res) => {
   try {
-    const settings = await Settings.getOrCreateSettings(req.user._id);
+    const settings = await businessSettings(req.user);
+    // The Meta access token never leaves the server; the page only needs to know one is saved.
+    const { accessToken, ...integration } = settings.toObject({ flattenMaps: true }).whatsappIntegration || {};
     res.status(200).json({
       status: 'success',
-      data: { settings: settings.whatsappIntegration || {} }
+      data: { settings: { ...integration, hasAccessToken: !!accessToken } }
     });
   } catch (error) {
     console.error('Get WhatsApp settings error:', error);
@@ -361,11 +198,11 @@ router.get('/settings', protect, async (req, res) => {
 // @desc    Setup WhatsApp Business API settings
 // @access  Private
 router.post('/settings', protect, [
-  body('enabled').optional().isBoolean(),
-  body('wabaId').optional().isString(),
-  body('phoneNumberId').optional().isString(),
-  body('accessToken').optional().isString()
-], async (req, res) => {
+  body('enabled').optional({ values: 'falsy' }).isBoolean(),
+  body('wabaId').optional({ values: 'falsy' }).isString(),
+  body('phoneNumberId').optional({ values: 'falsy' }).isString(),
+  body('accessToken').optional({ values: 'falsy' }).isString()
+], validate, async (req, res) => {
   try {
     const { enabled, wabaId, phoneNumberId, accessToken } = req.body;
     
@@ -373,10 +210,11 @@ router.post('/settings', protect, [
     if (enabled !== undefined) updateData['whatsappIntegration.enabled'] = enabled;
     if (wabaId !== undefined) updateData['whatsappIntegration.wabaId'] = wabaId;
     if (phoneNumberId !== undefined) updateData['whatsappIntegration.phoneNumberId'] = phoneNumberId;
-    if (accessToken !== undefined) updateData['whatsappIntegration.accessToken'] = accessToken;
+    // An empty token means "keep the saved one".
+    if (accessToken) updateData['whatsappIntegration.accessToken'] = accessToken;
     
     const settings = await Settings.findOneAndUpdate(
-      { userId: req.user._id },
+      { userId: await settingsOwnerId(req.user) },
       { $set: updateData },
       { new: true, upsert: true }
     );
@@ -384,7 +222,7 @@ router.post('/settings', protect, [
     res.status(200).json({
       status: 'success',
       message: 'WhatsApp Business API settings updated',
-      data: { settings: settings.whatsappIntegration }
+      data: { settings: { ...(({ accessToken: token, ...rest }) => ({ ...rest, hasAccessToken: !!token }))(settings.toObject({ flattenMaps: true }).whatsappIntegration || {}) } }
     });
   } catch (error) {
     console.error('WhatsApp setup error:', error);
@@ -397,7 +235,7 @@ router.post('/settings', protect, [
 // @access  Private
 router.get('/meta-templates', protect, async (req, res) => {
   try {
-    const settings = await Settings.findOne({ userId: req.user._id });
+    const settings = await Settings.findOne({ userId: await settingsOwnerId(req.user) });
     const { wabaId, accessToken } = settings?.whatsappIntegration || {};
     
     if (!wabaId || !accessToken) {
@@ -435,9 +273,9 @@ router.post('/meta-templates', protect, [
   body('language').notEmpty().withMessage('Language is required'),
   body('category').notEmpty().withMessage('Category is required'),
   body('components').isArray().withMessage('Components must be an array')
-], async (req, res) => {
+], validate, async (req, res) => {
   try {
-    const settings = await Settings.findOne({ userId: req.user._id });
+    const settings = await Settings.findOne({ userId: await settingsOwnerId(req.user) });
     const { wabaId, accessToken } = settings?.whatsappIntegration || {};
     
     if (!wabaId || !accessToken) {
@@ -478,7 +316,7 @@ router.post('/meta-templates', protect, [
 // @access  Private
 router.delete('/meta-templates/:name', protect, async (req, res) => {
   try {
-    const settings = await Settings.findOne({ userId: req.user._id });
+    const settings = await Settings.findOne({ userId: await settingsOwnerId(req.user) });
     const { wabaId, accessToken } = settings?.whatsappIntegration || {};
     
     if (!wabaId || !accessToken) {

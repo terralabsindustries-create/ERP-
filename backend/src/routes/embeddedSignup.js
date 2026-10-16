@@ -2,6 +2,7 @@ const express = require('express');
 const { protect } = require('../middleware/auth');
 const embeddedSignupService = require('../services/embeddedSignup.service');
 const Settings = require('../models/Settings');
+const { settingsOwnerId, businessSettings } = require('../utils/businessSettings');
 
 const router = express.Router();
 
@@ -11,7 +12,8 @@ const router = express.Router();
 router.post('/exchange-token', protect, async (req, res) => {
   try {
     const { code, waba_id, phone_number_id } = req.body;
-    const userId = req.user._id;
+    // WhatsApp is connected for the business (stored on the owner's settings).
+    const userId = await settingsOwnerId(req.user);
 
     // Validate
     if (!code || !waba_id || !phone_number_id) {
@@ -90,7 +92,7 @@ router.post('/exchange-token', protect, async (req, res) => {
         wabaId: waba_id,
         phoneNumberId: phone_number_id,
         webhookSubscribed: webhookSubscription.success,
-        settings: settings.whatsappIntegration
+        settings: (({ accessToken: token, ...rest }) => ({ ...rest, hasAccessToken: !!token }))(settings.toObject({ flattenMaps: true }).whatsappIntegration || {})
       }
     });
   } catch (error) {
@@ -107,7 +109,7 @@ router.post('/exchange-token', protect, async (req, res) => {
 // @access  Private
 router.get('/status', protect, async (req, res) => {
   try {
-    const settings = await Settings.findOne({ userId: req.user._id });
+    const settings = await Settings.findOne({ userId: await settingsOwnerId(req.user) });
     if (!settings || !settings.whatsappIntegration || !settings.whatsappIntegration.wabaId) {
       return res.status(200).json({
         status: 'success',
@@ -141,7 +143,7 @@ router.get('/status', protect, async (req, res) => {
 router.delete('/reset', protect, async (req, res) => {
   try {
     const settings = await Settings.findOneAndUpdate(
-      { userId: req.user._id },
+      { userId: await settingsOwnerId(req.user) },
       {
         $set: {
           'whatsappIntegration.enabled': false,

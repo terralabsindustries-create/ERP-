@@ -7,8 +7,22 @@ const ActivityLog = require('../models/ActivityLog');
 const { protect, authorize } = require('../middleware/auth');
 const bcrypt = require('bcryptjs');
 
+const { isOrgViewer } = require('../utils/accessScope');
+const { userCan } = require('../middleware/requirePermission');
+
 // Apply auth middleware to all routes
-router.use(protect );
+router.use(protect);
+
+// Logins in the caller's business. Old accounts without a dataScope fall back to
+// the people they created.
+const sameBusiness = (user) => (user.dataScope ? { dataScope: user.dataScope } : { createdBy: user._id });
+
+/** A staff login in the caller's business, or null. */
+const findBusinessStaff = (req, staffId) =>
+  User.findOne({ _id: staffId, role: 'staff', ...sameBusiness(req.user) });
+
+/** Whether the caller may see another person's schedule. */
+const canSeeTeamSchedules = (user) => isOrgViewer(user) || userCan(user, 'Staff & Tasks');
 
 // ============= SCHEDULE ROUTES =============
 
@@ -19,28 +33,20 @@ router.get('/:staffId/schedule', async (req, res) => {
     const { staffId } = req.params;
     const { weekStart } = req.query;
     
-    // Verify user exists and belongs to same dataScope or is staff role
-    const user = await User.findOne({ 
-      _id: staffId, 
-      role: 'staff',
-      $or: [
-        { dataScope: req.user.dataScope },
-        { createdBy: req.user._id },
-        { _id: req.user._id } // Allow staff to view their own schedule
-      ]
-    });
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'Staff member not found' });
+    // Your own schedule is always visible; anyone else's needs Staff & Tasks
+    // (or "Can view all staff data") and must be in your business.
+    const isSelf = staffId === req.user._id.toString();
+    if (!isSelf) {
+      if (!canSeeTeamSchedules(req.user)) {
+        return res.status(403).json({ success: false, message: 'You can only view your own schedule' });
+      }
+      if (!(await findBusinessStaff(req, staffId))) {
+        return res.status(404).json({ success: false, message: 'Staff member not found' });
+      }
     }
-    
-    // If staff member is viewing their own schedule, use the simplified method
-    let schedule;
-    if (staffId === req.user._id.toString()) {
-      schedule = await Schedule.getStaffScheduleOnly(staffId);
-    } else {
-      // For other users (like admins), use the original method
-      schedule = await Schedule.getByStaffId(staffId, req.user._id);
-    }
+
+    // Every active shift for this person, whoever in the business entered it.
+    const schedule = await Schedule.getStaffScheduleOnly(staffId);
     
     res.json({ success: true, data: schedule });
   } catch (error) {
@@ -55,23 +61,16 @@ router.post('/:staffId/schedule', async (req, res) => {
     const { staffId } = req.params;
     const { schedules } = req.body;
     
-    // Verify user exists and belongs to same dataScope or is staff role
-    const user = await User.findOne({ 
-      _id: staffId, 
-      role: 'staff',
-      $or: [
-        { dataScope: req.user.dataScope },
-        { createdBy: req.user._id },
-        { _id: req.user._id } // Allow staff to manage their own schedule
-      ]
-    });
+    // Schedules are set by someone with Staff & Tasks: Manage Schedule (checked
+    // in app.js) for a staff member in the same business.
+    const user = await findBusinessStaff(req, staffId);
     if (!user) {
       return res.status(404).json({ success: false, message: 'Staff member not found' });
     }
     
-    // Delete existing active schedules for this staff
+    // Replace this person's current shifts, including ones another manager set.
     await Schedule.updateMany(
-      { staffId, userId: req.user.id, isActive: true },
+      { staffId, isActive: true },
       { isActive: false }
     );
     
@@ -104,22 +103,15 @@ router.put('/:staffId/schedule/:scheduleId', async (req, res) => {
   try {
     const { staffId, scheduleId } = req.params;
     
-    // Verify user exists and belongs to same dataScope or is staff role
-    const user = await User.findOne({ 
-      _id: staffId, 
-      role: 'staff',
-      $or: [
-        { dataScope: req.user.dataScope },
-        { createdBy: req.user._id },
-        { _id: req.user._id } // Allow staff to manage their own schedule
-      ]
-    });
+    // Schedules are set by someone with Staff & Tasks: Manage Schedule (checked
+    // in app.js) for a staff member in the same business.
+    const user = await findBusinessStaff(req, staffId);
     if (!user) {
       return res.status(404).json({ success: false, message: 'Staff member not found' });
     }
     
     const schedule = await Schedule.findOneAndUpdate(
-      { _id: scheduleId, staffId, userId: req.user.id },
+      { _id: scheduleId, staffId },
       req.body,
       { new: true, runValidators: true }
     );
@@ -144,22 +136,15 @@ router.delete('/:staffId/schedule/:scheduleId', async (req, res) => {
   try {
     const { staffId, scheduleId } = req.params;
     
-    // Verify user exists and belongs to same dataScope or is staff role
-    const user = await User.findOne({ 
-      _id: staffId, 
-      role: 'staff',
-      $or: [
-        { dataScope: req.user.dataScope },
-        { createdBy: req.user._id },
-        { _id: req.user._id } // Allow staff to manage their own schedule
-      ]
-    });
+    // Schedules are set by someone with Staff & Tasks: Manage Schedule (checked
+    // in app.js) for a staff member in the same business.
+    const user = await findBusinessStaff(req, staffId);
     if (!user) {
       return res.status(404).json({ success: false, message: 'Staff member not found' });
     }
     
     const schedule = await Schedule.findOneAndUpdate(
-      { _id: scheduleId, staffId, userId: req.user.id },
+      { _id: scheduleId, staffId },
       { isActive: false },
       { new: true }
     );
@@ -181,20 +166,13 @@ router.get('/schedule/overview', async (req, res) => {
     const { weekStart } = req.query;
     
     // Get all staff users in the same dataScope
-    const staffUsers = await User.find({ 
-      role: 'staff',
-      $or: [
-        { dataScope: req.user.dataScope },
-        { createdBy: req.user._id }
-      ]
-    }).select('_id fullName email role');
+    const staffUsers = await User.find({ role: 'staff', ...sameBusiness(req.user) }).select('_id fullName email role');
     
     const staffIds = staffUsers.map(user => user._id);
     
     // Get all schedules for these staff members
     const schedules = await Schedule.find({
       staffId: { $in: staffIds },
-      userId: req.user.id,
       isActive: true
     }).populate('staffId', 'fullName email role');
     
@@ -222,14 +200,7 @@ router.put('/:staffId/email', authorize('admin', 'manager'), async (req, res) =>
     }
 
     // Verify staff member exists and belongs to same dataScope
-    const staff = await User.findOne({ 
-      _id: staffId, 
-      role: 'staff',
-      $or: [
-        { dataScope: req.user.dataScope },
-        { createdBy: req.user._id }
-      ]
-    });
+    const staff = await findBusinessStaff(req, staffId);
 
     if (!staff) {
       return res.status(404).json({ 
@@ -300,14 +271,7 @@ router.put('/:staffId/password', authorize('admin', 'manager'), async (req, res)
     }
 
     // Verify staff member exists and belongs to same dataScope
-    const staff = await User.findOne({ 
-      _id: staffId, 
-      role: 'staff',
-      $or: [
-        { dataScope: req.user.dataScope },
-        { createdBy: req.user._id }
-      ]
-    });
+    const staff = await findBusinessStaff(req, staffId);
 
     if (!staff) {
       return res.status(404).json({ 

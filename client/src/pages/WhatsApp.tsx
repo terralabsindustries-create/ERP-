@@ -36,6 +36,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import apiClient from "@/lib/apiClient";
+import { ConfirmDialog } from "@/components/data";
+import { getTemplateBodyText, getTemplateVariableNumbers } from "@/lib/whatsappTemplates";
 import { useToast } from "@/hooks/use-toast";
 
 // Facebook SDK global type declaration
@@ -97,6 +99,7 @@ export default function WhatsApp() {
   const [sendingMessage, setSendingMessage] = useState(false);
 
   const { toast } = useToast();
+  const [hasToken, setHasToken] = useState(false);
 
   const loadSettings = async () => {
     try {
@@ -106,11 +109,13 @@ export default function WhatsApp() {
           enabled: response.settings.enabled || false,
           wabaId: response.settings.wabaId || "",
           phoneNumberId: response.settings.phoneNumberId || "",
-          accessToken: response.settings.accessToken || "",
+          // The saved token is never sent back; leave the field empty to keep it.
+          accessToken: "",
           setupMethod: response.settings.setupMethod || "manual",
           connectionStatus: response.settings.connectionStatus || "disconnected"
         });
-        if (response.settings.wabaId && response.settings.accessToken) {
+        setHasToken(!!response.settings.hasAccessToken);
+        if (response.settings.wabaId && response.settings.hasAccessToken) {
           fetchTemplates();
         }
       }
@@ -238,11 +243,14 @@ export default function WhatsApp() {
     setSavingSettings(true);
     try {
       await apiClient.setupWhatsApp({
-        ...config,
-        setupMethod: 'manual'
+        enabled: config.enabled,
+        wabaId: config.wabaId,
+        phoneNumberId: config.phoneNumberId,
+        accessToken: config.accessToken
       });
       toast({ title: "Success", description: "WhatsApp Business API settings saved." });
-      if (config.wabaId && config.accessToken) {
+      if (config.accessToken) setHasToken(true);
+      if (config.wabaId && (config.accessToken || hasToken)) {
         fetchTemplates();
       }
     } catch (error: any) {
@@ -292,6 +300,7 @@ export default function WhatsApp() {
     try {
       await apiClient.resetEmbeddedSignupConfiguration();
       toast({ title: "Disconnected", description: "WhatsApp configuration has been reset." });
+      setHasToken(false);
       setConfig({
         enabled: false,
         wabaId: "",
@@ -371,14 +380,19 @@ export default function WhatsApp() {
     }
   };
 
-  const handleDeleteTemplate = async (name: string) => {
-    if (!confirm(`Are you sure you want to delete the template "${name}" from Meta?`)) return;
+  const [deletingTemplate, setDeletingTemplate] = useState<string | null>(null);
+  const handleDeleteTemplate = (name: string) => setDeletingTemplate(name);
+  const confirmDeleteTemplate = async () => {
+    const name = deletingTemplate;
+    if (!name) return;
     try {
       await apiClient.deleteMetaTemplate(name);
       toast({ title: "Success", description: "Template deleted successfully." });
+      setDeletingTemplate(null);
       fetchTemplates();
     } catch (error: any) {
       toast({ title: "Error", description: error.message || "Failed to delete template.", variant: "destructive" });
+      throw error;
     }
   };
 
@@ -388,15 +402,21 @@ export default function WhatsApp() {
       return;
     }
     
+    const chosen = templates.find((t) => t.name === selectedTemplate);
+    const missing = (chosen ? getTemplateVariableNumbers(chosen) : []).filter((n) => !templateVars[String(n)]?.trim());
+    if (missing.length) {
+      toast({ title: "Fill in every variable", description: `Missing ${missing.map((n) => `{{${n}}}`).join(", ")}`, variant: "destructive" });
+      return;
+    }
     setSendingMessage(true);
     try {
-      // Simulated API call since standard messaging is mocked for now
       await apiClient.post('/whatsapp/send', {
         phoneNumber,
         templateId: selectedTemplate,
+        language: chosen?.language,
         variables: templateVars
       });
-      toast({ title: "Message Sent", description: `Simulated message sent to ${phoneNumber}.` });
+      toast({ title: "Message sent", description: `Sent to ${phoneNumber} on WhatsApp.` });
       setPhoneNumber("");
       setTemplateVars({});
     } catch (error: any) {
@@ -416,11 +436,11 @@ export default function WhatsApp() {
   };
 
   return (
-    <div className="flex-1 space-y-6 p-6 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between">
+    <div className="page-frame">
+      <div className="page-heading-row">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
-            <MessageSquare className="h-8 w-8 text-green-500" />
+          <h1 className="page-title flex items-center gap-2">
+            <MessageSquare className="h-6 w-6 text-success" />
             WhatsApp Integration
           </h1>
           <p className="text-muted-foreground mt-1">
@@ -461,7 +481,7 @@ export default function WhatsApp() {
                     <RefreshCw className={`w-4 h-4 mr-2 ${loadingTemplates ? "animate-spin" : ""}`} /> Sync
                   </Button>
                   <Button size="sm" onClick={() => setCreateDialogOpen(true)} className="bg-green-600 hover:bg-green-700">
-                    <Plus className="w-4 h-4 mr-2" /> Create Template
+                    <Plus className="w-4 h-4" /> Create Template
                   </Button>
                 </div>
               </CardHeader>
@@ -487,7 +507,7 @@ export default function WhatsApp() {
                           <TableCell>{t.language}</TableCell>
                           <TableCell>{getStatusBadge(t.status)}</TableCell>
                           <TableCell className="text-right">
-                            <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-600 hover:bg-red-50" onClick={() => handleDeleteTemplate(t.name)}>
+                            <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive-strong hover:bg-destructive-soft" onClick={() => handleDeleteTemplate(t.name)}>
                               <Trash2 className="w-4 h-4" />
                             </Button>
                           </TableCell>
@@ -515,7 +535,13 @@ export default function WhatsApp() {
               </div>
               <div className="space-y-2">
                 <Label>Select Template</Label>
-                <Select value={selectedTemplate} onValueChange={setSelectedTemplate}>
+                <Select
+                  value={selectedTemplate}
+                  onValueChange={(v) => {
+                    setSelectedTemplate(v);
+                    setTemplateVars({});
+                  }}
+                >
                   <SelectTrigger>
                     <SelectValue placeholder="Choose an approved template" />
                   </SelectTrigger>
@@ -530,10 +556,35 @@ export default function WhatsApp() {
                 </Select>
               </div>
               
-              {/* Optional: Render variable inputs dynamically based on selected template if we parsed them. For now, we simulate standard sending. */}
+              {(() => {
+                const chosen = templates.find((t) => t.name === selectedTemplate);
+                if (!chosen) return null;
+                const body = getTemplateBodyText(chosen);
+                const vars = getTemplateVariableNumbers(chosen);
+                return (
+                  <div className="space-y-3 rounded-md border p-3">
+                    {body && <p className="whitespace-pre-wrap rounded bg-muted p-2 font-mono text-xs">{body}</p>}
+                    {vars.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">This template has no variables.</p>
+                    ) : (
+                      vars.map((n) => (
+                        <div key={n} className="flex items-center gap-3">
+                          <span className="w-14 rounded bg-muted px-2 py-1 text-center font-mono text-xs">{`{{${n}}}`}</span>
+                          <Input
+                            value={templateVars[String(n)] || ""}
+                            onChange={(e) => setTemplateVars((v) => ({ ...v, [String(n)]: e.target.value }))}
+                            placeholder={`Value for {{${n}}}`}
+                            aria-label={`Value for variable ${n}`}
+                          />
+                        </div>
+                      ))
+                    )}
+                  </div>
+                );
+              })()}
               
               <Button className="w-full bg-green-600 hover:bg-green-700 mt-4" onClick={handleSendMessage} disabled={sendingMessage}>
-                {sendingMessage ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
+                {sendingMessage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 Send Message
               </Button>
             </CardContent>
@@ -543,25 +594,25 @@ export default function WhatsApp() {
         {/* --- SETTINGS TAB --- */}
         <TabsContent value="settings" className="space-y-4">
           {config.wabaId ? (
-            <Card className="max-w-2xl border-green-200 bg-green-50/10">
+            <Card className="max-w-2xl border-success/25 bg-success-soft/40">
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <div>
-                    <CardTitle className="text-xl flex items-center gap-2 text-green-700">
-                      <ShieldCheck className="h-6 w-6 text-green-500" />
+                    <CardTitle className="text-xl flex items-center gap-2 text-success-strong">
+                      <ShieldCheck className="h-6 w-6 text-success" />
                       WhatsApp Connected
                     </CardTitle>
                     <CardDescription className="text-green-600/80">
                       Your business profile has been connected to the WhatsApp Business API.
                     </CardDescription>
                   </div>
-                  <Badge variant="outline" className="bg-green-500/10 text-green-700 border-green-200 capitalize">
+                  <Badge variant="outline" className="bg-success/10 text-success-strong border-success/25 capitalize">
                     {config.setupMethod === 'embedded_signup' ? 'Embedded Setup' : 'Manual Setup'}
                   </Badge>
                 </div>
               </CardHeader>
               <CardContent className="space-y-6">
-                <div className="flex items-center justify-between bg-white p-4 rounded-lg border border-green-100 shadow-sm">
+                <div className="flex items-center justify-between bg-card p-4 rounded-lg border border-success/25 shadow-sm">
                   <div className="space-y-0.5">
                     <Label className="text-base font-semibold">Enable Integration</Label>
                     <p className="text-sm text-muted-foreground">Toggle WhatsApp functions across the ERP modules.</p>
@@ -597,7 +648,7 @@ export default function WhatsApp() {
                   </div>
                   <div className="grid grid-cols-3 gap-2">
                     <span className="font-semibold text-muted-foreground">Connection Status:</span>
-                    <span className="col-span-2 font-semibold text-green-600 capitalize">{config.connectionStatus || 'Connected'}</span>
+                    <span className="col-span-2 font-semibold text-success-strong capitalize">{config.connectionStatus || 'Connected'}</span>
                   </div>
                 </div>
 
@@ -624,7 +675,7 @@ export default function WhatsApp() {
                         Disconnect WhatsApp Business?
                       </AlertDialogTitle>
                       <AlertDialogDescription className="text-center">
-                        Your access token and connection details will be deleted from SerpY.
+                        Your access token and connection details will be deleted from Terralabs ERP.
                       </AlertDialogDescription>
                     </AlertDialogHeader>
 
@@ -654,7 +705,7 @@ export default function WhatsApp() {
                       >
                         {savingSettings ? (
                           <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            <Loader2 className="h-4 w-4 animate-spin" />
                             Disconnecting...
                           </>
                         ) : (
@@ -668,9 +719,9 @@ export default function WhatsApp() {
             </Card>
           ) : (
             <Card className="max-w-2xl border border-muted-foreground/15 shadow-md">
-              <CardHeader className="bg-gradient-to-tr from-blue-50/20 to-green-50/20">
+              <CardHeader className="bg-muted/40">
                 <CardTitle className="flex items-center gap-2 text-2xl font-bold">
-                  <Sparkles className="w-6 h-6 text-green-500 animate-pulse" />
+                  <Sparkles className="w-6 h-6 text-success animate-pulse" />
                   Connect WhatsApp Business
                 </CardTitle>
                 <CardDescription>
@@ -691,17 +742,17 @@ export default function WhatsApp() {
                     </div>
 
                     {signupError && (
-                      <div className="flex items-center gap-2 p-3 bg-red-50 text-red-700 rounded-lg border border-red-200 text-xs">
+                      <div className="flex items-center gap-2 p-3 bg-destructive-soft text-destructive-strong rounded-lg border border-destructive/25 text-xs">
                         <AlertCircle className="w-4 h-4 shrink-0" />
                         <span>{signupError}</span>
                       </div>
                     )}
 
                     {isProcessing ? (
-                      <div className="space-y-4 p-4 border rounded-lg bg-blue-50/30 flex flex-col items-center justify-center text-center">
-                        <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
+                      <div className="space-y-4 p-4 border rounded-lg bg-info-soft/50 flex flex-col items-center justify-center text-center">
+                        <Loader2 className="w-8 h-8 text-info animate-spin" />
                         <div className="space-y-1">
-                          <h5 className="font-semibold text-sm text-blue-700">Setup in Progress</h5>
+                          <h5 className="font-semibold text-sm text-info-strong">Setup in Progress</h5>
                           <p className="text-xs text-muted-foreground">
                             {currentStep === 1 && 'Authenticating with Facebook...'}
                             {currentStep === 2 && 'Select your Business Profile in the popup...'}
@@ -738,7 +789,7 @@ export default function WhatsApp() {
                       <h4 className="font-semibold text-sm">Manual API Settings</h4>
                       <button 
                         onClick={() => setShowManualSetup(false)}
-                        className="text-xs text-blue-600 hover:underline"
+                        className="text-xs text-info-strong hover:underline"
                       >
                         Back to Embedded Signup
                       </button>
@@ -765,12 +816,12 @@ export default function WhatsApp() {
 
                     <div className="space-y-2">
                       <Label>System User Access Token</Label>
-                      <Input type="password" value={config.accessToken} onChange={e => setConfig(p => ({ ...p, accessToken: e.target.value }))} placeholder="EAAI..." />
+                      <Input type="password" value={config.accessToken} onChange={e => setConfig(p => ({ ...p, accessToken: e.target.value }))} placeholder={hasToken ? "Saved — enter a new token to replace it" : "EAAI..."} />
                       <p className="text-xs text-muted-foreground">Ensure you generate a permanent token via Business Settings &gt; System Users.</p>
                     </div>
 
                     <Button onClick={handleSaveSettings} disabled={savingSettings} className="w-full">
-                      {savingSettings ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+                      {savingSettings ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                       Save Configuration
                     </Button>
                   </div>
@@ -834,11 +885,18 @@ export default function WhatsApp() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>Cancel</Button>
             <Button onClick={handleCreateTemplate} disabled={creatingTemplate} className="bg-green-600 hover:bg-green-700">
-              {creatingTemplate && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Submit for Approval
+              {creatingTemplate && <Loader2 className="w-4 h-4 animate-spin" />} Submit for Approval
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <ConfirmDialog
+        open={!!deletingTemplate}
+        onOpenChange={(o) => !o && setDeletingTemplate(null)}
+        title={`Delete the template "${deletingTemplate}"?`}
+        description="It is deleted from your Meta WhatsApp account and can no longer be used to send messages."
+        onConfirm={confirmDeleteTemplate}
+      />
     </div>
   );
 }

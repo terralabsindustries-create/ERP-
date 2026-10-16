@@ -1,5 +1,6 @@
 const express = require('express');
 const { body } = require('express-validator');
+const { validate } = require('../middleware/validate');
 const User = require('../models/User');
 const OTP = require('../models/OTP');
 const { protect, sendTokenResponse } = require('../middleware/auth');
@@ -24,8 +25,8 @@ const registerValidation = [
 const sendOTPValidation = [
   body('email').isEmail().normalizeEmail().withMessage('Please provide a valid email'),
   body('fullName').notEmpty().withMessage('Full name is required').trim(),
-  body('phone').optional({ checkFalsy: true }).isMobilePhone().withMessage('Please provide a valid phone number'),
-  body('companyName').optional().trim(),
+  body('phone').optional({ values: 'falsy' }).matches(/^\+?[\d\s()-]{7,20}$/).withMessage('Enter a valid phone number'),
+  body('companyName').optional({ values: 'falsy' }).trim(),
 ];
 
 const verifyOTPValidation = [
@@ -107,9 +108,9 @@ router.post('/send-otp', sendOTPValidation, async (req, res) => {
     const emailTemplate = getOTPEmailTemplate(otp, fullName);
 
     const mailOptions = {
-      from: getFromAddress('SerpY ERP'),
+      from: getFromAddress('Terralabs ERP'),
       to: email,
-      subject: 'Verify Your Email - SerpY ERP',
+      subject: 'Verify Your Email - Terralabs ERP',
       html: emailTemplate.html,
       text: emailTemplate.text
     };
@@ -245,7 +246,7 @@ router.post('/verify-otp', verifyOTPValidation, async (req, res) => {
 // @route   POST /api/auth/register
 // @desc    Register a new user (legacy - for backward compatibility)
 // @access  Public
-router.post('/register', registerValidation, async (req, res) => {
+router.post('/register', registerValidation, validate, async (req, res) => {
   try {
     const { email, password, fullName, phone, companyName } = req.body;
 
@@ -414,7 +415,7 @@ router.post('/invitation/:token/accept', [
 // @route   POST /api/auth/login
 // @desc    Login user
 // @access  Public
-router.post('/login', loginValidation, async (req, res) => {
+router.post('/login', loginValidation, validate, async (req, res) => {
   try {
     const { email, password } = req.body;
     
@@ -509,9 +510,9 @@ router.post('/logout', protect, async (req, res) => {
 // @desc    Update user profile
 // @access  Private
 router.put('/profile', protect, [
-  body('fullName').optional().notEmpty().trim(),
-  body('phone').optional({ checkFalsy: true }).isMobilePhone(),
-], async (req, res) => {
+  body('fullName').optional({ values: 'falsy' }).notEmpty().trim(),
+  body('phone').optional({ values: 'falsy' }).matches(/^\+?[\d\s()-]{7,20}$/).withMessage('Enter a valid phone number'),
+], validate, async (req, res) => {
   try {
     const allowedUpdates = ['fullName', 'phone', 'companyName', 'preferences'];
     const updates = {};
@@ -551,7 +552,7 @@ router.put('/profile', protect, [
 router.put('/password', protect, [
   body('currentPassword').notEmpty().withMessage('Current password is required'),
   body('newPassword').isLength({ min: 6 }).withMessage('New password must be at least 6 characters'),
-], async (req, res) => {
+], validate, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
     

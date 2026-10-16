@@ -1,644 +1,590 @@
-import { useState, useEffect } from "react";
-import { Plus, Search, Percent, Users, Tag, Calendar } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { format } from "date-fns";
+import { BadgePercent, Loader2, Pencil, Plus, Power, Trash2, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { EmptyState } from "@/components/common/EmptyState";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { PageShell } from "@/components/layout/PageShell";
+import { EditorSheet, EditorSection } from "@/components/users/EditorSheet";
+import { ConfirmDialog, DataCard, DataTable, EntityCell, MetricBar, SearchField, Stack, StatusPill, Toolbar, ViewTabs, type Column, type PillTone } from "@/components/data";
+import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
+import { fmtDate, formatINR, plural } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
-interface DiscountRule {
-  id: string;
+type Audience = "all" | "new" | "returning" | "specific";
+
+interface Rule {
+  _id: string;
   name: string;
-  type: 'percentage' | 'fixed' | 'bulk';
+  type: "percentage" | "fixed" | "bulk";
   value: number;
   minimumAmount?: number;
-  customerType?: 'all' | 'specific' | 'new' | 'returning';
-  customerIds?: string[];
-  jobTypes?: string[];
-  validFrom: Date;
-  validUntil?: Date;
+  maximumAmount?: number;
+  customerType: Audience;
+  customerIds?: { _id: string; name: string }[];
+  validFrom?: string;
+  validUntil?: string;
   isActive: boolean;
-  usageLimit?: number;
-  usageCount: number;
   description?: string;
 }
 
-interface CustomerPricing {
-  id: string;
-  customerId: string;
+interface Rate {
+  _id: string;
+  customerId?: { _id: string; name: string; phone?: string } | null;
   customerName: string;
   discountPercentage: number;
-  specialRates: {
-    jobType: string;
-    rate: number;
-  }[];
+  validFrom?: string;
+  validUntil?: string;
   isActive: boolean;
   notes?: string;
 }
 
-const Discounts = () => {
-  const [discountRules, setDiscountRules] = useState<DiscountRule[]>([]);
-  const [customerPricing, setCustomerPricing] = useState<CustomerPricing[]>([]);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [activeTab, setActiveTab] = useState<'rules' | 'customers'>('rules');
-  const [isCreateRuleDialogOpen, setIsCreateRuleDialogOpen] = useState(false);
-  const [isCreateCustomerPricingDialogOpen, setIsCreateCustomerPricingDialogOpen] = useState(false);
-  const [loading, setLoading] = useState(true);
+interface CustomerOption {
+  _id: string;
+  name: string;
+  phone?: string;
+}
+
+type View = "rules" | "rates";
+type State = "on" | "scheduled" | "ended" | "off";
+
+const AUDIENCE: Record<Audience, string> = { all: "Every customer", new: "New customers", returning: "Returning customers", specific: "Chosen customers" };
+const STATE: Record<State, { label: string; tone: PillTone }> = {
+  on: { label: "On", tone: "success" },
+  scheduled: { label: "Starts later", tone: "info" },
+  ended: { label: "Ended", tone: "neutral" },
+  off: { label: "Off", tone: "neutral" }
+};
+
+const stateOf = (r: { isActive: boolean; validFrom?: string; validUntil?: string }): State => {
+  if (!r.isActive) return "off";
+  const now = Date.now();
+  if (r.validFrom && new Date(r.validFrom).getTime() > now) return "scheduled";
+  if (r.validUntil && new Date(r.validUntil).getTime() < now) return "ended";
+  return "on";
+};
+const offerLabel = (r: Rule) => (r.type === "fixed" ? `${formatINR(r.value)} off` : `${r.value}% off`);
+const dateSpan = (from?: string, until?: string) => (until ? `${fmtDate(from)} – ${fmtDate(until)}` : from && new Date(from).getTime() > Date.now() ? `From ${fmtDate(from)}` : "No end date");
+const ymd = (d?: string) => (d ? format(new Date(d), "yyyy-MM-dd") : "");
+
+const EMPTY_RULE = { name: "", type: "percentage" as "percentage" | "fixed", value: "", minimumAmount: "", maximumAmount: "", customerType: "all" as Audience, customerIds: [] as string[], validFrom: format(new Date(), "yyyy-MM-dd"), validUntil: "", isActive: true, description: "" };
+const EMPTY_RATE = { customerId: "", discountPercentage: "", validFrom: format(new Date(), "yyyy-MM-dd"), validUntil: "", isActive: true, notes: "" };
+
+export default function Discounts() {
+  const { hasPermission } = useAuth();
   const { toast } = useToast();
+  const canEdit = hasPermission("Discounts: Create & Edit");
+  const canDelete = hasPermission("Discounts: Delete");
 
-  // Fetch data from API
-  useEffect(() => {
-    fetchDiscountData();
-  }, []);
+  const [view, setView] = useState<View>("rules");
+  const [rules, setRules] = useState<Rule[]>([]);
+  const [rates, setRates] = useState<Rate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [customers, setCustomers] = useState<CustomerOption[]>([]);
+  const [customerQuery, setCustomerQuery] = useState("");
 
-  const fetchDiscountData = async () => {
+  const [ruleEditor, setRuleEditor] = useState<{ open: boolean; rule: Rule | null }>({ open: false, rule: null });
+  const [ruleForm, setRuleForm] = useState(EMPTY_RULE);
+  const [rateEditor, setRateEditor] = useState<{ open: boolean; rate: Rate | null }>({ open: false, rate: null });
+  const [rateForm, setRateForm] = useState(EMPTY_RATE);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState<{ kind: "rule"; item: Rule } | { kind: "rate"; item: Rate } | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
     try {
-      const [discountRulesResponse, customerPricingResponse] = await Promise.all([
-        apiClient.getDiscountRules(),
-        apiClient.getCustomerPricing()
-      ]);
-
-      console.log('💰 Discount data response:', { discountRulesResponse, customerPricingResponse });
-      
-      setDiscountRules(discountRulesResponse.data?.discountRules || []);
-      setCustomerPricing(customerPricingResponse.data?.customerPricing || []);
+      const [r, p] = (await Promise.all([apiClient.get("/discounts/rules"), apiClient.get("/discounts/customer-pricing")])) as [{ discountRules?: Rule[] }, { customerPricing?: Rate[] }];
+      setRules(r?.discountRules || []);
+      setRates(p?.customerPricing || []);
     } catch (error) {
-      console.error('Error fetching discount data:', error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch discount data",
-        variant: "destructive",
-      });
+      toast({ title: "Discounts could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     } finally {
       setLoading(false);
     }
-  };
+  }, [toast]);
 
-  const handleCreateDiscountRule = async (ruleData: any) => {
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const loadCustomers = async () => {
+    if (customers.length) return;
     try {
-      await apiClient.createDiscountRule(ruleData);
-      toast({
-        title: "Success",
-        description: "Discount rule created successfully!",
-      });
-      fetchDiscountData(); // Refresh data
-    } catch (error) {
-      console.error('Error creating discount rule:', error);
-      toast({
-        title: "Error",
-        description: "Failed to create discount rule",
-        variant: "destructive",
-      });
+      setCustomers(await apiClient.listAll<CustomerOption>("/customers", "customers", { status: "all" }));
+    } catch {
+      setCustomers([]);
     }
   };
 
-  const handleCreateCustomerPricing = async (pricingData: any) => {
+  const openRule = (rule: Rule | null) => {
+    setRuleForm(
+      rule
+        ? {
+            name: rule.name,
+            type: rule.type === "fixed" ? "fixed" : "percentage",
+            value: String(rule.value),
+            minimumAmount: rule.minimumAmount ? String(rule.minimumAmount) : "",
+            maximumAmount: rule.maximumAmount ? String(rule.maximumAmount) : "",
+            customerType: rule.customerType || "all",
+            customerIds: (rule.customerIds || []).map((c) => c._id),
+            validFrom: ymd(rule.validFrom) || format(new Date(), "yyyy-MM-dd"),
+            validUntil: ymd(rule.validUntil),
+            isActive: rule.isActive,
+            description: rule.description || ""
+          }
+        : EMPTY_RULE
+    );
+    setCustomerQuery("");
+    setRuleEditor({ open: true, rule });
+    loadCustomers();
+  };
+
+  const openRate = (rate: Rate | null) => {
+    setRateForm(
+      rate
+        ? {
+            customerId: rate.customerId?._id || "",
+            discountPercentage: String(rate.discountPercentage),
+            validFrom: ymd(rate.validFrom) || format(new Date(), "yyyy-MM-dd"),
+            validUntil: ymd(rate.validUntil),
+            isActive: rate.isActive,
+            notes: rate.notes || ""
+          }
+        : EMPTY_RATE
+    );
+    setRateEditor({ open: true, rate });
+    loadCustomers();
+  };
+
+  const saveRule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    const payload = {
+      ...ruleForm,
+      value: Number(ruleForm.value),
+      minimumAmount: ruleForm.minimumAmount ? Number(ruleForm.minimumAmount) : undefined,
+      maximumAmount: ruleForm.type === "percentage" && ruleForm.maximumAmount ? Number(ruleForm.maximumAmount) : undefined,
+      customerIds: ruleForm.customerType === "specific" ? ruleForm.customerIds : []
+    };
     try {
-      await apiClient.createCustomerPricing(pricingData);
-      toast({
-        title: "Success",
-        description: "Customer pricing created successfully!",
-      });
-      fetchDiscountData(); // Refresh data
+      if (ruleEditor.rule) await apiClient.put(`/discounts/rules/${ruleEditor.rule._id}`, payload);
+      else await apiClient.post("/discounts/rules", payload);
+      toast({ title: ruleEditor.rule ? "Discount rule updated" : "Discount rule added", description: payload.name });
+      setRuleEditor({ open: false, rule: null });
+      load();
     } catch (error) {
-      console.error('Error creating customer pricing:', error);
-      toast({
-        title: "Error",
-        description: "Failed to create customer pricing",
-        variant: "destructive",
-      });
+      toast({ title: "Not saved", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+    } finally {
+      setSaving(false);
     }
   };
 
-  const createDiscountRule = (data: Omit<DiscountRule, 'id' | 'usageCount'>) => {
-    const newRule: DiscountRule = {
-      ...data,
-      id: `rule-${Date.now()}`,
-      usageCount: 0
-    };
-
-    setDiscountRules(prev => [...prev, newRule]);
-    setIsCreateRuleDialogOpen(false);
-    
-    toast({
-      title: "Discount Rule Created",
-      description: `${data.name} has been created successfully.`,
-    });
-  };
-
-  const createCustomerPricing = (data: Omit<CustomerPricing, 'id'>) => {
-    const newPricing: CustomerPricing = {
-      ...data,
-      id: `pricing-${Date.now()}`
-    };
-
-    setCustomerPricing(prev => [...prev, newPricing]);
-    setIsCreateCustomerPricingDialogOpen(false);
-    
-    toast({
-      title: "Customer Pricing Created",
-      description: `Pricing for ${data.customerName} has been set up.`,
-    });
-  };
-
-  const filteredRules = discountRules.filter(rule =>
-    rule.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    rule.description?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  const filteredCustomerPricing = customerPricing.filter(pricing =>
-    pricing.customerName.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  const getDiscountTypeColor = (type: string) => {
-    switch (type) {
-      case 'percentage':
-        return 'bg-blue-100 text-blue-800';
-      case 'fixed':
-        return 'bg-green-100 text-green-800';
-      case 'bulk':
-        return 'bg-purple-100 text-purple-800';
-      default:
-        return 'bg-gray-100 text-gray-800';
+  const saveRate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    const payload = { ...rateForm, discountPercentage: Number(rateForm.discountPercentage) };
+    try {
+      if (rateEditor.rate) await apiClient.put(`/discounts/customer-pricing/${rateEditor.rate._id}`, payload);
+      else await apiClient.post("/discounts/customer-pricing", payload);
+      toast({ title: rateEditor.rate ? "Customer rate updated" : "Customer rate added" });
+      setRateEditor({ open: false, rate: null });
+      load();
+    } catch (error) {
+      toast({ title: "Not saved", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+    } finally {
+      setSaving(false);
     }
   };
+
+  const toggleRule = async (r: Rule) => {
+    try {
+      await apiClient.setDiscountRuleActive(r._id, !r.isActive);
+      toast({ title: `${r.name} turned ${r.isActive ? "off" : "on"}` });
+      load();
+    } catch (error) {
+      toast({ title: "Not changed", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+    }
+  };
+
+  const remove = async () => {
+    if (!deleting) return;
+    try {
+      if (deleting.kind === "rule") await apiClient.delete(`/discounts/rules/${deleting.item._id}`);
+      else await apiClient.delete(`/discounts/customer-pricing/${deleting.item._id}`);
+      toast({ title: deleting.kind === "rule" ? "Discount rule deleted" : "Customer rate removed" });
+      setDeleting(null);
+      load();
+    } catch (error) {
+      toast({ title: "Not deleted", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      throw error;
+    }
+  };
+
+  const q = search.trim().toLowerCase();
+  const ruleRows = useMemo(() => rules.filter((r) => !q || r.name.toLowerCase().includes(q) || (r.description || "").toLowerCase().includes(q)), [rules, q]);
+  const rateRows = useMemo(() => rates.filter((r) => !q || r.customerName.toLowerCase().includes(q)), [rates, q]);
+  const activeRules = rules.filter((r) => stateOf(r) === "on").length;
+  const activeRates = rates.filter((r) => stateOf(r) === "on").length;
+  const bestRate = rates.filter((r) => stateOf(r) === "on").sort((a, b) => b.discountPercentage - a.discountPercentage)[0];
+
+  const ruleColumns: Column<Rule>[] = [
+    { id: "name", header: "Discount", cell: (r) => <EntityCell icon={BadgePercent} title={r.name} subtitle={r.description} />, sortValue: (r) => r.name.toLowerCase(), className: "min-w-[220px]" },
+    {
+      id: "offer",
+      header: "Offer",
+      cell: (r) => (
+        <Stack
+          top={<span className="font-medium">{offerLabel(r)}</span>}
+          bottom={[r.minimumAmount ? `on orders over ${formatINR(r.minimumAmount)}` : "", r.maximumAmount && r.type !== "fixed" ? `up to ${formatINR(r.maximumAmount)}` : ""].filter(Boolean).join(", ") || "Any order"}
+        />
+      )
+    },
+    {
+      id: "who",
+      header: "For",
+      cell: (r) => (
+        <Stack top={AUDIENCE[r.customerType] || AUDIENCE.all} bottom={r.customerType === "specific" ? (r.customerIds || []).map((c) => c.name).slice(0, 3).join(", ") + ((r.customerIds || []).length > 3 ? ` +${(r.customerIds || []).length - 3}` : "") : undefined} />
+      ),
+      hideBelow: "md"
+    },
+    { id: "dates", header: "Runs", cell: (r) => <span className="whitespace-nowrap text-muted-foreground">{dateSpan(r.validFrom, r.validUntil)}</span>, hideBelow: "lg" },
+    { id: "state", header: "Status", cell: (r) => <StatusPill tone={STATE[stateOf(r)].tone}>{STATE[stateOf(r)].label}</StatusPill>, sortValue: (r) => stateOf(r), className: "w-[120px]" }
+  ];
+
+  const rateColumns: Column<Rate>[] = [
+    { id: "customer", header: "Customer", cell: (r) => <EntityCell avatar={r.customerName} title={r.customerName} subtitle={r.customerId?.phone} />, sortValue: (r) => r.customerName.toLowerCase(), className: "min-w-[220px]" },
+    { id: "discount", header: "Discount", align: "right", cell: (r) => <span className="font-semibold">{r.discountPercentage}%</span>, sortValue: (r) => r.discountPercentage },
+    { id: "dates", header: "Runs", cell: (r) => <span className="whitespace-nowrap text-muted-foreground">{dateSpan(r.validFrom, r.validUntil)}</span>, hideBelow: "md" },
+    { id: "notes", header: "Notes", cell: (r) => <span className="block max-w-[240px] truncate text-muted-foreground">{r.notes || "—"}</span>, hideBelow: "lg" },
+    { id: "state", header: "Status", cell: (r) => <StatusPill tone={STATE[stateOf(r)].tone}>{STATE[stateOf(r)].label}</StatusPill>, className: "w-[120px]" }
+  ];
+
+  const pickable = customers.filter((c) => !customerQuery || c.name.toLowerCase().includes(customerQuery.toLowerCase()) || (c.phone || "").includes(customerQuery));
+  const ratedCustomers = new Set(rates.map((r) => r.customerId?._id));
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-8">
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Discounts & Pricing</h1>
-          <p className="text-muted-foreground">Manage discount rules and customer-specific pricing</p>
-        </div>
-        <div className="flex gap-2">
-          <Dialog open={isCreateRuleDialogOpen} onOpenChange={setIsCreateRuleDialogOpen}>
-            <DialogTrigger asChild>
-              <Button variant="outline" size="lg" className="gap-2">
-                <Percent className="h-4 w-4" />
-                New Discount Rule
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-2xl">
-              <DialogHeader>
-                <DialogTitle>Create Discount Rule</DialogTitle>
-                <DialogDescription>
-                  Set up a new discount rule for orders or customers.
-                </DialogDescription>
-              </DialogHeader>
-              <CreateDiscountRuleForm onSubmit={handleCreateDiscountRule} />
-            </DialogContent>
-          </Dialog>
-          
-          <Dialog open={isCreateCustomerPricingDialogOpen} onOpenChange={setIsCreateCustomerPricingDialogOpen}>
-            <DialogTrigger asChild>
-              <Button variant="gradient" size="lg" className="gap-2">
-                <Plus className="h-4 w-4" />
-                Customer Pricing
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-2xl">
-              <DialogHeader>
-                <DialogTitle>Set Customer Pricing</DialogTitle>
-                <DialogDescription>
-                  Configure special pricing for a specific customer.
-                </DialogDescription>
-              </DialogHeader>
-              <CreateCustomerPricingForm onSubmit={handleCreateCustomerPricing} />
-            </DialogContent>
-          </Dialog>
-        </div>
+    <PageShell width="default">
+      <PageHeader
+        eyebrow="Sales & estimating"
+        title="Discounts"
+        description="Offers and standing customer rates. When you make an invoice, the best one for that customer is suggested."
+        actions={
+          canEdit && (
+            <Button onClick={() => (view === "rules" ? openRule(null) : openRate(null))}>
+              <Plus />
+              {view === "rules" ? "New discount" : "New customer rate"}
+            </Button>
+          )
+        }
+      />
+
+      <MetricBar
+        loading={loading}
+        metrics={[
+          { label: "Discounts on", value: activeRules, hint: plural(rules.length, "rule"), onClick: () => setView("rules"), active: view === "rules" },
+          { label: "Customer rates", value: activeRates, hint: `${plural(rates.length, "customer")} with a rate`, onClick: () => setView("rates"), active: view === "rates" },
+          { label: "Starting later", value: rules.filter((r) => stateOf(r) === "scheduled").length, hint: "Scheduled offers" },
+          { label: "Highest rate", value: bestRate ? `${bestRate.discountPercentage}%` : "—", hint: bestRate?.customerName || "No customer rates" }
+        ]}
+      />
+
+      <div className="space-y-4">
+        <ViewTabs<View>
+          value={view}
+          onChange={setView}
+          tabs={[
+            { value: "rules", label: "Discount rules", icon: BadgePercent, count: rules.length },
+            { value: "rates", label: "Customer rates", icon: UserRound, count: rates.length }
+          ]}
+        />
+
+        <DataCard toolbar={<Toolbar search={<SearchField value={search} onChange={setSearch} placeholder={view === "rules" ? "Search discounts" : "Search customers"} />} />}>
+          {view === "rules" ? (
+            <DataTable
+              columns={ruleColumns}
+              rows={ruleRows}
+              rowKey={(r) => r._id}
+              loading={loading}
+              onRowClick={canEdit ? (r) => openRule(r) : undefined}
+              actions={(r) => [
+                { label: "Edit", icon: Pencil, onClick: () => openRule(r), hidden: !canEdit },
+                { label: r.isActive ? "Turn off" : "Turn on", icon: Power, onClick: () => toggleRule(r), hidden: !canEdit },
+                { label: "Delete", icon: Trash2, destructive: true, separated: true, onClick: () => setDeleting({ kind: "rule", item: r }), hidden: !canDelete }
+              ]}
+              actionsLabel={(r) => `Actions for ${r.name}`}
+              mobile={(r) => (
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-medium">{r.name}</span>
+                    <StatusPill tone={STATE[stateOf(r)].tone}>{STATE[stateOf(r)].label}</StatusPill>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {offerLabel(r)} · {AUDIENCE[r.customerType] || AUDIENCE.all}
+                    {r.minimumAmount ? ` · over ${formatINR(r.minimumAmount)}` : ""}
+                  </div>
+                </div>
+              )}
+              empty={
+                <EmptyState
+                  icon={BadgePercent}
+                  title={q ? "No discounts match" : "No discount rules yet"}
+                  description={q ? undefined : "For example: 10% off orders over ₹5,000, or ₹200 off a customer's first order."}
+                  action={
+                    canEdit &&
+                    !q && (
+                      <Button onClick={() => openRule(null)}>
+                        <Plus />
+                        New discount
+                      </Button>
+                    )
+                  }
+                />
+              }
+            />
+          ) : (
+            <DataTable
+              columns={rateColumns}
+              rows={rateRows}
+              rowKey={(r) => r._id}
+              loading={loading}
+              onRowClick={canEdit ? (r) => openRate(r) : undefined}
+              actions={(r) => [
+                { label: "Edit", icon: Pencil, onClick: () => openRate(r), hidden: !canEdit },
+                { label: "Remove", icon: Trash2, destructive: true, separated: true, onClick: () => setDeleting({ kind: "rate", item: r }), hidden: !canDelete }
+              ]}
+              actionsLabel={(r) => `Actions for ${r.customerName}`}
+              mobile={(r) => (
+                <div className="flex items-center justify-between gap-3">
+                  <EntityCell avatar={r.customerName} title={r.customerName} subtitle={dateSpan(r.validFrom, r.validUntil)} />
+                  <span className="num font-semibold">{r.discountPercentage}%</span>
+                </div>
+              )}
+              empty={
+                <EmptyState
+                  icon={UserRound}
+                  title={q ? "No customers match" : "No customer rates yet"}
+                  description={q ? undefined : "Give a regular customer a standing discount; it's suggested on every invoice for them."}
+                  action={
+                    canEdit &&
+                    !q && (
+                      <Button onClick={() => openRate(null)}>
+                        <Plus />
+                        New customer rate
+                      </Button>
+                    )
+                  }
+                />
+              }
+            />
+          )}
+        </DataCard>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Active Rules</CardTitle>
-            <Percent className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{discountRules.filter(r => r.isActive).length}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Special Customers</CardTitle>
-            <Users className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{customerPricing.filter(p => p.isActive).length}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Usage</CardTitle>
-            <Tag className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{discountRules.reduce((sum, r) => sum + r.usageCount, 0)}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Avg Discount</CardTitle>
-            <Calendar className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
-              {discountRules.length > 0 
-                ? Math.round(discountRules.reduce((sum, r) => sum + r.value, 0) / discountRules.length)
-                : 0}%
+      <EditorSheet
+        open={ruleEditor.open}
+        onOpenChange={(open) => setRuleEditor((s) => ({ ...s, open }))}
+        title={ruleEditor.rule ? "Edit discount" : "New discount"}
+        description="Suggested on invoices whenever it applies."
+        onSubmit={saveRule}
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setRuleEditor({ open: false, rule: null })}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={saving}>
+              {saving && <Loader2 className="animate-spin" />}
+              {ruleEditor.rule ? "Save changes" : "Add discount"}
+            </Button>
+          </>
+        }
+      >
+        <EditorSection title="Offer">
+          <div className="space-y-1.5">
+            <Label htmlFor="rule-name">Name</Label>
+            <Input id="rule-name" value={ruleForm.name} onChange={(e) => setRuleForm({ ...ruleForm, name: e.target.value })} placeholder="e.g. Wedding season 10%" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="rule-type">Kind</Label>
+              <Select value={ruleForm.type} onValueChange={(v) => setRuleForm({ ...ruleForm, type: v as "percentage" | "fixed" })}>
+                <SelectTrigger id="rule-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="percentage">% off the order</SelectItem>
+                  <SelectItem value="fixed">₹ off the order</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-          </CardContent>
-        </Card>
-      </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="rule-value">{ruleForm.type === "percentage" ? "Discount (%)" : "Discount (₹)"}</Label>
+              <Input id="rule-value" type="number" inputMode="decimal" min="0" max={ruleForm.type === "percentage" ? 100 : undefined} value={ruleForm.value} onChange={(e) => setRuleForm({ ...ruleForm, value: e.target.value })} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="rule-min">Minimum order (₹)</Label>
+              <Input id="rule-min" type="number" inputMode="decimal" min="0" value={ruleForm.minimumAmount} onChange={(e) => setRuleForm({ ...ruleForm, minimumAmount: e.target.value })} placeholder="Any amount" />
+            </div>
+            {ruleForm.type === "percentage" && (
+              <div className="space-y-1.5">
+                <Label htmlFor="rule-max">Maximum discount (₹)</Label>
+                <Input id="rule-max" type="number" inputMode="decimal" min="0" value={ruleForm.maximumAmount} onChange={(e) => setRuleForm({ ...ruleForm, maximumAmount: e.target.value })} placeholder="No limit" />
+              </div>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="rule-desc">Note</Label>
+            <Textarea id="rule-desc" rows={2} value={ruleForm.description} onChange={(e) => setRuleForm({ ...ruleForm, description: e.target.value })} placeholder="Optional — shown to your team" />
+          </div>
+        </EditorSection>
 
-      {/* Tab Navigation */}
-      <div className="flex space-x-1 bg-muted p-1 rounded-lg w-fit">
-        <Button
-          variant={activeTab === 'rules' ? 'default' : 'ghost'}
-          size="sm"
-          onClick={() => setActiveTab('rules')}
-        >
-          Discount Rules
-        </Button>
-        <Button
-          variant={activeTab === 'customers' ? 'default' : 'ghost'}
-          size="sm"
-          onClick={() => setActiveTab('customers')}
-        >
-          Customer Pricing
-        </Button>
-      </div>
-
-      {/* Search */}
-      <div className="relative max-w-md">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          placeholder={`Search ${activeTab}...`}
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="pl-10"
-        />
-      </div>
-
-      {/* Content based on active tab */}
-      {activeTab === 'rules' && (
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-          {filteredRules.map((rule) => (
-            <Card key={rule.id}>
-              <CardHeader className="pb-3">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle className="text-lg font-semibold">{rule.name}</CardTitle>
-                    <p className="text-sm text-muted-foreground">{rule.description}</p>
-                  </div>
-                  <div className="flex gap-2 flex-col">
-                    <Badge className={getDiscountTypeColor(rule.type)}>
-                      {rule.type}
-                    </Badge>
-                    {rule.isActive ? (
-                      <Badge variant="default" className="bg-green-100 text-green-800">
-                        Active
-                      </Badge>
-                    ) : (
-                      <Badge variant="secondary">Inactive</Badge>
-                    )}
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="text-center">
-                  <div className="text-2xl font-bold">
-                    {rule.type === 'percentage' ? `${rule.value}%` : `₹${rule.value}`}
-                  </div>
-                  {rule.minimumAmount && (
-                    <p className="text-sm text-muted-foreground">
-                      Min: ₹{rule.minimumAmount}
-                    </p>
-                  )}
-                </div>
-
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Customer Type:</span>
-                    <span className="capitalize">{rule.customerType}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Usage:</span>
-                    <span>{rule.usageCount}{rule.usageLimit && ` / ${rule.usageLimit}`}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Valid Until:</span>
-                    <span>{rule.validUntil ? rule.validUntil.toLocaleDateString() : 'No limit'}</span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
-
-      {activeTab === 'customers' && (
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-          {filteredCustomerPricing.map((pricing) => (
-            <Card key={pricing.id}>
-              <CardHeader className="pb-3">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle className="text-lg font-semibold">{pricing.customerName}</CardTitle>
-                    <p className="text-sm text-muted-foreground">{pricing.notes}</p>
-                  </div>
-                  {pricing.isActive ? (
-                    <Badge variant="default" className="bg-green-100 text-green-800">
-                      Active
-                    </Badge>
-                  ) : (
-                    <Badge variant="secondary">Inactive</Badge>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="text-center">
-                  <div className="text-2xl font-bold">{pricing.discountPercentage}%</div>
-                  <p className="text-sm text-muted-foreground">Base Discount</p>
-                </div>
-
-                {pricing.specialRates.length > 0 && (
-                  <div className="space-y-2">
-                    <h4 className="font-medium text-sm">Special Rates:</h4>
-                    {pricing.specialRates.map((rate, index) => (
-                      <div key={index} className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">{rate.jobType}:</span>
-                        <span>₹{rate.rate}</span>
-                      </div>
-                    ))}
-                  </div>
+        <EditorSection title="Who gets it">
+          <div className="grid grid-cols-2 gap-1.5" role="radiogroup" aria-label="Who gets it">
+            {(Object.keys(AUDIENCE) as Audience[]).map((a) => (
+              <button
+                key={a}
+                type="button"
+                role="radio"
+                aria-checked={ruleForm.customerType === a}
+                onClick={() => setRuleForm({ ...ruleForm, customerType: a })}
+                className={cn("rounded-md border px-3 py-2 text-left text-[13px] transition-colors", ruleForm.customerType === a ? "border-primary bg-primary-soft/40 font-medium" : "hover:bg-muted")}
+              >
+                {AUDIENCE[a]}
+              </button>
+            ))}
+          </div>
+          {ruleForm.customerType === "new" && <p className="text-xs text-muted-foreground">Customers with no invoice yet.</p>}
+          {ruleForm.customerType === "specific" && (
+            <div className="space-y-2">
+              <Input value={customerQuery} onChange={(e) => setCustomerQuery(e.target.value)} placeholder="Search customers" aria-label="Search customers" />
+              <div className="max-h-56 overflow-y-auto rounded-md border">
+                {pickable.length === 0 ? (
+                  <p className="p-3 text-sm text-muted-foreground">{customers.length ? "No customers match" : "Loading customers…"}</p>
+                ) : (
+                  pickable.slice(0, 200).map((c) => {
+                    const checked = ruleForm.customerIds.includes(c._id);
+                    return (
+                      <label key={c._id} className="flex cursor-pointer items-center gap-2 border-b px-3 py-2 text-sm last:border-b-0 hover:bg-muted/50">
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={(v) => setRuleForm((f) => ({ ...f, customerIds: v ? [...f.customerIds, c._id] : f.customerIds.filter((id) => id !== c._id) }))}
+                        />
+                        <span className="truncate">{c.name}</span>
+                        {c.phone && <span className="ml-auto text-xs text-muted-foreground">{c.phone}</span>}
+                      </label>
+                    );
+                  })
                 )}
-              </CardContent>
-            </Card>
-          ))}
+              </div>
+              <p className="text-xs text-muted-foreground">{plural(ruleForm.customerIds.length, "customer")} chosen</p>
+            </div>
+          )}
+        </EditorSection>
+
+        <EditorSection title="When">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="rule-from">Starts</Label>
+              <Input id="rule-from" type="date" value={ruleForm.validFrom} onChange={(e) => setRuleForm({ ...ruleForm, validFrom: e.target.value })} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="rule-until">Ends</Label>
+              <Input id="rule-until" type="date" min={ruleForm.validFrom || undefined} value={ruleForm.validUntil} onChange={(e) => setRuleForm({ ...ruleForm, validUntil: e.target.value })} />
+            </div>
+          </div>
+          <div className="flex items-center justify-between rounded-md border px-3 py-2.5">
+            <Label htmlFor="rule-active" className="font-normal">
+              Turned on
+            </Label>
+            <Switch id="rule-active" checked={ruleForm.isActive} onCheckedChange={(v) => setRuleForm({ ...ruleForm, isActive: v })} />
+          </div>
+        </EditorSection>
+      </EditorSheet>
+
+      <EditorSheet
+        open={rateEditor.open}
+        onOpenChange={(open) => setRateEditor((s) => ({ ...s, open }))}
+        title={rateEditor.rate ? `Rate for ${rateEditor.rate.customerName}` : "New customer rate"}
+        description="A standing discount for one customer, suggested on their invoices."
+        onSubmit={saveRate}
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setRateEditor({ open: false, rate: null })}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={saving}>
+              {saving && <Loader2 className="animate-spin" />}
+              {rateEditor.rate ? "Save changes" : "Add rate"}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          {!rateEditor.rate && (
+            <div className="space-y-1.5">
+              <Label htmlFor="rate-customer">Customer</Label>
+              <Select value={rateForm.customerId} onValueChange={(v) => setRateForm({ ...rateForm, customerId: v })}>
+                <SelectTrigger id="rate-customer">
+                  <SelectValue placeholder={customers.length ? "Choose a customer" : "Loading customers…"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {customers
+                    .filter((c) => !ratedCustomers.has(c._id))
+                    .map((c) => (
+                      <SelectItem key={c._id} value={c._id}>
+                        {c.name}
+                        {c.phone ? ` · ${c.phone}` : ""}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          <div className="space-y-1.5">
+            <Label htmlFor="rate-pct">Discount (%)</Label>
+            <Input id="rate-pct" type="number" inputMode="decimal" min="0" max="100" value={rateForm.discountPercentage} onChange={(e) => setRateForm({ ...rateForm, discountPercentage: e.target.value })} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="rate-from">Starts</Label>
+              <Input id="rate-from" type="date" value={rateForm.validFrom} onChange={(e) => setRateForm({ ...rateForm, validFrom: e.target.value })} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="rate-until">Ends</Label>
+              <Input id="rate-until" type="date" min={rateForm.validFrom || undefined} value={rateForm.validUntil} onChange={(e) => setRateForm({ ...rateForm, validUntil: e.target.value })} />
+            </div>
+          </div>
+          <div className="flex items-center justify-between rounded-md border px-3 py-2.5">
+            <Label htmlFor="rate-active" className="font-normal">
+              Turned on
+            </Label>
+            <Switch id="rate-active" checked={rateForm.isActive} onCheckedChange={(v) => setRateForm({ ...rateForm, isActive: v })} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="rate-notes">Notes</Label>
+            <Textarea id="rate-notes" rows={2} value={rateForm.notes} onChange={(e) => setRateForm({ ...rateForm, notes: e.target.value })} placeholder="Optional" />
+          </div>
         </div>
-      )}
-    </div>
-  );
-};
+      </EditorSheet>
 
-// Create Discount Rule Form Component
-interface CreateDiscountRuleFormProps {
-  onSubmit: (data: Omit<DiscountRule, 'id' | 'usageCount'>) => void;
-}
-
-function CreateDiscountRuleForm({ onSubmit }: CreateDiscountRuleFormProps) {
-  const [formData, setFormData] = useState({
-    name: "",
-    type: "percentage" as const,
-    value: 0,
-    minimumAmount: 0,
-    customerType: "all" as const,
-    validFrom: new Date().toISOString().split('T')[0],
-    validUntil: "",
-    isActive: true,
-    usageLimit: 0,
-    description: ""
-  });
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    const data: Omit<DiscountRule, 'id' | 'usageCount'> = {
-      ...formData,
-      validFrom: new Date(formData.validFrom),
-      validUntil: formData.validUntil ? new Date(formData.validUntil) : undefined,
-      minimumAmount: formData.minimumAmount || undefined,
-      usageLimit: formData.usageLimit || undefined
-    };
-    
-    onSubmit(data);
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label>Rule Name</Label>
-          <Input
-            value={formData.name}
-            onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
-            placeholder="New Customer Discount"
-            required
-          />
-        </div>
-        
-        <div className="space-y-2">
-          <Label>Type</Label>
-          <Select value={formData.type} onValueChange={(value: any) => setFormData(prev => ({ ...prev, type: value }))}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="percentage">Percentage</SelectItem>
-              <SelectItem value="fixed">Fixed Amount</SelectItem>
-              <SelectItem value="bulk">Bulk Discount</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label>Value</Label>
-          <Input
-            type="number"
-            value={formData.value}
-            onChange={(e) => setFormData(prev => ({ ...prev, value: parseFloat(e.target.value) || 0 }))}
-            placeholder={formData.type === 'percentage' ? '15' : '500'}
-            required
-          />
-        </div>
-        
-        <div className="space-y-2">
-          <Label>Minimum Amount (optional)</Label>
-          <Input
-            type="number"
-            value={formData.minimumAmount}
-            onChange={(e) => setFormData(prev => ({ ...prev, minimumAmount: parseFloat(e.target.value) || 0 }))}
-            placeholder="5000"
-          />
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <Label>Customer Type</Label>
-        <Select value={formData.customerType} onValueChange={(value: any) => setFormData(prev => ({ ...prev, customerType: value }))}>
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Customers</SelectItem>
-            <SelectItem value="new">New Customers</SelectItem>
-            <SelectItem value="returning">Returning Customers</SelectItem>
-            <SelectItem value="specific">Specific Customers</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label>Valid From</Label>
-          <Input
-            type="date"
-            value={formData.validFrom}
-            onChange={(e) => setFormData(prev => ({ ...prev, validFrom: e.target.value }))}
-            required
-          />
-        </div>
-        
-        <div className="space-y-2">
-          <Label>Valid Until (optional)</Label>
-          <Input
-            type="date"
-            value={formData.validUntil}
-            onChange={(e) => setFormData(prev => ({ ...prev, validUntil: e.target.value }))}
-          />
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <Label>Usage Limit (optional)</Label>
-        <Input
-          type="number"
-          value={formData.usageLimit}
-          onChange={(e) => setFormData(prev => ({ ...prev, usageLimit: parseInt(e.target.value) || 0 }))}
-          placeholder="100"
-        />
-      </div>
-
-      <div className="space-y-2">
-        <Label>Description</Label>
-        <Textarea
-          value={formData.description}
-          onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
-          placeholder="Describe this discount rule..."
-        />
-      </div>
-
-      <div className="flex items-center space-x-2">
-        <Switch
-          checked={formData.isActive}
-          onCheckedChange={(checked) => setFormData(prev => ({ ...prev, isActive: checked }))}
-        />
-        <Label>Active</Label>
-      </div>
-
-      <div className="flex justify-end gap-2 pt-4">
-        <Button type="submit">Create Rule</Button>
-      </div>
-    </form>
+      <ConfirmDialog
+        open={!!deleting}
+        onOpenChange={(o) => !o && setDeleting(null)}
+        title={deleting?.kind === "rule" ? `Delete ${deleting.item.name}?` : `Remove ${deleting?.item.customerName}'s rate?`}
+        description="It won't be suggested on new invoices. Invoices already made keep their discount."
+        confirmLabel={deleting?.kind === "rule" ? "Delete" : "Remove"}
+        onConfirm={remove}
+      />
+    </PageShell>
   );
 }
-
-// Create Customer Pricing Form Component
-interface CreateCustomerPricingFormProps {
-  onSubmit: (data: Omit<CustomerPricing, 'id'>) => void;
-}
-
-function CreateCustomerPricingForm({ onSubmit }: CreateCustomerPricingFormProps) {
-  const [formData, setFormData] = useState({
-    customerId: "",
-    customerName: "",
-    discountPercentage: 0,
-    isActive: true,
-    notes: ""
-  });
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    const data: Omit<CustomerPricing, 'id'> = {
-      ...formData,
-      specialRates: [] // Can be extended to allow adding special rates
-    };
-    
-    onSubmit(data);
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label>Customer ID</Label>
-          <Input
-            value={formData.customerId}
-            onChange={(e) => setFormData(prev => ({ ...prev, customerId: e.target.value }))}
-            placeholder="CUST-001"
-            required
-          />
-        </div>
-        
-        <div className="space-y-2">
-          <Label>Customer Name</Label>
-          <Input
-            value={formData.customerName}
-            onChange={(e) => setFormData(prev => ({ ...prev, customerName: e.target.value }))}
-            placeholder="ABC Corporation"
-            required
-          />
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <Label>Discount Percentage</Label>
-        <Input
-          type="number"
-          value={formData.discountPercentage}
-          onChange={(e) => setFormData(prev => ({ ...prev, discountPercentage: parseFloat(e.target.value) || 0 }))}
-          placeholder="25"
-          required
-        />
-      </div>
-
-      <div className="space-y-2">
-        <Label>Notes</Label>
-        <Textarea
-          value={formData.notes}
-          onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
-          placeholder="Special agreements, volume commitments, etc."
-        />
-      </div>
-
-      <div className="flex items-center space-x-2">
-        <Switch
-          checked={formData.isActive}
-          onCheckedChange={(checked) => setFormData(prev => ({ ...prev, isActive: checked }))}
-        />
-        <Label>Active</Label>
-      </div>
-
-      <div className="flex justify-end gap-2 pt-4">
-        <Button type="submit">Create Pricing</Button>
-      </div>
-    </form>
-  );
-}
-
-export default Discounts;

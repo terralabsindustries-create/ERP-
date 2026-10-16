@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
+import { localDate } from "@/lib/format";
 
 interface CreateTaskDialogProps {
   open: boolean;
@@ -45,7 +46,6 @@ export function CreateTaskDialog({ open, onOpenChange, onTaskCreated, preselecte
 
   useEffect(() => {
     if (open) {
-      console.log('🚀 CreateTaskDialog opened - fetching data...');
       fetchStaff();
       fetchJobs();
     }
@@ -54,7 +54,6 @@ export function CreateTaskDialog({ open, onOpenChange, onTaskCreated, preselecte
   // Pre-fill form data when preselectedJob is provided
   useEffect(() => {
     if (open && preselectedJob) {
-      console.log('🎯 Pre-filling form with preselected job:', preselectedJob);
       
       // Safe date formatting function
       const formatDateForInput = (dateValue: any) => {
@@ -65,7 +64,7 @@ export function CreateTaskDialog({ open, onOpenChange, onTaskCreated, preselecte
         if (isNaN(date.getTime())) {
           return '';
         }
-        return date.toISOString().split('T')[0];
+        return localDate(date);
       };
       
       setFormData(prev => ({
@@ -79,77 +78,23 @@ export function CreateTaskDialog({ open, onOpenChange, onTaskCreated, preselecte
     }
   }, [open, preselectedJob]);
 
+  // Everyone who can be given a task: active logins of the business.
   const fetchStaff = async () => {
     try {
-      // Use users endpoint with role filter to get staff users (same as Staff component)
-      const response = await apiClient.get('/users', { role: 'staff' });
-      console.log('👥 Staff response:', response);
-      
-      // Handle the actual response structure from API (same as Staff component)
-      let staffData = [];
-      if (response && typeof response === 'object' && response.users && Array.isArray(response.users)) {
-        staffData = response.users;
-        console.log('👥 Extracted staff from response.users:', staffData);
-      } else if (response && response.data && Array.isArray(response.data.users)) {
-        staffData = response.data.users;
-        console.log('👥 Extracted staff from response.data.users:', staffData);
-      } else if (Array.isArray(response)) {
-        staffData = response;
-        console.log('👥 Using direct response array:', staffData);
-      } else if (response && Array.isArray(response.data)) {
-        staffData = response.data;
-        console.log('👥 Using response.data array:', staffData);
-      } else {
-        console.log('👥 Unexpected response structure:', response);
-      }
-      
-      console.log('👥 Final staff data:', staffData);
-      console.log('👥 Staff count:', staffData.length);
-      console.log('👥 Is array:', Array.isArray(staffData));
-      
-      // Ensure we always have an array before setting state
-      setStaff(Array.isArray(staffData) ? staffData : []);
+      const users = await apiClient.listAll<{ _id: string; isActive?: boolean; status?: string }>('/users', 'users', { sortBy: 'fullName', sortOrder: 'asc' });
+      setStaff(users.filter((u) => u.isActive !== false && u.status !== 'invited'));
     } catch (error) {
       console.error('Error fetching staff:', error);
-      setStaff([]); // Set empty array on error
+      setStaff([]);
     }
   };
 
   const fetchJobs = async () => {
     setJobsLoading(true);
     try {
-      const response = await apiClient.getJobs();
-      console.log('📋 Jobs response:', response);
-      
-      // Handle the nested response structure from backend
-      let jobsData = [];
-      if (response?.data?.jobs) {
-        // Backend returns { data: { jobs: [...], pagination: {...} } }
-        jobsData = response.data.jobs;
-        console.log('📋 Jobs extracted from response.data.jobs:', jobsData.length);
-      } else if (response?.jobs) {
-        // Backend returns { jobs: [...], pagination: {...} }
-        jobsData = response.jobs;
-        console.log('📋 Jobs extracted from response.jobs:', jobsData.length);
-      } else if (Array.isArray(response)) {
-        // Direct array response
-        jobsData = response;
-        console.log('📋 Jobs extracted from direct array:', jobsData.length);
-      } else if (response?.data && Array.isArray(response.data)) {
-        // Direct data array
-        jobsData = response.data;
-        console.log('📋 Jobs extracted from response.data array:', jobsData.length);
-      } else {
-        console.log('📋 No jobs found in response structure:', response);
-      }
-      
-      console.log('📋 Extracted jobs data:', jobsData);
-      
-      // Process jobs to ensure we have the right structure
-      const processedJobs = jobsData.map(job => {
-        // Handle populated customer data
-        const customerName = job.customerId?.name || job.customer || job.customerName || 'Unknown Customer';
-        
+      const jobsData = await apiClient.listAll<{ _id?: string; id?: string; title?: string; name?: string; status?: string; customerId?: { name?: string } | string; customer?: string; customerName?: string; dueDate?: string; priority?: string }>('/jobs', 'jobs');
+      const processedJobs = jobsData.map((job) => {
+        const customerName = (typeof job.customerId === 'object' ? job.customerId?.name : undefined) || job.customer || job.customerName || 'Unknown customer';
         return {
           _id: job._id || job.id,
           title: job.title || job.name || 'Untitled Job',
@@ -160,7 +105,6 @@ export function CreateTaskDialog({ open, onOpenChange, onTaskCreated, preselecte
         };
       });
       
-      console.log('📋 Processed jobs with structure:', processedJobs);
       setJobs(processedJobs);
     } catch (error) {
       console.error('Error fetching jobs:', error);
@@ -227,7 +171,7 @@ export function CreateTaskDialog({ open, onOpenChange, onTaskCreated, preselecte
       console.error('Error creating task:', error);
       toast({
         title: "Error",
-        description: error.response?.data?.message || "Failed to create task",
+        description: error?.message || "Failed to create task",
         variant: "destructive",
       });
     } finally {
@@ -237,11 +181,11 @@ export function CreateTaskDialog({ open, onOpenChange, onTaskCreated, preselecte
 
   const getPriorityColor = (priority: string) => {
     switch (priority) {
-      case 'urgent': return 'bg-red-100 text-red-800';
-      case 'high': return 'bg-orange-100 text-orange-800';
-      case 'medium': return 'bg-yellow-100 text-yellow-800';
-      case 'low': return 'bg-green-100 text-green-800';
-      default: return 'bg-gray-100 text-gray-800';
+      case 'urgent': return 'bg-destructive-soft text-destructive-strong';
+      case 'high': return 'bg-warning-soft text-warning-strong';
+      case 'medium': return 'bg-warning-soft text-warning-strong';
+      case 'low': return 'bg-success-soft text-success-strong';
+      default: return 'bg-muted text-foreground';
     }
   };
 
@@ -307,11 +251,11 @@ export function CreateTaskDialog({ open, onOpenChange, onTaskCreated, preselecte
               <div className="space-y-2">
                 <Label htmlFor="jobId">Related Job</Label>
                 {preselectedJob ? (
-                  <div className="p-3 bg-gray-50 border rounded-md">
-                    <div className="font-medium text-gray-900">{preselectedJob.title}</div>
-                    <div className="text-sm text-gray-600">Customer: {preselectedJob.customer}</div>
-                    <div className="text-sm text-gray-600">Status: {preselectedJob.status}</div>
-                    <div className="text-xs text-gray-500 mt-1">
+                  <div className="p-3 bg-muted/50 border rounded-md">
+                    <div className="font-medium text-foreground">{preselectedJob.title}</div>
+                    <div className="text-sm text-muted-foreground">Customer: {preselectedJob.customer}</div>
+                    <div className="text-sm text-muted-foreground">Status: {preselectedJob.status}</div>
+                    <div className="text-xs text-muted-foreground mt-1">
                       (Fixed - Cannot be changed)
                     </div>
                   </div>
@@ -324,13 +268,13 @@ export function CreateTaskDialog({ open, onOpenChange, onTaskCreated, preselecte
                         <SelectItem value="none">
                           <div className="flex flex-col">
                             <span className="font-medium">No Job</span>
-                            <span className="text-xs text-gray-500">Create standalone task</span>
+                            <span className="text-xs text-muted-foreground">Create standalone task</span>
                           </div>
                         </SelectItem>
                         {jobsLoading ? (
                           <SelectItem value="loading" disabled>
                             <div className="flex items-center gap-2">
-                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900"></div>
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-foreground"></div>
                               <span>Loading jobs...</span>
                             </div>
                           </SelectItem>
@@ -341,23 +285,23 @@ export function CreateTaskDialog({ open, onOpenChange, onTaskCreated, preselecte
                                 <div className="flex justify-between items-start w-full">
                                   <div className="flex-1 min-w-0">
                                     <div className="font-medium truncate">{job.title}</div>
-                                    <div className="text-xs text-gray-500 truncate">
+                                    <div className="text-xs text-muted-foreground truncate">
                                       Customer: {job.customer}
                                     </div>
                                   </div>
                                   <div className="flex flex-col items-end ml-2">
                                     <Badge 
                                       className={`text-xs ${
-                                        job.status === 'completed' ? 'bg-green-100 text-green-800' :
-                                        job.status === 'in_progress' ? 'bg-blue-100 text-blue-800' :
-                                        job.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
-                                        'bg-gray-100 text-gray-800'
+                                        job.status === 'completed' ? 'bg-success-soft text-success-strong' :
+                                        job.status === 'in_progress' ? 'bg-info-soft text-info-strong' :
+                                        job.status === 'pending' ? 'bg-warning-soft text-warning-strong' :
+                                        'bg-muted text-foreground'
                                       }`}
                                     >
                                       {job.status?.replace('_', ' ')}
                                     </Badge>
                                     {job.dueDate && (
-                                      <div className="text-xs text-gray-500 mt-1">
+                                      <div className="text-xs text-muted-foreground mt-1">
                                         Due: {new Date(job.dueDate).toLocaleDateString()}
                                       </div>
                                     )}
@@ -370,7 +314,7 @@ export function CreateTaskDialog({ open, onOpenChange, onTaskCreated, preselecte
                           <SelectItem value="no-jobs" disabled>
                             <div className="flex flex-col">
                               <span className="font-medium">No Jobs Available</span>
-                              <span className="text-xs text-gray-500">Create a job first or check console for errors</span>
+                              <span className="text-xs text-muted-foreground">Create a job first or check console for errors</span>
                             </div>
                           </SelectItem>
                         )}
@@ -437,22 +381,22 @@ export function CreateTaskDialog({ open, onOpenChange, onTaskCreated, preselecte
                   <SelectContent>
                     <SelectItem value="low">
                       <div className="flex items-center gap-2">
-                        <Badge className="bg-green-100 text-green-800">Low</Badge>
+                        <Badge className="bg-success-soft text-success-strong">Low</Badge>
                       </div>
                     </SelectItem>
                     <SelectItem value="medium">
                       <div className="flex items-center gap-2">
-                        <Badge className="bg-yellow-100 text-yellow-800">Medium</Badge>
+                        <Badge className="bg-warning-soft text-warning-strong">Medium</Badge>
                       </div>
                     </SelectItem>
                     <SelectItem value="high">
                       <div className="flex items-center gap-2">
-                        <Badge className="bg-orange-100 text-orange-800">High</Badge>
+                        <Badge className="bg-warning-soft text-warning-strong">High</Badge>
                       </div>
                     </SelectItem>
                     <SelectItem value="urgent">
                       <div className="flex items-center gap-2">
-                        <Badge className="bg-red-100 text-red-800">Urgent</Badge>
+                        <Badge className="bg-destructive-soft text-destructive-strong">Urgent</Badge>
                       </div>
                     </SelectItem>
                   </SelectContent>

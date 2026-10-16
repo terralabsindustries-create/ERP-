@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,10 +17,11 @@ interface NewTransactionDialogProps {
 
 export function NewTransactionDialog({ open, onOpenChange, onTransactionCreated }: NewTransactionDialogProps) {
   const [formData, setFormData] = useState({
-    transactionType: "income" as 'income' | 'expense' | 'transfer',
+    transactionType: "income" as 'income' | 'expense' | 'transfer' | 'opening_balance',
     category: "",
     amount: "",
     description: "",
+    postedAt: format(new Date(), 'yyyy-MM-dd'),
     paymentMethod: "cash" as 'cash' | 'bank_transfer' | 'cheque' | 'card' | 'upi',
     accountType: "cash" as 'cash' | 'bank' | 'credit_card' | 'loan' | 'investment',
     accountName: "",
@@ -48,6 +50,7 @@ export function NewTransactionDialog({ open, onOpenChange, onTransactionCreated 
         category: formData.category,
         amount: parseFloat(formData.amount),
         description: formData.description,
+        postedAt: formData.postedAt,
         paymentMethod: formData.paymentMethod,
         accountType: formData.accountType,
         accountName: formData.accountName,
@@ -70,6 +73,7 @@ export function NewTransactionDialog({ open, onOpenChange, onTransactionCreated 
         category: "",
         amount: "",
         description: "",
+        postedAt: format(new Date(), 'yyyy-MM-dd'),
         paymentMethod: "cash",
         accountType: "cash",
         accountName: "",
@@ -101,8 +105,12 @@ export function NewTransactionDialog({ open, onOpenChange, onTransactionCreated 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
+              <Label htmlFor="postedAt">Transaction date *</Label>
+              <Input id="postedAt" type="date" value={formData.postedAt} onChange={(e) => setFormData(prev => ({ ...prev, postedAt: e.target.value }))} required />
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="transactionType">Transaction Type *</Label>
-              <Select value={formData.transactionType} onValueChange={(value: 'income' | 'expense' | 'transfer') =>
+              <Select value={formData.transactionType} onValueChange={(value: 'income' | 'expense' | 'transfer' | 'opening_balance') =>
                 setFormData(prev => ({ ...prev, transactionType: value }))
               }>
                 <SelectTrigger>
@@ -112,6 +120,7 @@ export function NewTransactionDialog({ open, onOpenChange, onTransactionCreated 
                   <SelectItem value="income">Income</SelectItem>
                   <SelectItem value="expense">Expense</SelectItem>
                   <SelectItem value="transfer">Transfer</SelectItem>
+                  <SelectItem value="opening_balance">Opening balance</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -148,7 +157,9 @@ export function NewTransactionDialog({ open, onOpenChange, onTransactionCreated 
                 <SelectValue placeholder="Select category" />
               </SelectTrigger>
               <SelectContent>
-                {formData.transactionType === 'income' ? (
+                {formData.transactionType === 'opening_balance' ? (
+                  <SelectItem value="opening_balance">Opening balance</SelectItem>
+                ) : formData.transactionType === 'income' ? (
                   <>
                     <SelectItem value="sales">Sales</SelectItem>
                     <SelectItem value="service">Service Income</SelectItem>

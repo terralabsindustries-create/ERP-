@@ -40,9 +40,11 @@ const invoiceItemSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  // GST is no longer charged. These per-line tax fields stay so invoices issued
+  // with GST keep their figures; new lines carry 0 in all of them.
   gstRate: {
     type: Number,
-    required: [true, 'GST Rate is required'],
+    default: 0,
     min: [0, 'GST Rate cannot be negative'],
     max: [100, 'GST Rate cannot exceed 100%']
   },
@@ -63,7 +65,7 @@ const invoiceItemSchema = new mongoose.Schema({
   },
   gstAmount: {
     type: Number,
-    required: [true, 'GST Amount is required'],
+    default: 0,
     min: [0, 'GST Amount cannot be negative']
   },
   itemTotal: {
@@ -71,14 +73,15 @@ const invoiceItemSchema = new mongoose.Schema({
     required: [true, 'Item total is required'],
     min: [0, 'Item total cannot be negative']
   },
+  // Area-priced lines ("Square Feet", in sq ft or sq m — see `unit`): length
+  // and width of one piece, its area, and the line's total area (area per
+  // piece × quantity), which is what the rate is charged on. See
+  // utils/billing.js priceLine. Older lines may have a total area and no
+  // dimensions, or dimensions with a quantity that was not multiplied in.
   itemType: {
     type: String,
     enum: ['Numbers', 'Square Feet'],
     default: 'Numbers'
-  },
-  totalSquareFeet: {
-    type: Number,
-    default: 0
   },
   length: {
     type: Number,
@@ -88,6 +91,15 @@ const invoiceItemSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  areaPerPiece: {
+    type: Number,
+    default: 0
+  },
+  totalSquareFeet: {
+    type: Number,
+    default: 0
+  },
+  // What the rate was multiplied by: the total area, or the quantity.
   itemQuantity: {
     type: Number,
     default: 0
@@ -101,7 +113,7 @@ const invoiceSchema = new mongoose.Schema({
     trim: true
     // Uniqueness is enforced per-tenant below, not globally — see the
     // dataScope/userId compound indexes. A bare `unique: true` here would make
-    // it a single shared numbering sequence across every business on SerpY.
+    // it a single shared numbering sequence across every business on Terralabs ERP.
   },
   customerId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -147,10 +159,18 @@ const invoiceSchema = new mongoose.Schema({
     required: [true, 'Due date is required']
   },
   items: [invoiceItemSchema],
+  // Sum of the line amounts.
   subtotal: {
     type: Number,
     required: [true, 'Subtotal is required'],
     min: [0, 'Subtotal cannot be negative']
+  },
+  // Design & pre-press work, billed as its own line in the totals. Older
+  // invoices may instead carry it as an item named "Design Charge".
+  designCharge: {
+    type: Number,
+    default: 0,
+    min: [0, 'Design charge cannot be negative']
   },
   discountAmount: {
     type: Number,
@@ -163,6 +183,8 @@ const invoiceSchema = new mongoose.Schema({
     min: [0, 'Discount percentage cannot be negative'],
     max: [100, 'Discount percentage cannot exceed 100%']
   },
+  // Lines + design charge − discount. Named for the GST it was once taxed on;
+  // with no GST it is the invoice's net value (what Cost & Profit counts).
   taxableAmount: {
     type: Number,
     required: [true, 'Taxable amount is required'],
@@ -185,7 +207,7 @@ const invoiceSchema = new mongoose.Schema({
   },
   totalGstAmount: {
     type: Number,
-    required: [true, 'Total GST amount is required'],
+    default: 0,
     min: [0, 'Total GST amount cannot be negative']
   },
   totalAmount: {
@@ -230,6 +252,9 @@ const invoiceSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  // Kept for invoices issued before GST was removed. isInterState decided
+  // IGST vs CGST+SGST. noGst marked a "No GST" bill; those stay visible only to
+  // logins with "Invoicing (View No GST)". New invoices set neither.
   isInterState: {
     type: Boolean,
     default: false
@@ -307,11 +332,6 @@ invoiceSchema.virtual('paymentStatusDisplay').get(function() {
   return statusMap[this.paymentStatus] || this.paymentStatus;
 });
 
-// Virtual for GST type (IGST for inter-state, CGST+SGST for intra-state)
-invoiceSchema.virtual('gstType').get(function() {
-  return this.isInterState ? 'IGST' : 'CGST+SGST';
-});
-
 // Virtual for amountPaid (alias for paidAmount for frontend compatibility)
 invoiceSchema.virtual('amountPaid').get(function() {
   return this.paidAmount;
@@ -333,8 +353,9 @@ invoiceSchema.pre('save', function(next) {
   // Calculate subtotal from items. Rounded at every step: repeated float sums
   // otherwise store values like 299.96999999999997 that leak into reports.
   this.subtotal = round2(this.items.reduce((sum, item) => sum + item.totalAmount, 0));
+  this.designCharge = round2(this.designCharge || 0);
 
-  this.taxableAmount = round2(this.subtotal - this.discountAmount);
+  this.taxableAmount = round2(this.subtotal + this.designCharge - (this.discountAmount || 0));
 
   if (this.noGst) {
     // No-GST invoice: zero out every tax figure and total the taxable amount.
@@ -344,8 +365,10 @@ invoiceSchema.pre('save', function(next) {
     this.totalGstAmount = 0;
     this.totalAmount = this.taxableAmount;
   } else {
-    // GST invoice: roll the per-item tax up to the header. Interstate invoices
-    // carry IGST only; intrastate splits the same tax into CGST + SGST.
+    // Roll the per-item tax up to the header. New lines carry none, so this
+    // only matters for invoices issued with GST: recording a payment re-saves
+    // them, and their total must not lose the tax they were billed with.
+    // Interstate ones carry IGST only; intrastate split it into CGST + SGST.
     const sum = (field) => this.items.reduce((t, item) => t + (item[field] || 0), 0);
 
     this.totalCgstAmount = round2(sum('cgstAmount'));

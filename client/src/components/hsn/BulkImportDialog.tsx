@@ -181,7 +181,8 @@ export function BulkImportDialog({ open, onOpenChange, onImportCompleted }: Bulk
       console.log('📋 Bulk import result:', response);
       
       // Extract results from the response structure
-      const results = response.data?.results || response.results || response;
+      const r = response as { data?: { results?: ImportResult }; results?: ImportResult };
+      const results = (r.data?.results || r.results || response) as ImportResult;
       setImportResult(results);
       
       toast({
@@ -250,7 +251,7 @@ export function BulkImportDialog({ open, onOpenChange, onImportCompleted }: Bulk
             </CardHeader>
             <CardContent>
               <Button variant="outline" onClick={downloadTemplate}>
-                <Download className="h-4 w-4 mr-2" />
+                <Download className="h-4 w-4" />
                 Download Template
               </Button>
             </CardContent>
@@ -276,7 +277,7 @@ export function BulkImportDialog({ open, onOpenChange, onImportCompleted }: Bulk
                     size="lg"
                     onClick={() => document.getElementById('fileUpload')?.click()}
                   >
-                    <FileUp className="h-5 w-5 mr-2" />
+                    <FileUp className="h-5 w-5" />
                     Choose CSV File
                   </Button>
                   <p className="text-sm text-muted-foreground">
@@ -291,7 +292,7 @@ export function BulkImportDialog({ open, onOpenChange, onImportCompleted }: Bulk
               {selectedFile && (
                 <div className="flex items-center justify-between p-4 border rounded-lg bg-muted/50">
                   <div className="flex items-center gap-3">
-                    <FileText className="h-5 w-5 text-blue-500" />
+                    <FileText className="h-5 w-5 text-info" />
                     <div>
                       <span className="text-sm font-medium">{selectedFile.name}</span>
                       <Badge variant="outline" className="ml-2 text-xs">
@@ -373,18 +374,18 @@ export function BulkImportDialog({ open, onOpenChange, onImportCompleted }: Bulk
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <CheckCircle className="h-5 w-5 text-green-500" />
+                  <CheckCircle className="h-5 w-5 text-success" />
                   Import Results
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="flex items-center gap-2">
-                    <CheckCircle className="h-4 w-4 text-green-500" />
+                    <CheckCircle className="h-4 w-4 text-success" />
                     <span>Success: {importResult.success}</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <XCircle className="h-4 w-4 text-red-500" />
+                    <XCircle className="h-4 w-4 text-destructive" />
                     <span>Failed: {importResult.failed}</span>
                   </div>
                 </div>
@@ -394,7 +395,7 @@ export function BulkImportDialog({ open, onOpenChange, onImportCompleted }: Bulk
                     <h4 className="font-medium text-sm">Errors:</h4>
                     <div className="max-h-32 overflow-y-auto space-y-1">
                       {importResult.errors.map((error, index) => (
-                        <div key={index} className="flex items-center gap-2 text-sm text-red-600">
+                        <div key={index} className="flex items-center gap-2 text-sm text-destructive-strong">
                           <AlertCircle className="h-3 w-3" />
                           <span>{error.hsnCode}: {error.error}</span>
                         </div>
@@ -415,7 +416,7 @@ export function BulkImportDialog({ open, onOpenChange, onImportCompleted }: Bulk
             onClick={handleImport} 
             disabled={loading || parsedData.length === 0}
           >
-            <Upload className="h-4 w-4 mr-2" />
+            <Upload className="h-4 w-4" />
             {loading ? "Importing..." : `Import ${parsedData.length} Codes`}
           </Button>
         </DialogFooter>

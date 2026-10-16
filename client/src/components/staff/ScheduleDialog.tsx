@@ -75,15 +75,15 @@ export function ScheduleDialog({ open, onOpenChange, staff, onScheduleSaved }: S
 
   const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
   const shiftTypes = [
-    { value: 'morning', label: 'Morning (6AM-2PM)', color: 'bg-yellow-100 text-yellow-800' },
-    { value: 'afternoon', label: 'Afternoon (2PM-10PM)', color: 'bg-blue-100 text-blue-800' },
-    { value: 'evening', label: 'Evening (4PM-12AM)', color: 'bg-purple-100 text-purple-800' },
-    { value: 'night', label: 'Night (10PM-6AM)', color: 'bg-gray-100 text-gray-800' }
+    { value: 'morning', label: 'Morning (6AM-2PM)', color: 'bg-warning-soft text-warning-strong' },
+    { value: 'afternoon', label: 'Afternoon (2PM-10PM)', color: 'bg-info-soft text-info-strong' },
+    { value: 'evening', label: 'Evening (4PM-12AM)', color: 'bg-purple-100 text-purple-800 dark:bg-purple-500/15 dark:text-purple-300' },
+    { value: 'night', label: 'Night (10PM-6AM)', color: 'bg-muted text-foreground' }
   ];
 
   const getShiftColor = (shiftType: string) => {
     const shift = shiftTypes.find(s => s.value === shiftType);
-    return shift ? shift.color : 'bg-gray-100 text-gray-800';
+    return shift ? shift.color : 'bg-muted text-foreground';
   };
 
   const addSchedule = () => {
@@ -295,7 +295,7 @@ export function ScheduleDialog({ open, onOpenChange, staff, onScheduleSaved }: S
                 className="w-full mt-4"
                 variant="outline"
               >
-                <Plus className="h-4 w-4 mr-2" />
+                <Plus className="h-4 w-4" />
                 Add Schedule Slot
               </Button>
             </CardContent>
@@ -309,7 +309,7 @@ export function ScheduleDialog({ open, onOpenChange, staff, onScheduleSaved }: S
           <Button onClick={handleSave} disabled={isSaving || isLoading}>
             {isSaving ? (
               <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                <Loader2 className="h-4 w-4 animate-spin" />
                 Saving...
               </>
             ) : (

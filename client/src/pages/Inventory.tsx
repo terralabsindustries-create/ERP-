@@ -1,515 +1,374 @@
-import { useState, useEffect } from "react";
-import { Plus, Search, Package, AlertTriangle, TrendingDown, ShoppingCart, Calculator, BarChart3, Download, DollarSign, MoreHorizontal, Trash2, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { BarChart3, Calculator, Download, History, MoreHorizontal, Package, PackagePlus, Pencil, Plus, ShoppingCart, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { EmptyState } from "@/components/common/EmptyState";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { PageShell } from "@/components/layout/PageShell";
+import { ConfirmDialog, DataCard, DataTable, EntityCell, FilterSelect, MetricBar, SearchField, Stack, StatusPill, Tag, Toolbar, ViewTabs, type Column, type PillTone } from "@/components/data";
 import { CreateItemDialog } from "@/components/inventory/CreateItemDialog";
-import { StockMovementDialog } from "@/components/inventory/StockMovementDialog";
-import { PurchaseOrderDialog } from "@/components/inventory/PurchaseOrderDialog";
+import { StockAdjustDialog, StockHistorySheet } from "@/components/inventory/StockMovements";
 import { UnitConverterDialog } from "@/components/inventory/UnitConverterDialog";
 import { InventoryAnalytics } from "@/components/inventory/InventoryAnalytics";
-import apiClient from "@/lib/apiClient";
+import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import apiClient from "@/lib/apiClient";
+import { formatINR, localDate } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
-// Auto-calculated from quantity vs. minimum stock — independent of the item's
-// lifecycle `status` field (active/inactive/discontinued), which is a different concept.
-function getStockStatus(item: any): "critical" | "low" | "adequate" {
-  const current = item.quantity || 0;
-  const minimum = item.minStockLevel || item.min_stock_level || 0;
-  if (current <= minimum / 2) return "critical";
-  if (current <= minimum) return "low";
-  return "adequate";
+interface Item {
+  _id: string;
+  name: string;
+  sku?: string;
+  category?: string;
+  quantity?: number;
+  unit?: string;
+  unitCost?: number;
+  minStockLevel?: number;
+  supplier?: string;
+  location?: string;
+  hsnCode?: string;
+  gstRate?: number;
+  isFreeItem?: boolean;
+  description?: string;
 }
 
-const stockStatusConfig = {
-  adequate: { label: "Adequate", variant: "success" as const },
-  low: { label: "Low Stock", variant: "warning" as const },
-  critical: { label: "Critical", variant: "destructive" as const },
+type Level = "out" | "critical" | "low" | "ok";
+type View = "all" | "reorder" | "critical" | "out" | "analytics";
+
+// From quantity against the reorder level; independent of the item's
+// active/inactive lifecycle status.
+const levelOf = (i: Item): Level => {
+  const q = i.quantity || 0;
+  const min = i.minStockLevel || 0;
+  if (q <= 0) return "out";
+  if (q <= min / 2) return "critical";
+  if (q <= min) return "low";
+  return "ok";
 };
+const LEVEL: Record<Level, { label: string; tone: PillTone; bar: string }> = {
+  out: { label: "Out of stock", tone: "danger", bar: "bg-destructive" },
+  critical: { label: "Critical", tone: "danger", bar: "bg-destructive" },
+  low: { label: "Low", tone: "warning", bar: "bg-warning" },
+  ok: { label: "In stock", tone: "success", bar: "bg-success" }
+};
+const inView = (i: Item, v: View) =>
+  v === "reorder" ? levelOf(i) !== "ok" : v === "critical" ? levelOf(i) === "critical" : v === "out" ? levelOf(i) === "out" : true;
+const valueOf = (i: Item) => (i.quantity || 0) * (i.unitCost || 0);
+
+/** Quantity with a thin bar showing it against twice the reorder level. */
+function StockCell({ item }: { item: Item }) {
+  const q = item.quantity || 0;
+  const min = item.minStockLevel || 0;
+  const pct = min > 0 ? Math.min(100, (q / (min * 2)) * 100) : q > 0 ? 100 : 0;
+  return (
+    <div className="ml-auto w-28">
+      <div className="num text-right">
+        <span className="font-semibold">{q.toLocaleString("en-IN")}</span> <span className="text-xs text-muted-foreground">{item.unit || "units"}</span>
+      </div>
+      <div className="mt-1 h-1 overflow-hidden rounded-full bg-muted">
+        <div className={cn("h-full rounded-full", LEVEL[levelOf(item)].bar)} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
 
 export default function Inventory() {
-  const [inventory, setInventory] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState("");
+  const { hasPermission } = useAuth();
   const { toast } = useToast();
+  const [items, setItems] = useState<Item[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [view, setView] = useState<View>("all");
+  const [category, setCategory] = useState("all");
+  const [itemDialog, setItemDialog] = useState<{ open: boolean; item: Item | null }>({ open: false, item: null });
+  const [adjusting, setAdjusting] = useState<Item | null>(null);
+  const [history, setHistory] = useState<{ open: boolean; itemId?: string }>({ open: false });
+  const [deleting, setDeleting] = useState<Item | null>(null);
+  const [dialog, setDialog] = useState<"units" | null>(null);
+  const navigate = useNavigate();
 
-  useEffect(() => {
-    fetchInventory();
-  }, []);
+  const canEdit = hasPermission("Inventory: Create & Edit");
+  const canAdjust = hasPermission("Inventory: Adjust Stock");
+  const canDelete = hasPermission("Inventory: Delete");
+  // Purchase costs and stock value are only for logins with "View Cost".
+  const canSeeCost = hasPermission("Inventory: View Cost");
 
-  const fetchInventory = async () => {
-    setLoading(true);
+  const load = useCallback(async () => {
     try {
-      const response = await apiClient.getInventory();
-      console.log('📦 Inventory response:', response);
-      setInventory(response || []);
+      const res = await apiClient.getInventory();
+      setItems(Array.isArray(res) ? (res as Item[]) : ((res as { inventory?: Item[] })?.inventory || []));
     } catch (error) {
-      console.error('Error fetching inventory:', error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch inventory",
-        variant: "destructive",
-      });
+      toast({ title: "Stock could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     } finally {
       setLoading(false);
     }
+  }, [toast]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const categories = useMemo(() => Array.from(new Set(items.map((i) => i.category).filter(Boolean))).sort() as string[], [items]);
+  const rows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return items.filter(
+      (i) =>
+        inView(i, view) &&
+        (category === "all" || i.category === category) &&
+        (!q || [i.name, i.sku, i.category, i.supplier, i.location].some((f) => (f || "").toLowerCase().includes(q)))
+    );
+  }, [items, search, view, category]);
+
+  const value = items.reduce((s, i) => s + valueOf(i), 0);
+  const reorder = items.filter((i) => levelOf(i) !== "ok").length;
+  const critical = items.filter((i) => levelOf(i) === "critical").length;
+  const out = items.filter((i) => levelOf(i) === "out").length;
+
+  const exportCsv = () => {
+    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const csv = [
+      ["Name", "Category", "SKU", "Quantity", "Unit", ...(canSeeCost ? ["Unit cost"] : []), "Reorder level", ...(canSeeCost ? ["Value"] : []), "Supplier", "Location"].join(","),
+      ...items.map((i) =>
+        [i.name, i.category, i.sku, i.quantity || 0, i.unit, ...(canSeeCost ? [i.unitCost || 0] : []), i.minStockLevel || 0, ...(canSeeCost ? [valueOf(i)] : []), i.supplier, i.location].map(esc).join(",")
+      )
+    ].join("\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    a.download = `stock_${localDate()}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast({ title: `Exported ${items.length} items` });
   };
 
-  const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; item: any | null }>({ open: false, item: null });
-
-  const confirmDeleteItem = async () => {
-    if (!deleteDialog.item) return;
-    const { item } = deleteDialog;
+  const remove = async () => {
+    if (!deleting) return;
     try {
-      await apiClient.deleteInventoryItem(item._id || item.id);
-      toast({
-        title: "Item Deleted",
-        description: `"${item.name}" has been removed from inventory`,
-      });
-      fetchInventory();
+      await apiClient.deleteInventoryItem(deleting._id);
+      toast({ title: `${deleting.name} removed` });
+      setDeleting(null);
+      load();
     } catch (error) {
-      console.error("Error deleting item:", error);
-      toast({
-        title: "Error",
-        description: "Failed to delete inventory item",
-        variant: "destructive",
-      });
-    } finally {
-      setDeleteDialog({ open: false, item: null });
+      toast({ title: "Not removed", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      throw error;
     }
   };
 
-  const [restockDialog, setRestockDialog] = useState<{ open: boolean; item: any | null }>({ open: false, item: null });
-  const [restockQty, setRestockQty] = useState("10");
-  const [restockLoading, setRestockLoading] = useState(false);
-
-  const openRestockDialog = (item: any) => {
-    setRestockQty("10");
-    setRestockDialog({ open: true, item });
-  };
-
-  const handleRestock = async () => {
-    if (!restockDialog.item) return;
-    const qty = parseInt(restockQty, 10);
-    if (!qty || qty <= 0) {
-      toast({ title: "Error", description: "Enter a quantity greater than 0", variant: "destructive" });
-      return;
+  const columns: Column<Item>[] = [
+    {
+      id: "name",
+      header: "Item",
+      cell: (i) => <EntityCell icon={Package} title={i.name} subtitle={i.sku ? <span className="font-mono">{i.sku}</span> : i.description} />,
+      sortValue: (i) => i.name.toLowerCase(),
+      className: "min-w-[240px]"
+    },
+    { id: "category", header: "Category", cell: (i) => (i.category ? <Tag>{i.category}</Tag> : "—"), sortValue: (i) => i.category || "", hideBelow: "lg" },
+    { id: "stock", header: "In stock", align: "right", cell: (i) => <StockCell item={i} />, sortValue: (i) => i.quantity || 0, className: "w-[150px]" },
+    {
+      id: "min",
+      header: "Reorder at",
+      align: "right",
+      cell: (i) => <span className="text-muted-foreground">{(i.minStockLevel || 0).toLocaleString("en-IN")}</span>,
+      sortValue: (i) => i.minStockLevel || 0,
+      hideBelow: "md"
+    },
+    ...(canSeeCost
+      ? [
+          { id: "cost", header: "Unit cost", align: "right" as const, cell: (i: Item) => formatINR(i.unitCost || 0), sortValue: (i: Item) => i.unitCost || 0, hideBelow: "lg" as const },
+          { id: "value", header: "Value", align: "right" as const, cell: (i: Item) => <span className="font-medium">{formatINR(valueOf(i))}</span>, sortValue: valueOf }
+        ]
+      : []),
+    {
+      id: "level",
+      header: "Level",
+      cell: (i) => <StatusPill tone={LEVEL[levelOf(i)].tone}>{LEVEL[levelOf(i)].label}</StatusPill>,
+      sortValue: (i) => ["out", "critical", "low", "ok"].indexOf(levelOf(i)),
+      className: "w-[130px]"
+    },
+    {
+      id: "supplier",
+      header: "Supplier",
+      cell: (i) => <Stack top={i.supplier || <span className="text-muted-foreground">—</span>} bottom={i.location} />,
+      hideBelow: "xl"
     }
-    setRestockLoading(true);
-    try {
-      const item = restockDialog.item;
-      const newQuantity = (item.quantity || 0) + qty;
-      await apiClient.adjustInventory(item._id || item.id, newQuantity, "Quick restock", `Added ${qty} units`);
-      toast({ title: "Restock Complete", description: `Added ${qty} units to ${item.name}` });
-      setRestockDialog({ open: false, item: null });
-      fetchInventory();
-    } catch (error) {
-      console.error('Error restocking:', error);
-      toast({ title: "Error", description: "Failed to restock item", variant: "destructive" });
-    } finally {
-      setRestockLoading(false);
-    }
-  };
-
-  const [categoryFilter, setCategoryFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [showStockDialog, setShowStockDialog] = useState(false);
-  const [showPurchaseDialog, setShowPurchaseDialog] = useState(false);
-  const [showConverterDialog, setShowConverterDialog] = useState(false);
-
-  const filteredInventory = inventory.filter(item => {
-    const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (item.category || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (item.sku || '').toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCategory = categoryFilter === "all" || item.category === categoryFilter;
-    const matchesStatus = statusFilter === "all" || getStockStatus(item) === statusFilter;
-
-    return matchesSearch && matchesCategory && matchesStatus;
-  });
-
-  // Calculate inventory statistics
-  const totalValue = inventory.reduce((sum, item) => sum + ((item.quantity || 0) * (item.unitCost || item.unit_cost || 0)), 0);
-  const lowStockItems = inventory.filter(item => (item.quantity || 0) <= (item.minStockLevel || item.min_stock_level || 0)).length;
-  const criticalItems = inventory.filter(item => (item.quantity || 0) <= ((item.minStockLevel || item.min_stock_level || 0) * 0.5)).length;
-
-  const exportInventoryAudit = async () => {
-    try {
-      const csvContent = "data:text/csv;charset=utf-8," + 
-        "Name,Category,SKU,Quantity,Unit Cost,Min Stock,Supplier,Location\n" +
-        inventory.map(item => 
-          `"${item.name}","${item.category || ''}","${item.sku || ''}",${item.quantity || 0},${item.unitCost || item.unit_cost || 0},${item.minStockLevel || item.min_stock_level || 0},"${item.supplier || ''}","${item.location || ''}"`
-        ).join("\n");
-
-      const encodedUri = encodeURI(csvContent);
-      const link = document.createElement("a");
-      link.setAttribute("href", encodedUri);
-      link.setAttribute("download", `inventory_audit_${new Date().toISOString().split('T')[0]}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-
-      toast({
-        title: "Export Complete",
-        description: "Inventory audit has been exported to CSV",
-      });
-    } catch (error) {
-      console.error('Error exporting inventory:', error);
-      toast({
-        title: "Export Failed",
-        description: "Failed to export inventory audit",
-        variant: "destructive",
-      });
-    }
-  };
+  ];
 
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Inventory Management</h1>
-          <p className="text-muted-foreground text-sm">Track materials with auto-deduction, purchase orders, and analytics</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="gap-2">
-                <MoreHorizontal className="h-4 w-4" />
-                More
+    <PageShell>
+      <PageHeader
+        eyebrow="Materials & purchase"
+        title="Paper & stock"
+        description="Paper, board, inks, plates and consumables — what's on the shelf, what it's worth and what to reorder."
+        actions={
+          <>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline">
+                  <MoreHorizontal />
+                  More
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuItem onClick={() => setHistory({ open: true })}>
+                  <History />
+                  Stock history
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => navigate("/purchase-orders?new=1")}>
+                  <ShoppingCart />
+                  Purchase order
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setDialog("units")}>
+                  <Calculator />
+                  Unit converter
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={exportCsv} disabled={!items.length}>
+                  <Download />
+                  Export CSV
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {canEdit && (
+              <Button onClick={() => setItemDialog({ open: true, item: null })}>
+                <Plus />
+                Add item
               </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Actions</DropdownMenuLabel>
-              <DropdownMenuItem onClick={() => setShowStockDialog(true)}>
-                <Package className="h-4 w-4 mr-2" />
-                Stock Movement
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setShowPurchaseDialog(true)}>
-                <ShoppingCart className="h-4 w-4 mr-2" />
-                Purchase Order
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setShowConverterDialog(true)}>
-                <Calculator className="h-4 w-4 mr-2" />
-                Unit Converter
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={exportInventoryAudit}>
-                <Download className="h-4 w-4 mr-2" />
-                Export CSV
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Button onClick={() => setShowCreateDialog(true)} className="gap-2">
-            <Plus className="w-4 h-4" />
-            Add Item
-          </Button>
-        </div>
-      </div>
+            )}
+          </>
+        }
+      />
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-4 flex items-center gap-3">
-            <Package className="w-5 h-5 text-muted-foreground" />
-            <div>
-              <p className="text-xs text-muted-foreground">Total Items</p>
-              <p className="text-xl font-bold">{inventory.length}</p>
-            </div>
-          </CardContent>
-        </Card>
+      <MetricBar
+        loading={loading}
+        metrics={[
+          { label: "Items", value: items.length, hint: `${categories.length} categor${categories.length === 1 ? "y" : "ies"}` },
+          canSeeCost
+            ? { label: "Stock value", value: formatINR(value, { compact: value >= 1e5 }), hint: "Quantity × unit cost" }
+            : { label: "Critical", value: critical, hint: "At half the reorder level or below", tone: critical ? "danger" : "default", onClick: () => setView(view === "critical" ? "all" : "critical"), active: view === "critical" },
+          {
+            label: "To reorder",
+            value: reorder,
+            hint: "At or below the reorder level",
+            tone: reorder ? "warning" : "success",
+            onClick: () => setView(view === "reorder" ? "all" : "reorder"),
+            active: view === "reorder"
+          },
+          {
+            label: "Out of stock",
+            value: out,
+            hint: critical ? `${critical} more critical` : "Nothing critical",
+            tone: out ? "danger" : "default",
+            onClick: () => setView(view === "out" ? "all" : "out"),
+            active: view === "out"
+          }
+        ]}
+      />
 
-        <Card>
-          <CardContent className="p-4 flex items-center gap-3">
-            <DollarSign className="w-5 h-5 text-muted-foreground" />
-            <div>
-              <p className="text-xs text-muted-foreground">Inventory Value</p>
-              <p className="text-xl font-bold">₹{totalValue.toLocaleString()}</p>
-            </div>
-          </CardContent>
-        </Card>
+      <div className="space-y-4">
+        <ViewTabs<View>
+          value={view}
+          onChange={setView}
+          tabs={[
+            { value: "all", label: "All items", count: items.length },
+            { value: "reorder", label: "To reorder", count: reorder, tone: "warning" },
+            { value: "critical", label: "Critical", count: critical, tone: "danger" },
+            { value: "out", label: "Out of stock", count: out, tone: "danger" },
+            { value: "analytics", label: "Analytics", icon: BarChart3 }
+          ]}
+        />
 
-        <Card>
-          <CardContent className="p-4 flex items-center gap-3">
-            <AlertTriangle className="w-5 h-5 text-warning" />
-            <div>
-              <p className="text-xs text-muted-foreground">Low Stock</p>
-              <p className="text-xl font-bold text-warning">{lowStockItems}</p>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4 flex items-center gap-3">
-            <TrendingDown className="w-5 h-5 text-destructive" />
-            <div>
-              <p className="text-xs text-muted-foreground">Critical Stock</p>
-              <p className="text-xl font-bold text-destructive">{criticalItems}</p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Filters */}
-      <div className="flex items-center space-x-4 flex-wrap gap-2">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search inventory..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-10"
-          />
-        </div>
-
-        <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-          <SelectTrigger className="w-40">
-            <SelectValue placeholder="Category" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Categories</SelectItem>
-            <SelectItem value="Materials">Materials</SelectItem>
-            <SelectItem value="Paper">Paper</SelectItem>
-            <SelectItem value="Consumables">Consumables</SelectItem>
-            <SelectItem value="Equipment">Equipment</SelectItem>
-          </SelectContent>
-        </Select>
-
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-32">
-            <SelectValue placeholder="Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Status</SelectItem>
-            <SelectItem value="adequate">Adequate</SelectItem>
-            <SelectItem value="low">Low Stock</SelectItem>
-            <SelectItem value="critical">Critical</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-
-      {/* Main Content with Tabs */}
-      <Tabs defaultValue="inventory" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-2">
-          <TabsTrigger value="inventory" className="gap-2">
-            <Package className="h-4 w-4" />
-            Inventory Items
-          </TabsTrigger>
-          <TabsTrigger value="analytics" className="gap-2">
-            <BarChart3 className="h-4 w-4" />
-            Analytics & Reports
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="inventory" className="space-y-6">
-          {/* Inventory Table */}
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">All Inventory</CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
-              {loading ? (
-                <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
-                  Loading inventory...
+        {view === "analytics" ? (
+          <InventoryAnalytics canSeeCost={canSeeCost} />
+        ) : (
+          <DataCard
+            toolbar={
+              <Toolbar search={<SearchField value={search} onChange={setSearch} placeholder="Search item, SKU, supplier or location" />}>
+                {categories.length > 1 && <FilterSelect label="Category" value={category} onChange={setCategory} options={categories.map((c) => ({ value: c, label: c }))} />}
+              </Toolbar>
+            }
+            footer={
+              !loading &&
+              rows.length > 0 && (
+                <div className="flex justify-between gap-3">
+                  <span>
+                    {rows.length} of {items.length} items
+                  </span>
+                  {canSeeCost && <span className="num">Value in view: {formatINR(rows.reduce((s, i) => s + valueOf(i), 0))}</span>}
                 </div>
-              ) : filteredInventory.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
-                  <Package className="h-10 w-10 text-muted-foreground opacity-40" />
-                  <h3 className="text-lg font-semibold">No inventory items found</h3>
-                  <p className="text-muted-foreground text-sm max-w-sm">
-                    {searchTerm || categoryFilter !== "all" || statusFilter !== "all"
-                      ? "Try adjusting your search or filter criteria"
-                      : "Start by adding your first inventory item"
-                    }
-                  </p>
-                  <Button onClick={() => setShowCreateDialog(true)} className="gap-2">
-                    <Plus className="h-4 w-4" />
-                    Add First Item
-                  </Button>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b bg-muted/50">
-                        <th className="text-left px-4 py-3 font-medium">Item</th>
-                        <th className="text-left px-4 py-3 font-medium">Category</th>
-                        <th className="text-left px-4 py-3 font-medium">Stock</th>
-                        <th className="text-left px-4 py-3 font-medium">Min Stock</th>
-                        <th className="text-left px-4 py-3 font-medium">Unit Cost</th>
-                        <th className="text-left px-4 py-3 font-medium">Total Value</th>
-                        <th className="text-left px-4 py-3 font-medium">Supplier / Location</th>
-                        <th className="px-4 py-3 font-medium">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredInventory.map((item) => {
-                        const itemId = item._id || item.id;
-                        const status = getStockStatus(item);
-                        const statusCfg = stockStatusConfig[status];
-                        const unitCost = item.unitCost || item.unit_cost || 0;
-                        const itemValue = (item.quantity || 0) * unitCost;
-
-                        return (
-                          <tr key={itemId} className="border-b hover:bg-muted/30 transition-colors">
-                            <td className="px-4 py-3">
-                              <div className="font-medium">{item.name}</div>
-                              {item.sku && <div className="text-xs text-muted-foreground font-mono">SKU: {item.sku}</div>}
-                            </td>
-                            <td className="px-4 py-3">
-                              <Badge variant="outline">{item.category || "Uncategorized"}</Badge>
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="font-medium">{item.quantity || 0} units</div>
-                              <Badge variant={statusCfg.variant} className="mt-1">{statusCfg.label}</Badge>
-                            </td>
-                            <td className="px-4 py-3 text-muted-foreground">
-                              {item.minStockLevel || item.min_stock_level || 0} units
-                            </td>
-                            <td className="px-4 py-3">₹{unitCost.toLocaleString()}</td>
-                            <td className="px-4 py-3 font-medium">₹{itemValue.toLocaleString()}</td>
-                            <td className="px-4 py-3 text-muted-foreground">
-                              {item.supplier || "-"}
-                              {item.location && <div className="text-xs">{item.location}</div>}
-                            </td>
-                            <td className="px-4 py-3">
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button variant="ghost" size="icon" className="h-8 w-8">
-                                    <MoreHorizontal className="h-4 w-4" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end">
-                                  <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                                  <DropdownMenuItem onClick={() => openRestockDialog(item)}>
-                                    <RefreshCw className="h-4 w-4 mr-2" />
-                                    Restock
-                                  </DropdownMenuItem>
-                                  <DropdownMenuSeparator />
-                                  <DropdownMenuItem
-                                    onClick={() => setDeleteDialog({ open: true, item })}
-                                    className="text-destructive focus:text-destructive"
-                                  >
-                                    <Trash2 className="h-4 w-4 mr-2" />
-                                    Delete
-                                  </DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+              )
+            }
+          >
+            <DataTable
+              columns={columns}
+              rows={rows}
+              rowKey={(i) => i._id}
+              loading={loading}
+              onRowClick={canEdit ? (i) => setItemDialog({ open: true, item: i }) : undefined}
+              actions={(i) => [
+                { label: "Edit item", icon: Pencil, onClick: () => setItemDialog({ open: true, item: i }), hidden: !canEdit },
+                { label: "Update stock", icon: PackagePlus, onClick: () => setAdjusting(i), hidden: !canAdjust },
+                { label: "Stock history", icon: History, onClick: () => setHistory({ open: true, itemId: i._id }) },
+                { label: "Remove item", icon: Trash2, destructive: true, separated: true, onClick: () => setDeleting(i), hidden: !canDelete }
+              ]}
+              actionsLabel={(i) => `Actions for ${i.name}`}
+              defaultSort={{ id: "level", dir: "asc" }}
+              mobile={(i) => (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="truncate font-medium">{i.name}</span>
+                    <StatusPill tone={LEVEL[levelOf(i)].tone}>{LEVEL[levelOf(i)].label}</StatusPill>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                    <span>
+                      {(i.quantity || 0).toLocaleString("en-IN")} {i.unit || "units"} · reorder at {(i.minStockLevel || 0).toLocaleString("en-IN")}
+                    </span>
+                    {canSeeCost && <span className="num">{formatINR(valueOf(i))}</span>}
+                  </div>
                 </div>
               )}
-            </CardContent>
-          </Card>
-        </TabsContent>
+              empty={
+                items.length === 0 ? (
+                  <EmptyState
+                    icon={Package}
+                    title="No stock items yet"
+                    description="Add the paper, inks, plates and consumables you keep, with a reorder level for each."
+                    action={
+                      canEdit && (
+                        <Button onClick={() => setItemDialog({ open: true, item: null })}>
+                          <Plus />
+                          Add item
+                        </Button>
+                      )
+                    }
+                  />
+                ) : (
+                  <EmptyState compact tone={view !== "all" && !search ? "success" : "default"} icon={Package} title={view !== "all" && !search ? "Nothing here — stock is healthy" : "No items match"} />
+                )
+              }
+            />
+          </DataCard>
+        )}
+      </div>
 
-        <TabsContent value="analytics">
-          <InventoryAnalytics />
-        </TabsContent>
-      </Tabs>
+      <StockAdjustDialog item={adjusting} onOpenChange={(o) => !o && setAdjusting(null)} onDone={load} />
+      <StockHistorySheet open={history.open} itemId={history.itemId} items={items} onOpenChange={(open) => setHistory((h) => ({ ...h, open }))} />
 
-      {/* Restock Dialog */}
-      <Dialog open={restockDialog.open} onOpenChange={(open) => !open && setRestockDialog({ open: false, item: null })}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <RefreshCw className="h-5 w-5" />
-              Restock Item
-            </DialogTitle>
-            <DialogDescription>
-              {restockDialog.item && `Add stock to "${restockDialog.item.name}"`}
-            </DialogDescription>
-          </DialogHeader>
-          {restockDialog.item && (
-            <div className="space-y-4">
-              <div className="rounded-md bg-muted px-3 py-2 text-sm flex justify-between">
-                <span className="text-muted-foreground">Current stock</span>
-                <span className="font-medium">{restockDialog.item.quantity || 0} units</span>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="restock-qty">Quantity to add</Label>
-                <Input
-                  id="restock-qty"
-                  type="number"
-                  min="1"
-                  value={restockQty}
-                  onChange={(e) => setRestockQty(e.target.value)}
-                />
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRestockDialog({ open: false, item: null })}>
-              Cancel
-            </Button>
-            <Button onClick={handleRestock} disabled={restockLoading} className="gap-2">
-              <Plus className="h-4 w-4" />
-              {restockLoading ? "Adding..." : "Add Stock"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete Confirmation Dialog */}
-      <Dialog open={deleteDialog.open} onOpenChange={(open) => !open && setDeleteDialog({ open: false, item: null })}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-destructive">
-              <AlertTriangle className="h-5 w-5" />
-              Delete Item
-            </DialogTitle>
-            <DialogDescription>
-              {deleteDialog.item && `Are you sure you want to delete "${deleteDialog.item.name}" from inventory? This action cannot be undone.`}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end gap-2 mt-4">
-            <Button variant="outline" onClick={() => setDeleteDialog({ open: false, item: null })}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={confirmDeleteItem} className="gap-2">
-              <Trash2 className="h-4 w-4" />
-              Delete Item
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Dialogs */}
+      <ConfirmDialog
+        open={!!deleting}
+        onOpenChange={(o) => !o && setDeleting(null)}
+        title={`Remove ${deleting?.name}?`}
+        description="The item and its stock level are removed from Paper & stock. Past purchase bills and invoices keep their lines."
+        confirmLabel="Remove"
+        onConfirm={remove}
+      />
       <CreateItemDialog
-        open={showCreateDialog} 
-        onOpenChange={setShowCreateDialog}
-        onItemCreated={fetchInventory}
+        open={itemDialog.open}
+        onOpenChange={(open) => setItemDialog((d) => ({ ...d, open }))}
+        onItemCreated={load}
+        item={itemDialog.item}
       />
-      <StockMovementDialog 
-        open={showStockDialog} 
-        onOpenChange={setShowStockDialog}
-      />
-      <PurchaseOrderDialog 
-        open={showPurchaseDialog} 
-        onOpenChange={setShowPurchaseDialog}
-        onOrderCreated={fetchInventory}
-      />
-      <UnitConverterDialog 
-        open={showConverterDialog} 
-        onOpenChange={setShowConverterDialog}
-      />
-    </div>
+      <UnitConverterDialog open={dialog === "units"} onOpenChange={(o) => !o && setDialog(null)} />
+    </PageShell>
   );
 }

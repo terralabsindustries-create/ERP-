@@ -1,13 +1,41 @@
 const express = require('express');
 const mongoose = require('mongoose');
+const { orgScope } = require('../utils/accessScope');
+
 const router = express.Router();
 const Inventory = require('../models/Inventory');
 const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
-const { requirePermission } = require('../middleware/requirePermission');
+const { requirePermission, userCan } = require('../middleware/requirePermission');
+const InventoryMovement = require('../models/InventoryMovement');
+const InventoryService = require('../services/InventoryService');
 
 // Apply auth middleware to all routes
 router.use(protect);
+
+/*
+  "Inventory: View Cost". Purchase costs are hidden from logins that work in
+  Inventory without that action. Logins that reach the item list from billing
+  or jobs (Invoicing, Quotations, Jobs, Purchase Bills, Counter jobs) keep the
+  item rate, because they price lines from it.
+*/
+const COST_KEYS = new Set(['unitCost', 'totalValue', 'avgUnitCost', 'minValue', 'maxValue', 'totalCost', 'totalValueMoved', 'valueChange']);
+const PRICING_MODULES = ['Invoicing', 'Quotations', 'Jobs', 'Purchase Bills', 'Walk-In Jobs'];
+const canSeeCost = (user) => userCan(user, 'Inventory: View Cost') || PRICING_MODULES.some((m) => userCan(user, m));
+const stripCosts = (value) => {
+  if (Array.isArray(value)) return value.map(stripCosts);
+  if (value && typeof value === 'object' && !(value instanceof Date) && !(value instanceof mongoose.Types.ObjectId) && !Buffer.isBuffer(value)) {
+    const plain = typeof value.toJSON === 'function' ? value.toJSON() : value;
+    return Object.fromEntries(Object.entries(plain).filter(([k]) => !COST_KEYS.has(k)).map(([k, v]) => [k, stripCosts(v)]));
+  }
+  return value;
+};
+router.use((req, res, next) => {
+  if (canSeeCost(req.user)) return next();
+  const json = res.json.bind(res);
+  res.json = (body) => json(stripCosts(body));
+  next();
+});
 
 // GET /api/inventory - Get all inventory items for user's dataScope
 router.get('/', async (req, res) => {
@@ -52,9 +80,9 @@ router.get('/stats', async (req, res) => {
 
     const [totalItems, lowStockItems, criticalItems, totalValue] = await Promise.all([
       Inventory.countDocuments(query),
-      Inventory.getLowStockItems(req.user._id),
-      Inventory.getCriticalStockItems(req.user._id),
-      Inventory.getTotalValue(req.user._id)
+      Inventory.getLowStockItems(orgScope(req.user)),
+      Inventory.getCriticalStockItems(orgScope(req.user)),
+      Inventory.getTotalValue(orgScope(req.user))
     ]);
 
     res.json({
@@ -83,11 +111,11 @@ router.get('/analytics', async (req, res) => {
       : { userId: req.user._id };
 
     const [analytics, categoryDistribution, topMovingItems, trends, categoryAnalytics] = await Promise.all([
-      Inventory.getInventoryAnalytics(req.user._id),
-      Inventory.getCategoryDistribution(req.user._id),
-      Inventory.getTopMovingItems(req.user._id, 10),
-      Inventory.getInventoryTrends(req.user._id, 30),
-      Inventory.getCategoryAnalytics(req.user._id, category)
+      Inventory.getInventoryAnalytics(filterQuery),
+      Inventory.getCategoryDistribution(filterQuery),
+      Inventory.getTopMovingItems(filterQuery, 10),
+      Inventory.getInventoryTrends(filterQuery, 30),
+      Inventory.getCategoryAnalytics(filterQuery, category)
     ]);
 
     res.json({
@@ -245,19 +273,26 @@ router.get('/reports/movement-summary', async (req, res) => {
   try {
     const { days = 30, category } = req.query;
 
-    // This would typically use InventoryMovement model
-    // For now, we'll return a placeholder structure
+    const since = new Date(Date.now() - (Number(days) || 30) * 864e5);
+    const match = { ...(await InventoryService.movementScope(req.user)), createdAt: { $gte: since } };
+    if (category && category !== 'all') {
+      const ids = await Inventory.find({ ...InventoryService.itemScope(req.user), category }).distinct('_id');
+      match.inventoryItem = { $in: ids };
+    }
+    const byType = await InventoryMovement.aggregate([
+      { $match: match },
+      { $group: { _id: '$movementType', count: { $sum: 1 }, quantity: { $sum: '$quantity' }, value: { $sum: '$totalCost' } } }
+    ]);
     res.json({
       success: true,
       data: {
-        period: `${days} days`,
+        period: `${Number(days) || 30} days`,
         category: category || 'all',
-        movements: [],
         summary: {
-          totalMovements: 0,
-          totalQuantityMoved: 0,
-          totalValueMoved: 0,
-          movementTypes: {}
+          totalMovements: byType.reduce((s, r) => s + r.count, 0),
+          totalQuantityMoved: byType.reduce((s, r) => s + r.quantity, 0),
+          totalValueMoved: byType.reduce((s, r) => s + r.value, 0),
+          movementTypes: Object.fromEntries(byType.map((r) => [r._id, { count: r.count, quantity: r.quantity }]))
         }
       }
     });
@@ -314,6 +349,32 @@ router.get('/reports/category-comparison', async (req, res) => {
 });
 
 // GET /api/inventory/:id - Get specific inventory item
+// GET /api/inventory/movements - stock in/out history of the business
+//   ?item=<id>&type=sale|purchase|adjustment|return|damage&from=&to=&page=&limit=
+router.get('/movements', async (req, res) => {
+  try {
+    const { item, type, from, to } = req.query;
+    if (item && !mongoose.isValidObjectId(item)) return res.status(400).json({ success: false, message: 'Invalid item' });
+    if (type && !InventoryMovement.schema.path('movementType').enumValues.includes(type)) return res.status(400).json({ success: false, message: 'Invalid movement type' });
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 100);
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const toDate = to && /^\d{4}-\d{2}-\d{2}$/.test(to) ? new Date(new Date(`${to}T00:00:00`).getTime() + 864e5 - 1) : to;
+    const { movements, total } = await InventoryService.getMovementHistory(req.user, {
+      inventoryItemId: item,
+      movementType: type,
+      startDate: from || undefined,
+      endDate: toDate || undefined,
+      limit,
+      skip: (page - 1) * limit,
+      withTotal: true
+    });
+    res.json({ success: true, data: { movements, pagination: { page, limit, total, pages: Math.ceil(total / limit) } } });
+  } catch (error) {
+    console.error('Error fetching stock movements:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch stock movements' });
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     // Build query with dataScope or userId filtering
@@ -457,50 +518,75 @@ router.delete('/:id', requirePermission('Inventory: Delete'), async (req, res) =
 
 // POST /api/inventory/:id/adjust - Adjust inventory quantity
 router.post('/:id/adjust', requirePermission('Inventory: Adjust Stock'), async (req, res) => {
+  /*
+    Body, one of:
+      { change: +25, type: 'purchase', reason, reference, notes }   stock in / out (negative = out)
+      { quantity: 120, reason, notes }                               a stock count: set the quantity
+    Every adjustment is recorded as a stock movement.
+  */
   try {
-    const { quantity, reason, notes } = req.body;
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ success: false, message: 'Inventory item not found' });
+    const item = await Inventory.findOne({ _id: req.params.id, ...InventoryService.itemScope(req.user) });
+    if (!item) return res.status(404).json({ success: false, message: 'Inventory item not found' });
 
-    // Build query with dataScope or userId filtering
-    const findQuery = req.user.dataScope
-      ? { _id: req.params.id, dataScope: req.user.dataScope }
-      : { _id: req.params.id, userId: req.user._id };
+    const { change, quantity, reason, reference, notes } = req.body;
+    const hasChange = change !== undefined && change !== null && change !== '';
+    const hasQuantity = quantity !== undefined && quantity !== null && quantity !== '';
+    if (!hasChange && !hasQuantity) return res.status(400).json({ success: false, message: 'Give the quantity to add, remove or set' });
+    const delta = hasChange ? Number(change) : Number(quantity) - item.quantity;
+    if (!Number.isFinite(delta) || (hasQuantity && !Number.isFinite(Number(quantity)))) return res.status(400).json({ success: false, message: 'Quantity must be a number' });
+    if (hasChange && delta === 0) return res.status(400).json({ success: false, message: 'The change cannot be zero' });
 
-    const item = await Inventory.findOne(findQuery);
-
-    if (!item) {
-      return res.status(404).json({ success: false, message: 'Inventory item not found' });
+    const previousQuantity = item.quantity;
+    const newQuantity = previousQuantity + delta;
+    if (newQuantity < 0) {
+      return res.status(400).json({ success: false, message: `Only ${previousQuantity} ${item.unit} in stock` });
     }
 
-    // Validate quantity is a positive number
-    if (quantity < 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Quantity cannot be negative'
-      });
-    }
+    const TYPES = ['purchase', 'adjustment', 'return', 'damage', 'sale'];
+    const movementType = TYPES.includes(req.body.type) ? req.body.type : delta > 0 ? 'purchase' : 'adjustment';
 
-    item.quantity = quantity;
+    item.quantity = newQuantity;
     await item.save();
+
+    await InventoryMovement.create({
+      inventoryItem: item._id,
+      itemName: item.name,
+      movementType,
+      quantity: Math.abs(delta),
+      unit: item.unit,
+      unitCost: item.unitCost || 0,
+      totalCost: Math.abs(delta) * (item.unitCost || 0),
+      previousQuantity,
+      newQuantity,
+      referenceType: movementType === 'damage' ? 'damage' : movementType === 'return' ? 'return' : 'adjustment',
+      referenceNumber: reference ? String(reference).slice(0, 80) : undefined,
+      reason: reason ? String(reason).slice(0, 200) : hasQuantity ? 'Stock count' : undefined,
+      notes: notes ? String(notes).slice(0, 500) : undefined,
+      userId: req.user._id,
+      performedByName: req.user.fullName,
+      dataScope: item.dataScope || req.user.dataScope
+    });
 
     ActivityLog.logActivity({
       action: 'Inventory Stock Adjusted',
-      description: `Inventory item ${item.name} stock was adjusted to ${quantity}${reason ? ` (${reason})` : ''}`,
+      description: `${item.name}: ${previousQuantity} → ${newQuantity} ${item.unit}${reason ? ` (${reason})` : ''}`,
       entityType: 'inventory',
       entityId: item._id,
       entityName: item.name,
       performedBy: req.user._id,
       performedByName: req.user.fullName,
       actionType: 'update',
-      changes: { fields: Object.keys(req.body) },
+      changes: { before: { quantity: previousQuantity }, after: { quantity: newQuantity }, fields: ['quantity'] },
       severity: 'medium',
       userId: req.user._id,
       dataScope: req.user.dataScope
     }).catch(err => console.error('Activity log (adjust inventory) failed:', err.message));
 
-    res.json({ success: true, data: item, message: 'Inventory adjusted successfully' });
+    res.json({ success: true, data: item, message: 'Stock updated' });
   } catch (error) {
     console.error('Error adjusting inventory:', error);
-    res.status(400).json({ success: false, message: 'Failed to adjust inventory', error: error.message });
+    res.status(500).json({ success: false, message: 'Failed to adjust inventory' });
   }
 });
 

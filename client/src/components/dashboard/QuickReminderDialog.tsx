@@ -1,11 +1,13 @@
 import apiClient from "@/lib/apiClient";
 import { useState, useEffect } from "react";
 import { format } from "date-fns";
-import { Calendar, Clock, Plus, Bell } from "lucide-react";
+import { Calendar, Clock, Bell } from "lucide-react";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
+  DialogDescription,
+  DialogFooter,
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
@@ -20,7 +22,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
 
 import { useToast } from "@/hooks/use-toast";
 
@@ -52,8 +53,7 @@ export function QuickReminderDialog({ onReminderCreated }: QuickReminderDialogPr
 
   const fetchStaffList = async () => {
     try {
-      const response = await apiClient.getUsers();
-      const staff = response?.data?.users || response?.users || response?.data || [];
+      const staff: any[] = await apiClient.listAll('/users', 'users');
       const staffOnly = staff.filter((u: any) => u.role === 'staff');
       setStaffList(staffOnly);
       console.log('👥 Staff list fetched:', staffOnly);
@@ -118,47 +118,51 @@ export function QuickReminderDialog({ onReminderCreated }: QuickReminderDialogPr
     }
   };
 
+  // datetime-local inputs take local time ("2026-10-14T09:00"), not UTC.
   const getQuickDateTime = (option: string) => {
+    const local = (d: Date) => format(d, "yyyy-MM-dd'T'HH:mm");
     const now = new Date();
     switch (option) {
       case 'in1hour':
-        return new Date(now.getTime() + 60 * 60 * 1000).toISOString().slice(0, 16);
+        return local(new Date(now.getTime() + 60 * 60 * 1000));
       case 'in4hours':
-        return new Date(now.getTime() + 4 * 60 * 60 * 1000).toISOString().slice(0, 16);
-      case 'tomorrow':
+        return local(new Date(now.getTime() + 4 * 60 * 60 * 1000));
+      case 'tomorrow': {
         const tomorrow = new Date(now);
         tomorrow.setDate(tomorrow.getDate() + 1);
         tomorrow.setHours(9, 0, 0, 0);
-        return tomorrow.toISOString().slice(0, 16);
-      case 'nextweek':
+        return local(tomorrow);
+      }
+      case 'nextweek': {
         const nextWeek = new Date(now);
         nextWeek.setDate(nextWeek.getDate() + 7);
         nextWeek.setHours(9, 0, 0, 0);
-        return nextWeek.toISOString().slice(0, 16);
+        return local(nextWeek);
+      }
       default:
         return '';
     }
   };
 
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="outline" className="gap-2" size="sm">
-          <Plus className="w-4 h-4" />
-          Quick Reminder
+        <Button variant="outline" size="sm">
+          <Bell />
+          <span className="hidden sm:inline">Quick Reminder</span>
+          <span className="sm:hidden">Reminder</span>
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Bell className="w-5 h-5" />
-            Create Quick Reminder
-          </DialogTitle>
+          <DialogTitle>Create quick reminder</DialogTitle>
+          <DialogDescription>Set a reminder for yourself or assign it to a staff member.</DialogDescription>
         </DialogHeader>
         
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Staff Assignment */}
-          <div>
+          <div className="space-y-1.5">
             <Label htmlFor="assignedTo">Assign To Staff</Label>
             <Select
               value={formData.assignedTo}
@@ -178,7 +182,7 @@ export function QuickReminderDialog({ onReminderCreated }: QuickReminderDialogPr
             </Select>
           </div>
 
-          <div>
+          <div className="space-y-1.5">
             <Label htmlFor="title">Reminder Title</Label>
             <Input
               id="title"
@@ -189,7 +193,7 @@ export function QuickReminderDialog({ onReminderCreated }: QuickReminderDialogPr
             />
           </div>
 
-          <div>
+          <div className="space-y-1.5">
             <Label htmlFor="description">Description (Optional)</Label>
             <Textarea
               id="description"
@@ -209,22 +213,23 @@ export function QuickReminderDialog({ onReminderCreated }: QuickReminderDialogPr
                 { label: "Tomorrow 9 AM", value: "tomorrow" },
                 { label: "Next week", value: "nextweek" }
               ].map((option) => (
-                <Badge
+                <Button
                   key={option.value}
+                  type="button"
                   variant="outline"
-                  className="cursor-pointer hover:bg-primary hover:text-primary-foreground"
+                  size="xs"
                   onClick={() => setFormData(prev => ({ 
                     ...prev, 
                     reminder_date: getQuickDateTime(option.value) 
                   }))}
                 >
                   {option.label}
-                </Badge>
+                </Button>
               ))}
             </div>
           </div>
 
-          <div>
+          <div className="space-y-1.5">
             <Label htmlFor="reminder_date">Date & Time</Label>
             <Input
               id="reminder_date"
@@ -236,7 +241,7 @@ export function QuickReminderDialog({ onReminderCreated }: QuickReminderDialogPr
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <div>
+            <div className="space-y-1.5">
               <Label htmlFor="priority">Priority</Label>
               <Select
                 value={formData.priority}
@@ -253,7 +258,7 @@ export function QuickReminderDialog({ onReminderCreated }: QuickReminderDialogPr
               </Select>
             </div>
 
-            <div>
+            <div className="space-y-1.5">
               <Label htmlFor="category">Category</Label>
               <Select
                 value={formData.category}
@@ -273,14 +278,14 @@ export function QuickReminderDialog({ onReminderCreated }: QuickReminderDialogPr
             </div>
           </div>
 
-          <div className="flex justify-end gap-2 pt-4">
+          <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={loading}>
-              {loading ? "Creating..." : "Create Reminder"}
+            <Button type="submit" loading={loading}>
+              {loading ? "Creating…" : "Create Reminder"}
             </Button>
-          </div>
+          </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>

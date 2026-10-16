@@ -4,7 +4,9 @@
 const desktopApiBase = (globalThis as any).serpyDesktop?.apiBaseUrl;
 
 export const BASE_URL =
-  desktopApiBase || import.meta.env.VITE_API_URL || 'https://serpy.synxautomate.com/api';
+  // TODO: switch back to production URL when done testing locally
+  // desktopApiBase || import.meta.env.VITE_API_URL || 'https://serpy.synxautomate.com/api';
+  desktopApiBase || import.meta.env.VITE_API_URL || 'http://localhost:4001/api';
 
 interface ApiResponse<T = any> {
   status: 'success' | 'error';
@@ -30,35 +32,45 @@ class ApiClient {
     
     // Always get the latest token from localStorage
     const currentToken = localStorage.getItem('token');
-    
-    console.log('🌐 API Request:', endpoint);
-    console.log('🌐 Token available:', currentToken ? 'YES' : 'NO');
-    console.log('🌐 Token preview:', currentToken ? currentToken.substring(0, 20) + '...' : 'NONE');
-    
+
     // Create AbortController for timeout
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-    
+
+    // Caller options first, so the merged headers (with the token) and the
+    // timeout signal are not replaced by a caller's own `headers`.
     const config: RequestInit = {
+      ...options,
       headers: {
         'Content-Type': 'application/json',
         ...(currentToken && { Authorization: `Bearer ${currentToken}` }),
         ...options.headers,
       },
       signal: controller.signal,
-      ...options,
     };
-    
-    console.log('🌐 Request headers:', config.headers);
 
     try {
       const response = await fetch(url, config);
       clearTimeout(timeoutId);
-      
-      const data: ApiResponse<T> = await response.json();
+
+      // A proxy error page or an empty reply is not JSON; report it plainly.
+      let data: ApiResponse<T>;
+      try {
+        data = await response.json();
+      } catch {
+        if (!response.ok) throw new Error(response.status >= 500 ? 'The server is not responding. Please try again in a moment.' : `Request failed (${response.status})`);
+        data = {} as ApiResponse<T>;
+      }
 
       if (!response.ok) {
+        // The session ended (token expired or the login was removed): sign out
+        // everywhere instead of failing every request with the same error.
+        if (response.status === 401 && currentToken && !endpoint.startsWith('/auth/') && !endpoint.startsWith('/portal/')) {
+          this.clearToken();
+          window.dispatchEvent(new CustomEvent('auth:expired'));
+        }
         const err = new Error(data.message || 'API request failed') as any;
+        err.status = response.status;
         err.details = (data as any).details;
         err.stockCheck = (data as any).stockCheck;
         err.code = (data as any).code;
@@ -88,11 +100,9 @@ class ApiClient {
       body: JSON.stringify({ email, password }),
     });
     
-    console.log('🔑 Login response:', response);
     
     // The backend returns token at root level, not in response.token
     if (response && typeof response === 'object' && 'token' in response) {
-      console.log('🔑 Token found in response:', response.token);
       this.setToken(response.token);
       return {
         user: (response as any).data?.user || (response as any).user,
@@ -100,7 +110,6 @@ class ApiClient {
       };
     }
     
-    console.log('🔑 No token found in response');
     return response;
   }
 
@@ -110,11 +119,9 @@ class ApiClient {
       body: JSON.stringify({ email, password, fullName, phone, companyName }),
     });
     
-    console.log('🔑 Register response:', response);
     
     // The backend returns token at root level, not in response.token
     if (response && typeof response === 'object' && 'token' in response) {
-      console.log('🔑 Token found in response:', response.token);
       this.setToken(response.token);
       return {
         user: (response as any).data?.user || (response as any).user,
@@ -122,7 +129,6 @@ class ApiClient {
       };
     }
     
-    console.log('🔑 No token found in response');
     return response;
   }
 
@@ -150,10 +156,30 @@ class ApiClient {
 
   // Generic CRUD methods
   async get<T>(endpoint: string, params?: Record<string, any>): Promise<T> {
-    const searchParams = params ? new URLSearchParams(params).toString() : '';
-    const url = searchParams ? `${endpoint}?${searchParams}` : endpoint;
-    
+    // Leave out empty values instead of sending "undefined" or "null".
+    const clean = params ? Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => [k, String(v)])) : {};
+    const searchParams = new URLSearchParams(clean).toString();
+    const url = searchParams ? `${endpoint}${endpoint.includes('?') ? '&' : '?'}${searchParams}` : endpoint;
+
     return this.request<T>(url);
+  }
+
+  /**
+   * Every record of a paged list endpoint, fetched 100 at a time — for pickers
+   * and exports, which must not stop at the first page. `key` names the array
+   * in the response (e.g. "customers"); endpoints that answer with a bare
+   * array need no key.
+   */
+  async listAll<T = any>(endpoint: string, key?: string, params: Record<string, any> = {}, max = 5000): Promise<T[]> {
+    const pageSize = 100;
+    const all: T[] = [];
+    for (let page = 1; all.length < max; page++) {
+      const res: any = await this.get(endpoint, { ...params, page, limit: pageSize });
+      const rows: T[] = Array.isArray(res) ? res : (key ? res?.[key] : null) || [];
+      all.push(...rows);
+      if (rows.length < pageSize) break;
+    }
+    return all;
   }
 
   async post<T>(endpoint: string, data?: any): Promise<T> {
@@ -261,10 +287,6 @@ class ApiClient {
   async createInventoryItem(data: any) {
     return this.post('/inventory', data);
   }
-  async createLogin(data: any) {
-    return this.post('/create-login', data);
-  }
-
   async updateInventoryItem(id: string, data: any) {
     return this.put(`/inventory/${id}`, data);
   }
@@ -273,29 +295,18 @@ class ApiClient {
     return this.delete(`/inventory/${id}`);
   }
 
+  /** Set the counted quantity of a stock item (recorded as a stock movement). */
   async adjustInventory(id: string, quantity: number, reason?: string, notes?: string) {
     return this.post(`/inventory/${id}/adjust`, { quantity, reason, notes });
   }
 
-  // Staff Management
-  async getStaff(params?: any) {
-    return this.get('/staff', params);
-  }
-
-  async getStaffStats() {
-    return this.get('/staff/stats');
-  }
-
-  async createStaff(data: any) {
-    return this.post('/staff', data);
+  /** Add (+) or take out (−) stock, recorded as a movement of the given type. */
+  async moveStock(id: string, data: { change: number; type: 'purchase' | 'adjustment' | 'return' | 'damage' | 'sale'; reason?: string; reference?: string; notes?: string }) {
+    return this.post(`/inventory/${id}/adjust`, data);
   }
 
   async updateStaff(id: string, data: any) {
     return this.put(`/users/${id}`, data);
-  }
-
-  async deleteStaff(id: string) {
-    return this.delete(`/staff/${id}`);
   }
 
   // Staff Email and Password Management
@@ -400,13 +411,19 @@ class ApiClient {
     return this.post(`/tasks/${id}/comments`, { text });
   }
 
-  async addTimeEntry(id: string, startTime: string, endTime: string, description?: string) {
-    return this.post(`/tasks/${id}/time-entries`, { startTime, endTime, description });
-  }
-
   // Reports
   async getRevenueReports(params?: any) {
     return this.get('/reports/revenue', params);
+  }
+
+  /** Design charges per month of a year, from issued invoices and from quotations (kept apart). */
+  async getDesignChargeReport(year: number) {
+    return this.get('/reports/design-charges', { year: String(year) });
+  }
+
+  /** Email the monthly summary (built on the server, CSV attached). */
+  async emailRevenueReport(data: { month: string; email: string; subject?: string; message?: string; notes?: string }) {
+    return this.request<{ messageId: string }>('/reports/revenue/email', { method: 'POST', body: JSON.stringify(data) });
   }
 
   // HSN Code Management
@@ -598,16 +615,6 @@ class ApiClient {
     return this.get('/payments/stats/summary');
   }
 
-  // Cost Management
-  async getCosts(params?: any) {
-    const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
-    return this.get(`/costs${queryString}`);
-  }
-
-  async getCost(id: string) {
-    return this.get(`/costs/${id}`);
-  }
-
   async createCost(data: any) {
     return this.post('/costs', data);
   }
@@ -618,40 +625,6 @@ class ApiClient {
 
   async deleteCost(id: string) {
     return this.delete(`/costs/${id}`);
-  }
-
-  async getCostStats() {
-    return this.get('/costs/stats/summary');
-  }
-
-  // Delivery Management
-  async getDeliveries(params?: any) {
-    const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
-    return this.get(`/deliveries${queryString}`);
-  }
-
-  async getDelivery(id: string) {
-    return this.get(`/deliveries/${id}`);
-  }
-
-  async createDelivery(data: any) {
-    return this.post('/deliveries', data);
-  }
-
-  async updateDelivery(id: string, data: any) {
-    return this.put(`/deliveries/${id}`, data);
-  }
-
-  async deleteDelivery(id: string) {
-    return this.delete(`/deliveries/${id}`);
-  }
-
-  async updateDeliveryStatus(id: string, status: string, notes?: string) {
-    return this.put(`/deliveries/${id}/status`, { status, notes });
-  }
-
-  async getDeliveryStats() {
-    return this.get('/deliveries/stats/summary');
   }
 
   // Quotation Management
@@ -737,6 +710,11 @@ class ApiClient {
     return this.get('/invoices/stats/summary');
   }
 
+  /** Counts and amounts for the invoice list's views (all / unpaid / overdue…). */
+  async getInvoiceViewStats() {
+    return this.get<{ stats: Record<string, number> }>('/invoices/stats/views');
+  }
+
   async cancelInvoice(invoiceId: string, reason?: string) {
     return this.patch(`/invoices/${invoiceId}/cancel`, { reason });
   }
@@ -745,23 +723,9 @@ class ApiClient {
     return this.get(`/invoices/${invoiceId}/movements`);
   }
 
-  async getInventoryMovements(filters?: any) {
-    const params = new URLSearchParams();
-    if (filters) {
-      Object.entries(filters).forEach(([key, value]) => {
-        if (value !== undefined && value !== null) {
-          params.append(key, value.toString());
-        }
-      });
-    }
-    return this.get(`/inventory-movements?${params.toString()}`);
-  }
-
-  async getInventoryMovementSummary(startDate?: string, endDate?: string) {
-    const params = new URLSearchParams();
-    if (startDate) params.append('startDate', startDate);
-    if (endDate) params.append('endDate', endDate);
-    return this.get(`/inventory-movements/summary?${params.toString()}`);
+  /** Stock in/out history: { movements, pagination }. */
+  async getInventoryMovements(filters?: { item?: string; type?: string; from?: string; to?: string; page?: number; limit?: number }) {
+    return this.get(`/inventory/movements`, filters);
   }
 
   // Inventory Analytics
@@ -789,34 +753,12 @@ class ApiClient {
     return this.get(`/inventory/reports/movement-summary?${params.toString()}`);
   }
 
-  // Purchase Order Management
-  async getPurchaseOrders(params?: any) {
-    const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
-    return this.get(`/purchase-orders${queryString}`);
-  }
-
-  async getPurchaseOrder(id: string) {
-    return this.get(`/purchase-orders/${id}`);
-  }
-
-  async createPurchaseOrder(data: any) {
-    return this.post('/purchase-orders', data);
-  }
-
-  async updatePurchaseOrder(id: string, data: any) {
-    return this.put(`/purchase-orders/${id}`, data);
-  }
-
   async updatePurchaseOrderStatus(id: string, status: string, notes?: string) {
     return this.patch(`/purchase-orders/${id}/status`, { status, notes });
   }
 
   async deletePurchaseOrder(id: string) {
     return this.delete(`/purchase-orders/${id}`);
-  }
-
-  async getPurchaseOrderStats() {
-    return this.get('/purchase-orders/stats/summary');
   }
 
   // Invoice PDF and Email
@@ -916,79 +858,10 @@ class ApiClient {
     return this.patch(`/invoices/${invoiceId}/payment-status`, data);
   }
 
-  async updateInvoiceNoGst(invoiceId: string, noGst: boolean) {
-    return this.patch(`/invoices/${invoiceId}/no-gst`, { noGst });
-  }
-
-  async getVendorPerformance(vendorId: string) {
-    return this.get(`/vendors/${vendorId}/performance`);
-  }
-
-  async updateVendorPerformance(vendorId: string, data: any) {
-    return this.put(`/vendors/${vendorId}/performance`, data);
-  }
-
-  async addVendorCommunication(vendorId: string, data: any) {
-    return this.post(`/vendors/${vendorId}/communication`, data);
-  }
-
-  async addVendorPayment(vendorId: string, data: any) {
-    return this.post(`/vendors/${vendorId}/payment`, data);
-  }
-
-  // Walk-in Jobs Management
-  async getWalkInJobs(params?: any) {
-    const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
-    return this.get(`/walk-in-jobs${queryString}`);
-  }
-
-  async getWalkInJob(id: string) {
-    return this.get(`/walk-in-jobs/${id}`);
-  }
-
-  async createWalkInJob(data: any) {
-    return this.post('/walk-in-jobs', data);
-  }
-
-  async updateWalkInJob(id: string, data: any) {
-    return this.put(`/walk-in-jobs/${id}`, data);
-  }
-
-  async deleteWalkInJob(id: string) {
-    return this.delete(`/walk-in-jobs/${id}`);
-  }
-
-  async updateWalkInJobStatus(id: string, status: string, progress?: number, notes?: string) {
-    return this.put(`/walk-in-jobs/${id}/status`, { status, progress, notes });
-  }
-
-  async assignWalkInJob(id: string, operatorId: string) {
-    return this.put(`/walk-in-jobs/${id}/assign`, { operatorId });
-  }
-
-  async updateWalkInJobQualityCheck(id: string, checked: boolean, approved?: boolean, qualityNotes?: string, checkedBy?: string) {
-    return this.put(`/walk-in-jobs/${id}/quality-check`, { checked, approved, qualityNotes, checkedBy });
-  }
-
-  async getWalkInJobStats() {
-    return this.get('/walk-in-jobs/stats/summary');
-  }
-
   // WhatsApp Integration
-  async getWhatsAppStats() {
-    return this.get('/whatsapp/stats');
-  }
-
-  async getWhatsAppTemplates() {
-    return this.get('/whatsapp/templates');
-  }
-
-  async sendWhatsAppMessage(phoneNumber: string, templateId: string, variables: any, customerId?: string) {
-    return this.post('/whatsapp/send', { phoneNumber, templateId, variables, customerId });
-  }
-
-  async sendBulkWhatsAppMessages(recipients: any[]) {
-    return this.post('/whatsapp/send-bulk', { recipients });
+  /** Sends an approved Meta template; variables are {{1}}, {{2}}… by number. */
+  async sendWhatsAppMessage(phoneNumber: string, templateId: string, variables: Record<string, string>, language?: string, customerId?: string) {
+    return this.post('/whatsapp/send', { phoneNumber, templateId, variables, language, customerId });
   }
 
   // Meta WhatsApp API Integration
@@ -1058,74 +931,6 @@ class ApiClient {
     return this.put('/payment-reminders/settings', data);
   }
 
-  // Proofing System
-  async getProofs(params?: any) {
-    const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
-    return this.get(`/proofs${queryString}`);
-  }
-
-  async getProof(id: string) {
-    return this.get(`/proofs/${id}`);
-  }
-
-  async createProof(data: any) {
-    return this.post('/proofs', data);
-  }
-
-  async updateProof(id: string, data: any) {
-    return this.put(`/proofs/${id}`, data);
-  }
-
-  async deleteProof(id: string) {
-    return this.delete(`/proofs/${id}`);
-  }
-
-  async approveProof(id: string, approvalNotes?: string) {
-    return this.put(`/proofs/${id}/approve`, { approvalNotes });
-  }
-
-  async rejectProof(id: string, rejectionReason: string) {
-    return this.put(`/proofs/${id}/reject`, { rejectionReason });
-  }
-
-  async addProofComment(id: string, comment: string, isInternal?: boolean) {
-    return this.post(`/proofs/${id}/comments`, { comment, isInternal });
-  }
-
-  async getProofStats() {
-    return this.get('/proofs/stats/summary');
-  }
-
-  // Emergency Orders Management
-  async getEmergencyOrders(params?: any) {
-    const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
-    return this.get(`/emergency-orders${queryString}`);
-  }
-
-  async getEmergencyOrder(id: string) {
-    return this.get(`/emergency-orders/${id}`);
-  }
-
-  async createEmergencyOrder(data: any) {
-    return this.post('/emergency-orders', data);
-  }
-
-  async updateEmergencyOrder(id: string, data: any) {
-    return this.put(`/emergency-orders/${id}`, data);
-  }
-
-  async deleteEmergencyOrder(id: string) {
-    return this.delete(`/emergency-orders/${id}`);
-  }
-
-  async updateEmergencyOrderStatus(id: string, status: string, notes?: string) {
-    return this.put(`/emergency-orders/${id}/status`, { status, notes });
-  }
-
-  async getEmergencyOrderStats() {
-    return this.get('/emergency-orders/stats/summary');
-  }
-
   // Accounts Management
   async getAccountTransactions(params?: any) {
     const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
@@ -1134,6 +939,18 @@ class ApiClient {
 
   async getAccountBalances() {
     return this.get('/accounts/balances');
+  }
+
+  async getBankReconciliation(params?: { accountName?: string; statementDate?: string }) {
+    return this.get('/accounts/reconciliation', params);
+  }
+
+  async getBankReconciliationDetail(id: string) {
+    return this.get(`/accounts/reconciliation/${id}`);
+  }
+
+  async saveBankReconciliation(data: { accountName: string; statementDate: string; closingBalance: number; transactionIds: string[] }) {
+    return this.post('/accounts/reconciliation', data);
   }
 
   async getCheques(params?: any) {
@@ -1213,57 +1030,7 @@ class ApiClient {
     }
   }
 
-  async updateCustomerPricing(id: string, data: any) {
-    return this.put(`/customer-pricing/${id}`, data);
-  }
-
-  async deleteCustomerPricing(id: string) {
-    return this.delete(`/customer-pricing/${id}`);
-  }
-
   // Files
-
-  // Time Entries (Designer Timer) - Complete Implementation
-  async getTimeEntries(params?: any) {
-    const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
-    return this.get(`/time-entries${queryString}`);
-  }
-
-  async getTimeEntry(id: string) {
-    return this.get(`/time-entries/${id}`);
-  }
-
-  async createTimeEntry(data: any) {
-    return this.post('/time-entries', data);
-  }
-
-  async updateTimeEntry(id: string, data: any) {
-    return this.put(`/time-entries/${id}`, data);
-  }
-
-  async deleteTimeEntry(id: string) {
-    return this.delete(`/time-entries/${id}`);
-  }
-
-  async startTimer(id: string) {
-    return this.post(`/time-entries/${id}/start`);
-  }
-
-  async pauseTimer(id: string) {
-    return this.post(`/time-entries/${id}/pause`);
-  }
-
-  async stopTimer(id: string) {
-    return this.post(`/time-entries/${id}/stop`);
-  }
-
-  async getTimeEntryStats() {
-    return this.get('/time-entries/stats/summary');
-  }
-
-  async getActiveTimer() {
-    return this.get('/time-entries/active');
-  }
 
   // Calendar & Events - Complete Implementation
   async getEvents(params?: any) {
@@ -1308,117 +1075,123 @@ class ApiClient {
     return this.get('/calendar/stats/summary');
   }
 
-  // Discount Management - Complete Implementation
-  async getDiscountRules(params?: any) {
-    const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
-    return this.get(`/discounts/rules${queryString}`);
+  async setDiscountRuleActive(id: string, isActive: boolean) {
+    return this.patch(`/discounts/rules/${id}/active`, { isActive });
   }
 
-  async getDiscountRule(id: string) {
-    return this.get(`/discounts/rules/${id}`);
+  /** Best discount for a customer and order amount: { discountAmount, appliedRule: { name, label } | null }. */
+  async calculateDiscount(customerId: string, amount: number) {
+    return this.post('/discounts/calculate', { customerId, amount });
   }
 
-  async createDiscountRule(data: any) {
-    return this.post('/discounts/rules', data);
+  // Customer Portal — staff side (issue / list / revoke personal links)
+  async createPortalAccess(data: { customerId: string; expiresInDays?: number; sendEmail?: boolean }) {
+    return this.post('/portal/access', data);
   }
 
-  async updateDiscountRule(id: string, data: any) {
-    return this.put(`/discounts/rules/${id}`, data);
+  async getPortalAccessLinks(params?: { customerId?: string }) {
+    return this.get('/portal/access', params);
   }
 
-  async deleteDiscountRule(id: string) {
-    return this.delete(`/discounts/rules/${id}`);
+  async revokePortalAccess(id: string) {
+    return this.delete(`/portal/access/${id}`);
   }
 
-  async getCustomerPricing(params?: any) {
-    const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
-    return this.get(`/discounts/customer-pricing${queryString}`);
+  // Customer Portal — customer side. These run without a staff login: the
+  // session token from POST /portal/session goes in X-Portal-Session.
+  private async portalFetch<T>(endpoint: string, sessionToken: string | null, init: RequestInit = {}): Promise<T> {
+    const headers: Record<string, string> = {};
+    if (!(init.body instanceof FormData)) headers['Content-Type'] = 'application/json';
+    if (sessionToken) headers['X-Portal-Session'] = sessionToken;
+    const response = await fetch(`${this.baseURL}${endpoint}`, { ...init, headers: { ...headers, ...(init.headers as Record<string, string>) } });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const err = new Error(data.message || 'Portal request failed') as Error & { status?: number; code?: string };
+      err.status = response.status;
+      err.code = data.code;
+      throw err;
+    }
+    return (data.data ?? data) as T;
   }
 
-  async getCustomerPricingRule(id: string) {
-    return this.get(`/discounts/customer-pricing/${id}`);
+  async openPortalSession(linkToken: string) {
+    return this.portalFetch<{
+      sessionToken: string;
+      expiresAt: string;
+      customer: { name: string; email?: string; phone?: string; company?: string };
+      business: { name: string | null };
+    }>('/portal/session', null, { method: 'POST', body: JSON.stringify({ token: linkToken }) });
   }
 
-  async createCustomerPricing(data: any) {
-    return this.post('/discounts/customer-pricing', data);
+  async portalLogout(sessionToken: string) {
+    return this.portalFetch('/portal/logout', sessionToken, { method: 'POST' });
   }
 
-  async updateCustomerPricingRule(id: string, data: any) {
-    return this.put(`/discounts/customer-pricing/${id}`, data);
+  async getPortalCustomerData(sessionToken: string) {
+    return this.portalFetch<{ customer: unknown; sessionExpiresAt: string }>('/portal/customer-data', sessionToken);
   }
 
-  async deleteCustomerPricingRule(id: string) {
-    return this.delete(`/discounts/customer-pricing/${id}`);
+  async getPortalOrders(sessionToken: string) {
+    return this.portalFetch<{ jobs: unknown[] }>('/portal/orders?limit=50', sessionToken);
   }
 
-  async calculateDiscount(customerId: string, amount: number, jobType?: string, isNewCustomer?: boolean) {
-    return this.post('/discounts/calculate', { customerId, amount, jobType, isNewCustomer });
+  async getPortalInvoices(sessionToken: string) {
+    return this.portalFetch<{ invoices: unknown[] }>('/portal/invoices?limit=50', sessionToken);
   }
 
-  async getDiscountStats() {
-    return this.get('/discounts/stats/summary');
+  async getPortalDeliveries(sessionToken: string) {
+    return this.portalFetch<{ deliveries: unknown[] }>('/portal/deliveries?limit=50', sessionToken);
   }
 
-  // Customer Portal - Complete Implementation
-  async portalLogin(phone: string, email?: string) {
-    return this.post('/portal/login', { phone, email });
+  async getPortalFiles(sessionToken: string) {
+    return this.portalFetch<{ files: unknown[] }>('/portal/files?limit=50', sessionToken);
   }
 
-  async portalLogout(sessionId: string) {
-    return this.request('/portal/logout', { 
-      method: 'POST',
-      headers: { 'X-Portal-Session': sessionId }
-    });
+  async getPortalStats(sessionToken: string) {
+    return this.portalFetch<{ stats: { totalOrders: number; openOrders: number; unpaidInvoices: number; outstandingBalance: number } }>('/portal/stats/summary', sessionToken);
   }
 
-  async getPortalCustomerData(sessionId: string) {
-    return this.request('/portal/customer-data', { 
-      headers: { 'X-Portal-Session': sessionId }
-    });
-  }
-
-  async getPortalOrders(sessionId: string, params?: any) {
-    const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
-    return this.get(`/portal/orders${queryString}`, { headers: { 'X-Portal-Session': sessionId } });
-  }
-
-  async getPortalInvoices(sessionId: string, params?: any) {
-    const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
-    return this.get(`/portal/invoices${queryString}`, { headers: { 'X-Portal-Session': sessionId } });
-  }
-
-  async getPortalDeliveries(sessionId: string, params?: any) {
-    const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
-    return this.get(`/portal/deliveries${queryString}`, { headers: { 'X-Portal-Session': sessionId } });
-  }
-
-  async uploadPortalFile(sessionId: string, file: File, category?: string, description?: string, jobId?: string) {
+  async uploadPortalFile(sessionToken: string, file: File, category?: string, description?: string, jobId?: string) {
     const formData = new FormData();
     formData.append('file', file);
     if (category) formData.append('category', category);
     if (description) formData.append('description', description);
     if (jobId) formData.append('jobId', jobId);
-    
-    return this.request('/portal/upload-file', { 
-      method: 'POST',
-      body: formData,
-      headers: { 
-        'X-Portal-Session': sessionId
-      } 
-    });
+    return this.portalFetch<{ file: unknown }>('/portal/upload-file', sessionToken, { method: 'POST', body: formData });
   }
 
-  async getPortalFiles(sessionId: string, params?: any) {
-    const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
-    return this.get(`/portal/files${queryString}`, { headers: { 'X-Portal-Session': sessionId } });
+  /** Download a portal file as a Blob (the session token cannot go in a link). */
+  async downloadPortalFile(sessionToken: string, fileId: string) {
+    const response = await fetch(`${this.baseURL}/portal/files/${fileId}/download`, { headers: { 'X-Portal-Session': sessionToken } });
+    if (!response.ok) throw new Error('The file could not be downloaded');
+    return response.blob();
   }
 
-  async downloadPortalFile(sessionId: string, fileId: string) {
-    return this.get(`/portal/files/${fileId}/download`, { headers: { 'X-Portal-Session': sessionId } });
+  // Notifications
+  async getNotifications() {
+    return this.get<{ items: unknown[]; unreadCount: number; alerts: unknown[] }>('/notifications');
   }
 
-  async getPortalStats(sessionId: string) {
-    return this.get('/portal/stats/summary', { headers: { 'X-Portal-Session': sessionId } });
+  async markNotificationRead(id: string) {
+    return this.post(`/notifications/${id}/read`);
+  }
+
+  async markAllNotificationsRead() {
+    return this.post('/notifications/read-all');
+  }
+
+  // Team workload and evaluation (admin, or managers who see all staff data)
+  async getTeamOverview(days = 30, team?: string) {
+    return this.get<unknown>('/team/overview', team ? { days, team } : { days });
+  }
+
+  async getTeamMember(userId: string, days = 30) {
+    return this.get<unknown>(`/team/members/${userId}`, { days });
+  }
+
+  // Jobs the current login handles or has tasks on
+  async getMyJobs() {
+    return this.get<{ jobs: unknown[] }>('/jobs/mine');
   }
 
   // Activity Log - Complete Implementation
@@ -1552,6 +1325,40 @@ class ApiClient {
     return this.get('/users/stats/summary');
   }
 
+  // Roles: named permission sets (backend/src/routes/accessRoles.js)
+  async getAccessRoles() {
+    return this.get<unknown>('/access-roles');
+  }
+
+  async createAccessRole(data: unknown) {
+    return this.post<unknown>('/access-roles', data);
+  }
+
+  async updateAccessRole(id: string, data: unknown) {
+    return this.put<unknown>(`/access-roles/${id}`, data);
+  }
+
+  async deleteAccessRole(id: string) {
+    return this.delete<unknown>(`/access-roles/${id}`);
+  }
+
+  // Teams (backend/src/routes/teams.js)
+  async getTeams() {
+    return this.get<{ teams: unknown[] }>('/teams');
+  }
+
+  async createTeam(data: unknown) {
+    return this.post<unknown>('/teams', data);
+  }
+
+  async updateTeam(id: string, data: unknown) {
+    return this.put<unknown>(`/teams/${id}`, data);
+  }
+
+  async deleteTeam(id: string) {
+    return this.delete<unknown>(`/teams/${id}`);
+  }
+
   // Settings - Complete Implementation
   async getSettings() {
     return this.get('/settings');
@@ -1634,16 +1441,6 @@ class ApiClient {
 
   async getFileStats() {
     return this.get('/files/stats/summary');
-  }
-
-  async getFilesByCategory(category: string, params?: any) {
-    const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
-    return this.get(`/files/category/${category}${queryString}`);
-  }
-
-  async getFilesByEntity(entityType: string, entityId: string, params?: any) {
-    const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
-    return this.get(`/files/entity/${entityType}/${entityId}${queryString}`);
   }
 
   // Email Management

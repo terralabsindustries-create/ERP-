@@ -115,7 +115,7 @@ export function VendorDialog({ open, onOpenChange, onSuccess, vendor }: VendorDi
         } catch (error: any) {
             toast({
                 title: "Error",
-                description: error.response?.data?.message || `Failed to ${isEditMode ? 'update' : 'create'} vendor`,
+                description: error?.message || `Failed to ${isEditMode ? 'update' : 'create'} vendor`,
                 variant: "destructive",
             });
         } finally {

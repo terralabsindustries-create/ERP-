@@ -1,324 +1,251 @@
-import { useState, useEffect } from "react";
-import { Search, Upload, Download, Eye, Clock, CheckCircle } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { format, formatDistanceToNow } from "date-fns";
+import { Link2, Copy, Check, ShieldCheck, Ban, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { CustomerLoginDialog } from "@/components/portal/CustomerLoginDialog";
-import { FileUploadDialog } from "@/components/portal/FileUploadDialog";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Panel } from "@/components/common/Panel";
+import { EmptyState } from "@/components/common/EmptyState";
+import { useAuth } from "@/contexts/AuthContext";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
 
+interface PortalLink {
+  _id: string;
+  customerId: string;
+  customerName: string;
+  createdByName?: string;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt?: string;
+  lastUsedAt?: string;
+  useCount: number;
+  state: "active" | "expired" | "revoked";
+}
+
+interface CustomerOption {
+  _id: string;
+  name: string;
+  email?: string;
+  company?: string;
+}
+
+const STATE_BADGE = {
+  active: { label: "Active", variant: "success" },
+  expired: { label: "Expired", variant: "secondary" },
+  revoked: { label: "Revoked", variant: "destructive" }
+} as const;
+
+/**
+ * Staff side of the customer portal: give one customer a personal link to
+ * follow their own orders, invoices, deliveries and files, and take it back.
+ */
 const Portal = () => {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [customerName, setCustomerName] = useState("");
-  const [customerId, setCustomerId] = useState("");
-  const [isLoginDialogOpen, setIsLoginDialogOpen] = useState(!isLoggedIn);
-  const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [orders, setOrders] = useState<any[]>([]);
-  const [invoices, setInvoices] = useState<any[]>([]);
+  const { hasPermission } = useAuth();
+  const canManage = hasPermission("Customer Portal: Manage Access");
   const { toast } = useToast();
+  const [customers, setCustomers] = useState<CustomerOption[]>([]);
+  const [links, setLinks] = useState<PortalLink[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [customerId, setCustomerId] = useState("");
+  const [days, setDays] = useState("30");
+  const [sendEmail, setSendEmail] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [issued, setIssued] = useState<{ link: string; customerName: string; emailed: boolean; emailError?: string | null } | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const loadLinks = useCallback(async () => {
+    try {
+      const res = (await apiClient.getPortalAccessLinks()) as { links: PortalLink[] };
+      setLinks(res.links || []);
+    } catch (error) {
+      toast({ title: "Portal links could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
 
   useEffect(() => {
-    if (isLoggedIn && customerId) {
-      fetchCustomerData();
-    }
-  }, [isLoggedIn, customerId]);
+    loadLinks();
+    apiClient
+      .getCustomer({ limit: 100, status: "active" })
+      .then((res: { customers?: CustomerOption[] }) => setCustomers(res?.customers || []))
+      .catch(() => setCustomers([]));
+  }, [loadLinks]);
 
-  const fetchCustomerData = async () => {
+  const selected = customers.find((c) => c._id === customerId);
+
+  const createLink = async () => {
+    if (!customerId) return;
+    setCreating(true);
+    setCopied(false);
     try {
-      const [ordersResponse, invoicesResponse, deliveriesResponse] = await Promise.all([
-        apiClient.getPortalOrders(customerId),
-        apiClient.getPortalInvoices(customerId),
-        apiClient.getPortalDeliveries(customerId)
-      ]);
-
-      console.log('🏢 Portal data response:', { ordersResponse, invoicesResponse, deliveriesResponse });
-      
-      setOrders(ordersResponse.data?.orders || []);
-      setInvoices(invoicesResponse.data?.invoices || []);
-      setDeliveries(deliveriesResponse.data?.deliveries || []);
+      const res = (await apiClient.createPortalAccess({ customerId, expiresInDays: Number(days), sendEmail })) as {
+        link: string;
+        emailed: boolean;
+        emailError?: string | null;
+      };
+      setIssued({ link: res.link, customerName: selected?.name || "the customer", emailed: res.emailed, emailError: res.emailError });
+      loadLinks();
     } catch (error) {
-      console.error('Error fetching customer data:', error);
-      toast({
-        title: "Error",
-        description: "Failed to load customer data",
-        variant: "destructive",
-      });
+      toast({ title: "The link could not be created", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+    } finally {
+      setCreating(false);
     }
   };
 
-  const handleLogin = async (name: string) => {
+  const copyLink = async () => {
+    if (!issued) return;
     try {
-      if (!name.trim()) {
-        toast({
-          title: "Invalid Name",
-          description: "Please enter your name",
-          variant: "destructive",
-        });
-        return;
-      }
+      await navigator.clipboard.writeText(issued.link);
+      setCopied(true);
+    } catch {
+      toast({ title: "Copy failed", description: "Select the link and copy it manually." });
+    }
+  };
 
-      // Find customer by name
-      const response = await apiClient.getCustomer();
-      const customers = response.customers || [];
-      const customer = customers.find((c: any) => 
-        c.name.toLowerCase().includes(name.toLowerCase())
-      );
-      
-      if (customer) {
-        setCustomerName(customer.name);
-        setCustomerId(customer._id);
-        setIsLoggedIn(true);
-        setIsLoginDialogOpen(false);
-        toast({
-          title: "Welcome!",
-          description: `Successfully logged in as ${customer.name}`,
-        });
-      } else {
-        toast({
-          title: "Customer Not Found",
-          description: "Please check your name and try again",
-          variant: "destructive",
-        });
-      }
+  const revoke = async (link: PortalLink) => {
+    try {
+      await apiClient.revokePortalAccess(link._id);
+      toast({ title: "Link revoked", description: `${link.customerName} can no longer open the portal with it.` });
+      loadLinks();
     } catch (error) {
-      console.error('Login error:', error);
-      toast({
-        title: "Login Error",
-        description: "Failed to log in. Please try again.",
-        variant: "destructive",
-      });
+      toast({ title: "Could not revoke the link", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     }
   };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "completed":
-      case "paid":
-        return "bg-green-100 text-green-800 border-green-200";
-      case "in-progress":
-      case "pending":
-        return "bg-yellow-100 text-yellow-800 border-yellow-200";
-      case "cancelled":
-        return "bg-red-100 text-red-800 border-red-200";
-      default:
-        return "bg-gray-100 text-gray-800 border-gray-200";
-    }
-  };
-
-  if (!isLoggedIn) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
-        <div className="max-w-md w-full mx-4">
-          <Card>
-            <CardHeader className="text-center">
-              <CardTitle className="text-2xl">Customer Portal</CardTitle>
-              <p className="text-muted-foreground">Access your orders and invoices</p>
-            </CardHeader>
-            <CardContent>
-              <Button 
-                onClick={() => setIsLoginDialogOpen(true)}
-                className="w-full"
-              >
-                Customer Login
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-        <CustomerLoginDialog
-          open={isLoginDialogOpen}
-          onOpenChange={setIsLoginDialogOpen}
-          onLogin={handleLogin}
-        />
-      </div>
-    );
-  }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-8">
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+    <div className="page-frame">
+      <div className="page-heading-row">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Welcome, {customerName}</h1>
-          <p className="text-muted-foreground">Manage your orders and download files</p>
-        </div>
-        <div className="flex gap-2">
-          <Button onClick={() => setIsUploadDialogOpen(true)} className="gap-2">
-            <Upload className="h-4 w-4" />
-            Upload Files
-          </Button>
-          <Button variant="outline" onClick={() => setIsLoggedIn(false)}>
-            Logout
-          </Button>
+          <h1 className="page-title">Customer Portal</h1>
+          <p>Give a customer a personal link to follow their own orders, invoices, deliveries and files</p>
         </div>
       </div>
 
-      {/* Search */}
-      <div className="relative max-w-md">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          placeholder="Search orders..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="pl-10"
-        />
+      <div className="flex items-start gap-2 rounded-lg border border-info/25 bg-info-soft px-4 py-3 text-sm text-info-strong">
+        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>
+          Each link opens one customer's records only. It stops working when it expires or when you revoke it. Send it privately — anyone holding
+          the link can see that customer's orders.
+        </span>
       </div>
 
-      {/* Tabs */}
-      <Tabs defaultValue="orders" className="space-y-6">
-        <TabsList>
-          <TabsTrigger value="orders">My Orders</TabsTrigger>
-          <TabsTrigger value="invoices">Invoices</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="orders" className="space-y-6">
-          <div className="grid gap-6 md:grid-cols-1 lg:grid-cols-2">
-            {orders
-              .filter(order => 
-                order.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                order.id.toLowerCase().includes(searchTerm.toLowerCase())
-              )
-              .map((order) => (
-                <Card key={order.id} className="hover:shadow-md transition-shadow">
-                  <CardHeader className="pb-3">
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <CardTitle className="text-lg font-semibold">JOB-{order.id.slice(-3)}</CardTitle>
-                        <p className="text-sm text-muted-foreground">{order.title}</p>
-                      </div>
-                      <Badge className={getStatusColor(order.status)}>
-                        {order.status.replace("_", " ")}
-                      </Badge>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <span className="text-muted-foreground">Order Date:</span>
-                        <p className="font-medium">{new Date(order.created_at).toLocaleDateString()}</p>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">Due Date:</span>
-                        <p className="font-medium">
-                          {order.due_date ? new Date(order.due_date).toLocaleDateString() : 'Not set'}
-                        </p>
-                      </div>
-                    </div>
-                    
-                    <div className="text-sm">
-                      <span className="text-muted-foreground">Estimated Cost:</span>
-                      <p className="text-xl font-bold">
-                        ₹{(order.actual_cost || order.estimated_cost || 0).toLocaleString()}
-                      </p>
-                    </div>
-
-                    <div className="flex gap-2">
-                      <Button variant="outline" size="sm" className="gap-2">
-                        <Eye className="h-3 w-3" />
-                        View Details
-                      </Button>
-                      {order.status === 'completed' && (
-                        <Button variant="outline" size="sm" className="gap-2">
-                          <Download className="h-3 w-3" />
-                          Download Files
-                        </Button>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+      {canManage && (
+        <Panel title="Create a portal link" icon={Link2}>
+          <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_auto] lg:items-end">
+            <div className="space-y-1.5">
+              <Label htmlFor="portal-customer">Customer</Label>
+              <Select value={customerId} onValueChange={(v) => { setCustomerId(v); setIssued(null); }}>
+                <SelectTrigger id="portal-customer">
+                  <SelectValue placeholder="Choose a customer" />
+                </SelectTrigger>
+                <SelectContent>
+                  {customers.map((c) => (
+                    <SelectItem key={c._id} value={c._id}>
+                      {c.name}
+                      {c.company ? ` — ${c.company}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="portal-days">Link works for</Label>
+              <Select value={days} onValueChange={setDays}>
+                <SelectTrigger id="portal-days">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {["7", "30", "90"].map((d) => (
+                    <SelectItem key={d} value={d}>
+                      {d} days
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button onClick={createLink} disabled={!customerId} loading={creating}>
+              <Link2 />
+              Create link
+            </Button>
+            <label className="flex items-center gap-2 text-sm lg:col-span-3">
+              <Switch checked={sendEmail} onCheckedChange={setSendEmail} disabled={!selected?.email} aria-label="Email the link to the customer" />
+              <span className={selected && !selected.email ? "text-muted-foreground" : undefined}>
+                Email it to the customer{selected?.email ? ` (${selected.email})` : selected ? " — no email address on file" : ""}
+              </span>
+            </label>
           </div>
-          {orders.length === 0 && (
-            <div className="text-center py-12">
-              <Clock className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-              <h3 className="text-lg font-semibold mb-2">No orders found</h3>
-              <p className="text-muted-foreground">You don't have any orders yet.</p>
+
+          {issued && (
+            <div className="border-t bg-success-soft/40 p-4 sm:p-5">
+              <p className="text-sm font-medium">Link for {issued.customerName}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">Copy it now — for security it is not shown again.</p>
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                <code className="min-w-0 flex-1 break-all rounded-md border bg-card px-3 py-2 font-mono text-xs">{issued.link}</code>
+                <Button variant="outline" onClick={copyLink}>
+                  {copied ? <Check /> : <Copy />}
+                  {copied ? "Copied" : "Copy link"}
+                </Button>
+              </div>
+              {issued.emailed && (
+                <p className="mt-2 flex items-center gap-1.5 text-xs text-success-strong">
+                  <Mail className="h-3.5 w-3.5" /> Emailed to the customer.
+                </p>
+              )}
+              {issued.emailError && <p className="mt-2 text-xs text-warning-strong">Not emailed: {issued.emailError}</p>}
             </div>
           )}
-        </TabsContent>
+        </Panel>
+      )}
 
-        <TabsContent value="invoices" className="space-y-6">
-          <div className="grid gap-6 md:grid-cols-1 lg:grid-cols-2">
-            {invoices
-              .filter(invoice => 
-                (invoice.invoice_number || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-                (invoice.jobs?.title || '').toLowerCase().includes(searchTerm.toLowerCase())
-              )
-              .map((invoice) => (
-                <Card key={invoice.id} className="hover:shadow-md transition-shadow">
-                  <CardHeader className="pb-3">
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <CardTitle className="text-lg font-semibold">
-                          {invoice.invoice_number || `INV-${invoice.id.slice(-3)}`}
-                        </CardTitle>
-                        <p className="text-sm text-muted-foreground">
-                          Job: {invoice.jobs?.title || 'N/A'}
-                        </p>
+      <Panel title="Links issued" count={loading ? undefined : links.filter((l) => l.state === "active").length} description="Active links first">
+        {loading ? (
+          <div className="space-y-2 p-4 sm:p-5">
+            {[0, 1].map((i) => <div key={i} className="h-12 animate-pulse rounded-md bg-muted" />)}
+          </div>
+        ) : links.length === 0 ? (
+          <EmptyState compact icon={Link2} title="No portal links yet" description="Create one above to give a customer access." />
+        ) : (
+          <ul className="divide-y">
+            {[...links]
+              .sort((a, b) => Number(b.state === "active") - Number(a.state === "active"))
+              .map((l) => {
+                const badge = STATE_BADGE[l.state] || STATE_BADGE.expired;
+                return (
+                  <li key={l._id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:px-5">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium">{l.customerName}</span>
+                        <Badge variant={badge.variant}>{badge.label}</Badge>
                       </div>
-                      <Badge className={getStatusColor(invoice.status)}>
-                        {invoice.status}
-                      </Badge>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="text-sm">
-                      <span className="text-muted-foreground">Amount:</span>
-                      <p className="text-xl font-bold">₹{(invoice.total_amount || 0).toLocaleString()}</p>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <span className="text-muted-foreground">Issue Date:</span>
-                        <p className="font-medium">{new Date(invoice.created_at).toLocaleDateString()}</p>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">Due Date:</span>
-                        <p className="font-medium">
-                          {invoice.due_date ? new Date(invoice.due_date).toLocaleDateString() : 'Not set'}
-                        </p>
+                      <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                        <span>
+                          Created {format(new Date(l.createdAt), "d MMM yyyy")}
+                          {l.createdByName ? ` by ${l.createdByName}` : ""}
+                        </span>
+                        <span>
+                          {l.state === "revoked" && l.revokedAt
+                            ? `Revoked ${format(new Date(l.revokedAt), "d MMM yyyy")}`
+                            : `${l.state === "expired" ? "Expired" : "Expires"} ${format(new Date(l.expiresAt), "d MMM yyyy")}`}
+                        </span>
+                        <span>{l.lastUsedAt ? `Last opened ${formatDistanceToNow(new Date(l.lastUsedAt), { addSuffix: true })}` : "Not opened yet"}</span>
                       </div>
                     </div>
-
-                    {invoice.paid_date && (
-                      <div className="text-sm">
-                        <span className="text-muted-foreground">Paid Date:</span>
-                        <p className="font-medium text-success">
-                          {new Date(invoice.paid_date).toLocaleDateString()}
-                        </p>
-                      </div>
+                    {canManage && l.state === "active" && (
+                      <Button variant="outline" size="sm" onClick={() => revoke(l)}>
+                        <Ban />
+                        Revoke
+                      </Button>
                     )}
-
-                    <div className="flex gap-2">
-                      <Button variant="outline" size="sm" className="gap-2">
-                        <Eye className="h-3 w-3" />
-                        View Invoice
-                      </Button>
-                      <Button variant="outline" size="sm" className="gap-2">
-                        <Download className="h-3 w-3" />
-                        Download PDF
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-          </div>
-          {invoices.length === 0 && (
-            <div className="text-center py-12">
-              <Clock className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-              <h3 className="text-lg font-semibold mb-2">No invoices found</h3>
-              <p className="text-muted-foreground">You don't have any invoices yet.</p>
-            </div>
-          )}
-        </TabsContent>
-      </Tabs>
-
-      <FileUploadDialog
-        open={isUploadDialogOpen}
-        onOpenChange={setIsUploadDialogOpen}
-      />
+                  </li>
+                );
+              })}
+          </ul>
+        )}
+      </Panel>
     </div>
   );
 };

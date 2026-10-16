@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { STAGES } from "@/lib/printWorkflow";
 import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
 
@@ -15,11 +16,8 @@ interface UpdateStatusDialogProps {
   onStatusUpdated?: () => void;
 }
 
-const statusOptions = [
-  { value: "design_in_progress", label: "Work In Progress" },
-  { value: "completed", label: "Completed" },
-  // { value: "delivered", label: "Delivered" }
-];
+// Every stage of the print workflow, in shop-floor order.
+const statusOptions = STAGES.map((stage) => ({ value: stage.status, label: stage.label }));
 
 export function UpdateStatusDialog({
   jobId,

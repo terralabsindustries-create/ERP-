@@ -81,7 +81,7 @@ export function CommentDialog({ open, onOpenChange, task, onCommentAdded }: Comm
       console.error('Error adding comment:', error);
       toast({
         title: "Error",
-        description: error.response?.data?.message || "Failed to add comment",
+        description: error?.message || "Failed to add comment",
         variant: "destructive",
       });
     } finally {
@@ -120,7 +120,7 @@ export function CommentDialog({ open, onOpenChange, task, onCommentAdded }: Comm
             
             {loadingComments ? (
               <div className="flex items-center justify-center py-8">
-                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-900"></div>
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-foreground"></div>
                 <span className="ml-2 text-sm text-muted-foreground">Loading comments...</span>
               </div>
             ) : comments.length === 0 ? (
@@ -131,7 +131,7 @@ export function CommentDialog({ open, onOpenChange, task, onCommentAdded }: Comm
             ) : (
               <div className="space-y-3 max-h-60 overflow-y-auto">
                 {comments.map((comment, index) => (
-                  <div key={index} className="bg-gray-50 rounded-lg p-3 space-y-2">
+                  <div key={index} className="bg-muted/50 rounded-lg p-3 space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <User className="h-4 w-4 text-muted-foreground" />
@@ -144,7 +144,7 @@ export function CommentDialog({ open, onOpenChange, task, onCommentAdded }: Comm
                         {formatCommentDate(comment.createdAt)}
                       </div>
                     </div>
-                    <p className="text-sm text-gray-700 leading-relaxed">
+                    <p className="text-sm text-foreground/80 leading-relaxed">
                       {comment.text}
                     </p>
                   </div>

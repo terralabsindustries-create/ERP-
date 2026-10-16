@@ -1,5 +1,6 @@
 const express = require('express');
 const LeaveRequest = require('../models/LeaveRequest');
+const Employee = require('../models/Employee');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -44,6 +45,10 @@ router.post('/', async (req, res) => {
     const { employeeId, leaveType, fromDate, toDate, reason } = req.body;
     if (!employeeId || !fromDate || !toDate) {
       return res.status(400).json({ status: 'error', message: 'employeeId, fromDate and toDate are required' });
+    }
+    // The employee must belong to this business.
+    if (!(await Employee.exists(scopeFilter(req, { _id: employeeId })))) {
+      return res.status(404).json({ status: 'error', message: 'Employee not found' });
     }
 
     const data = {

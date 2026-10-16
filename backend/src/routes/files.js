@@ -1,11 +1,14 @@
 const express = require('express');
 const { body, query } = require('express-validator');
+const { validate } = require('../middleware/validate');
 const File = require('../models/File');
 const ActivityLog = require('../models/ActivityLog');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { protect } = require('../middleware/auth');
+
+const { orgUserFilter } = require('../utils/accessScope');
 
 const router = express.Router();
 
@@ -32,8 +35,11 @@ const upload = multer({
   fileFilter: (req, file, cb) => {
     // Allow common file types
     const allowedTypes = /jpeg|jpg|png|gif|pdf|doc|docx|xls|xlsx|ppt|pptx|txt|zip|rar|mp4|mp3|wav|avi|mov|psd|ai|eps|svg/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
+    const ext = path.extname(file.originalname).toLowerCase();
+    const extname = allowedTypes.test(ext);
+    // Design files (.ai, .eps, .psd) arrive with MIME types that don't name the extension.
+    const designFile = /^\.(ai|eps|psd)$/.test(ext) && /postscript|illustrator|photoshop|octet-stream|pdf/.test(file.mimetype);
+    const mimetype = allowedTypes.test(file.mimetype) || designFile;
 
     if (mimetype && extname) {
       return cb(null, true);
@@ -47,13 +53,13 @@ const upload = multer({
 // @desc    Get all files for the authenticated user
 // @access  Private
 router.get('/', protect, [
-  query('category').optional().isIn(['document', 'image', 'design', 'proof', 'final', 'reference', 'invoice', 'contract', 'other']),
-  query('entityType').optional().isIn(['customer', 'job', 'invoice', 'payment', 'inventory', 'vendor', 'staff', 'task', 'delivery', 'emergency_order', 'walk_in_job', 'proof', 'time_entry', 'event', 'discount_rule', 'customer_pricing', 'hsn_code', 'account_transaction', 'cheque', 'cost', 'user', 'system']),
-  query('entityId').optional().isMongoId(),
-  query('search').optional().trim(),
-  query('page').optional().isInt({ min: 1 }),
-  query('limit').optional().isInt({ min: 1, max: 100 })
-], async (req, res) => {
+  query('category').optional({ values: 'falsy' }).isIn(['all', 'document', 'image', 'design', 'proof', 'final', 'reference', 'invoice', 'contract', 'other']),
+  query('entityType').optional({ values: 'falsy' }).isIn(['all', 'customer', 'job', 'invoice', 'payment', 'inventory', 'vendor', 'staff', 'task', 'delivery', 'emergency_order', 'walk_in_job', 'proof', 'time_entry', 'event', 'discount_rule', 'customer_pricing', 'hsn_code', 'account_transaction', 'cheque', 'cost', 'user', 'system']),
+  query('entityId').optional({ values: 'falsy' }).isMongoId(),
+  query('search').optional({ values: 'falsy' }).trim(),
+  query('page').optional({ values: 'falsy' }).isInt({ min: 1 }),
+  query('limit').optional({ values: 'falsy' }).isInt({ min: 1, max: 100 })
+], validate, async (req, res) => {
   try {
     const {
       category,
@@ -67,7 +73,7 @@ router.get('/', protect, [
     } = req.query;
 
     // Build query - show all company files
-    const query = { status: { $ne: 'deleted' } };
+    const query = { status: { $ne: 'deleted' }, ...(await orgUserFilter(req.user)) };
 
     if (category && category !== 'all') {
       query.category = category;
@@ -131,7 +137,7 @@ router.get('/', protect, [
 // @access  Private
 router.get('/:id', protect, async (req, res) => {
   try {
-    const file = await File.findOne({ _id: req.params.id })
+    const file = await File.findOne({ _id: req.params.id, ...(await orgUserFilter(req.user)) })
       .populate('uploadedBy', 'name email');
 
     if (!file) {
@@ -162,15 +168,15 @@ router.get('/:id', protect, async (req, res) => {
 // @desc    Upload file
 // @access  Private
 router.post('/upload', protect, upload.single('file'), [
-  body('category').optional().isIn(['document', 'image', 'design', 'proof', 'final', 'reference', 'invoice', 'contract', 'other']),
-  body('description').optional().trim(),
-  body('entityType').optional().isIn(['customer', 'job', 'invoice', 'payment', 'inventory', 'vendor', 'staff', 'task', 'delivery', 'emergency_order', 'walk_in_job', 'proof', 'time_entry', 'event', 'discount_rule', 'customer_pricing', 'hsn_code', 'account_transaction', 'cheque', 'cost', 'user', 'system']),
-  body('entityId').optional().isMongoId(),
-  body('entityName').optional().trim(),
-  body('tags').optional().isArray(),
-  body('isPublic').optional().isBoolean(),
-  body('accessLevel').optional().isIn(['private', 'internal', 'public'])
-], async (req, res) => {
+  body('category').optional({ values: 'falsy' }).isIn(['document', 'image', 'design', 'proof', 'final', 'reference', 'invoice', 'contract', 'other']),
+  body('description').optional({ values: 'falsy' }).trim(),
+  body('entityType').optional({ values: 'falsy' }).isIn(['customer', 'job', 'invoice', 'payment', 'inventory', 'vendor', 'staff', 'task', 'delivery', 'emergency_order', 'walk_in_job', 'proof', 'time_entry', 'event', 'discount_rule', 'customer_pricing', 'hsn_code', 'account_transaction', 'cheque', 'cost', 'user', 'system']),
+  body('entityId').optional({ values: 'falsy' }).isMongoId(),
+  body('entityName').optional({ values: 'falsy' }).trim(),
+  body('tags').optional({ values: 'falsy' }).isArray(),
+  body('isPublic').optional({ values: 'falsy' }).isBoolean(),
+  body('accessLevel').optional({ values: 'falsy' }).isIn(['private', 'internal', 'public'])
+], validate, async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -252,17 +258,17 @@ router.post('/upload', protect, upload.single('file'), [
 // @desc    Update file metadata
 // @access  Private
 router.put('/:id', protect, [
-  body('description').optional().trim(),
-  body('category').optional().isIn(['document', 'image', 'design', 'proof', 'final', 'reference', 'invoice', 'contract', 'other']),
-  body('tags').optional().isArray(),
-  body('isPublic').optional().isBoolean(),
-  body('accessLevel').optional().isIn(['private', 'internal', 'public'])
-], async (req, res) => {
+  body('description').optional({ values: 'falsy' }).trim(),
+  body('category').optional({ values: 'falsy' }).isIn(['document', 'image', 'design', 'proof', 'final', 'reference', 'invoice', 'contract', 'other']),
+  body('tags').optional({ values: 'falsy' }).isArray(),
+  body('isPublic').optional({ values: 'falsy' }).isBoolean(),
+  body('accessLevel').optional({ values: 'falsy' }).isIn(['private', 'internal', 'public'])
+], validate, async (req, res) => {
   try {
     const { description, category, tags, isPublic, accessLevel } = req.body;
 
     const file = await File.findOneAndUpdate(
-      { _id: req.params.id },
+      { _id: req.params.id, ...(await orgUserFilter(req.user)) },
       { description, category, tags, isPublic, accessLevel },
       { new: true, runValidators: true }
     )
@@ -311,7 +317,7 @@ router.put('/:id', protect, [
 // @access  Private
 router.get('/:id/download', protect, async (req, res) => {
   try {
-    const file = await File.findOne({ _id: req.params.id });
+    const file = await File.findOne({ _id: req.params.id, ...(await orgUserFilter(req.user)) });
 
     if (!file) {
       return res.status(404).json({
@@ -328,8 +334,9 @@ router.get('/:id/download', protect, async (req, res) => {
       });
     }
 
-    // Increment download count
-    await file.incrementDownloadCount();
+    // ?view=1 is an on-screen preview (e.g. a proof image): not counted or logged as a download.
+    const preview = req.query.view === '1';
+    if (!preview) await file.incrementDownloadCount();
 
     const filePath = path.join(process.cwd(), file.fileUrl);
     
@@ -338,6 +345,11 @@ router.get('/:id/download', protect, async (req, res) => {
         status: 'error',
         message: 'File not found on server'
       });
+    }
+
+    if (preview) {
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.originalName)}"`);
+      return res.sendFile(filePath);
     }
 
     // Log activity
@@ -372,7 +384,7 @@ router.get('/:id/download', protect, async (req, res) => {
 // @access  Private
 router.delete('/:fileId', protect, async (req, res) => {
   try {
-    const file = await File.findOne({ _id: req.params.fileId });
+    const file = await File.findOne({ _id: req.params.fileId, ...(await orgUserFilter(req.user)) });
 
     if (!file) {
       return res.status(404).json({

@@ -105,6 +105,19 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  // The named role (models/AccessRole.js) this login's permissions come from.
+  // Empty means the permissions were set one by one ("Custom access").
+  accessRole: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'AccessRole',
+    default: null
+  },
+  // Kept with the login so the header and lists can show it without a lookup;
+  // updated when the role is renamed.
+  accessRoleName: {
+    type: String,
+    trim: true
+  },
   subscription: {
     isActive: {
       type: Boolean,
@@ -190,6 +203,8 @@ userSchema.methods.generateProfile = function () {
     dataScope: this.dataScope,
     permissions: this.permissions || [],
     canViewAllData: this.canViewAllData === true,
+    accessRole: this.accessRole || null,
+    accessRoleName: this.accessRoleName || null,
     isActive: this.isActive,
     status: this.status,
     invitationExpiresAt: this.invitation ? this.invitation.expiresAt : undefined,

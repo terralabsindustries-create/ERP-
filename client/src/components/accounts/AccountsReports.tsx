@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Download, TrendingUp, TrendingDown, DollarSign, CreditCard, Users, Receipt } from "lucide-react";
+import { Download, TrendingUp, TrendingDown, IndianRupee, CreditCard, Users, Receipt } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import apiClient from "@/lib/apiClient";
@@ -55,10 +55,7 @@ export function AccountsReports() {
 
   const fetchUsers = async () => {
     try {
-      const response = await apiClient.getUsers();
-      console.log('👥 Users response:', response);
-
-      const usersList = response?.users || response || [];
+      const usersList = await apiClient.listAll('/users', 'users');
       setUsers(usersList);
     } catch (error) {
       console.error('Error fetching users:', error);
@@ -173,7 +170,7 @@ export function AccountsReports() {
         <div className="flex items-center space-x-2">
           <Select value={selectedUserId} onValueChange={setSelectedUserId}>
             <SelectTrigger className="w-48">
-              <Users className="h-4 w-4 mr-2" />
+              <Users className="h-4 w-4" />
               <SelectValue placeholder="Filter by user" />
             </SelectTrigger>
             <SelectContent>
@@ -208,7 +205,7 @@ export function AccountsReports() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <TrendingUp className="h-4 w-4 text-green-500" />
+              <TrendingUp className="h-4 w-4 text-success" />
               Total Income
             </CardTitle>
           </CardHeader>
@@ -221,7 +218,7 @@ export function AccountsReports() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <TrendingDown className="h-4 w-4 text-red-500" />
+              <TrendingDown className="h-4 w-4 text-destructive" />
               Total Expenses
             </CardTitle>
           </CardHeader>
@@ -234,7 +231,7 @@ export function AccountsReports() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <DollarSign className="h-4 w-4 text-blue-500" />
+              <IndianRupee className="h-4 w-4 text-info" />
               Net Profit
             </CardTitle>
           </CardHeader>
@@ -281,20 +278,20 @@ export function AccountsReports() {
           <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
               <span className="text-sm font-medium">Income</span>
-              <span className="text-lg font-bold text-green-600">
+              <span className="text-lg font-bold text-success-strong">
                 ₹{reportData?.totalIncome.toLocaleString() || 0}
               </span>
                 </div>
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium">Expenses</span>
-              <span className="text-lg font-bold text-red-600">
+              <span className="text-lg font-bold text-destructive-strong">
                 ₹{reportData?.totalExpenses.toLocaleString() || 0}
               </span>
               </div>
             <div className="border-t pt-4">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium">Net Profit</span>
-                <span className="text-xl font-bold text-blue-600">
+                <span className="text-xl font-bold text-info-strong">
                   ₹{reportData?.netProfit.toLocaleString() || 0}
                 </span>
               </div>
@@ -322,12 +319,12 @@ export function AccountsReports() {
               <table className="w-full">
                 <thead>
                   <tr className="border-b">
-                    <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Transaction Date</th>
-                    <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Transaction #</th>
-                    <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Description</th>
-                    <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Category</th>
-                    <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">Type</th>
-                    <th className="text-right py-3 px-4 text-sm font-medium text-muted-foreground">Amount</th>
+                    <th className="text-left py-3 px-4">Transaction Date</th>
+                    <th className="text-left py-3 px-4">Transaction #</th>
+                    <th className="text-left py-3 px-4">Description</th>
+                    <th className="text-left py-3 px-4">Category</th>
+                    <th className="text-left py-3 px-4">Type</th>
+                    <th className="text-right py-3 px-4">Amount</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -337,7 +334,7 @@ export function AccountsReports() {
                         {new Date(transaction.createdAt).toLocaleDateString()}
                       </td>
                       <td className="py-3 px-4">
-                        <span className="text-sm font-medium text-blue-600">
+                        <span className="text-sm font-medium text-info-strong">
                           {transaction.transactionNumber}
                         </span>
                       </td>
@@ -353,7 +350,7 @@ export function AccountsReports() {
                       </td>
                       <td className="py-3 px-4 text-right">
                         <span className={`text-sm font-semibold ${
-                          transaction.transactionType === 'income' ? 'text-green-600' : 'text-red-600'
+                          transaction.transactionType === 'income' ? 'text-success-strong' : 'text-destructive-strong'
                         }`}>
                           {transaction.transactionType === 'income' ? '+' : '-'}₹{transaction.amount.toLocaleString()}
                         </span>

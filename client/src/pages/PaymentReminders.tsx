@@ -1,43 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
-import {
-  Bell,
-  Send,
-  SendHorizonal,
-  Clock,
-  AlertTriangle,
-  CheckCircle2,
-  XCircle,
-  IndianRupee,
-  Users,
-  FileText,
-  RefreshCw,
-  Settings,
-  MessageSquare,
-  Calendar,
-  Phone,
-  Search,
-  Filter,
-  ChevronLeft,
-  ChevronRight,
-  Loader2,
-  Save,
-} from "lucide-react";
+import { Send, SendHorizonal, CheckCircle2, RefreshCw, Settings, MessageSquare, Search, Filter, Loader2, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import {
   Select,
   SelectContent,
@@ -66,6 +34,11 @@ import {
 import apiClient from "@/lib/apiClient";
 import { getTemplateBodyText, getTemplateVariableNumbers } from "@/lib/whatsappTemplates";
 import { useToast } from "@/hooks/use-toast";
+import { EmptyState } from "@/components/common/EmptyState";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { PageShell } from "@/components/layout/PageShell";
+import { DataCard, DataTable, EntityCell, FilterSelect, MetricBar, Pagination, SearchField, Stack, StatusPill, Tag, Toolbar, ViewTabs, type Column, type PillTone } from "@/components/data";
+import { fmtDate, formatINR, plural } from "@/lib/format";
 
 interface OverdueInvoice {
   _id: string;
@@ -220,7 +193,7 @@ export default function PaymentReminders() {
       const waResponse: any = await apiClient.getWhatsAppSettings();
       if (waResponse?.settings?.enabled) {
         setMetaIntegrationEnabled(true);
-        if (waResponse.settings.wabaId && waResponse.settings.accessToken) {
+        if (waResponse.settings.wabaId && waResponse.settings.hasAccessToken) {
           try {
             const tmplResponse: any = await apiClient.getMetaTemplates();
             if (tmplResponse?.templates) {
@@ -357,81 +330,19 @@ export default function PaymentReminders() {
     setPreviewDialogOpen(true);
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat("en-IN", {
-      style: "currency",
-      currency: "INR",
-      maximumFractionDigits: 0,
-    }).format(amount);
-  };
+  const formatCurrency = (amount: number) => formatINR(Math.round(amount || 0));
+  const formatDate = (date: string) => fmtDate(date, "N/A");
+  const formatDateTime = (date: string) =>
+    date ? new Date(date).toLocaleString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "N/A";
 
-  const formatDate = (date: string) => {
-    if (!date) return "N/A";
-    return new Date(date).toLocaleDateString("en-IN", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    });
+  const REMINDER_STATUS: Record<string, { label: string; tone: PillTone }> = {
+    sent: { label: "Sent", tone: "info" },
+    delivered: { label: "Delivered", tone: "success" },
+    failed: { label: "Failed", tone: "danger" },
+    pending: { label: "Pending", tone: "warning" }
   };
+  const REMINDER_TYPE: Record<string, string> = { overdue: "Overdue", partial: "Part paid", manual: "Manual" };
 
-  const formatDateTime = (date: string) => {
-    if (!date) return "N/A";
-    return new Date(date).toLocaleString("en-IN", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
-
-  const getStatusBadge = (status: string, failureReason?: string) => {
-    switch (status) {
-      case "sent":
-        return <Badge className="bg-blue-500/10 text-blue-600 border-blue-500/20 hover:bg-blue-500/20"><Send className="h-3 w-3 mr-1" />Sent</Badge>;
-      case "delivered":
-        return <Badge className="bg-green-500/10 text-green-600 border-green-500/20 hover:bg-green-500/20"><CheckCircle2 className="h-3 w-3 mr-1" />Delivered</Badge>;
-      case "failed":
-        return (
-          <Badge
-            className="bg-red-500/10 text-red-600 border-red-500/20 hover:bg-red-500/20 cursor-help"
-            title={failureReason || "WhatsApp API error"}
-          >
-            <XCircle className="h-3 w-3 mr-1" />Failed
-          </Badge>
-        );
-      case "pending":
-        return <Badge className="bg-yellow-500/10 text-yellow-600 border-yellow-500/20 hover:bg-yellow-500/20"><Clock className="h-3 w-3 mr-1" />Pending</Badge>;
-      default:
-        return <Badge variant="secondary">{status}</Badge>;
-    }
-  };
-
-  const getPaymentStatusBadge = (status: string) => {
-    switch (status) {
-      case "overdue":
-        return <Badge className="bg-red-500/10 text-red-600 border-red-500/20"><AlertTriangle className="h-3 w-3 mr-1" />Overdue</Badge>;
-      case "partial":
-        return <Badge className="bg-orange-500/10 text-orange-600 border-orange-500/20"><Clock className="h-3 w-3 mr-1" />Partial</Badge>;
-      case "pending":
-        return <Badge className="bg-yellow-500/10 text-yellow-600 border-yellow-500/20"><Clock className="h-3 w-3 mr-1" />Pending</Badge>;
-      default:
-        return <Badge variant="secondary">{status}</Badge>;
-    }
-  };
-
-  const getReminderTypeBadge = (type: string) => {
-    switch (type) {
-      case "overdue":
-        return <Badge variant="destructive" className="text-xs">Overdue</Badge>;
-      case "partial":
-        return <Badge className="bg-orange-500 text-white text-xs">Partial</Badge>;
-      case "manual":
-        return <Badge variant="secondary" className="text-xs">Manual</Badge>;
-      default:
-        return <Badge variant="outline" className="text-xs">{type}</Badge>;
-    }
-  };
 
   // Filter overdue invoices by search
   const filteredInvoices = overdueInvoices.filter((inv) => {
@@ -446,680 +357,511 @@ export default function PaymentReminders() {
 
   const eligibleCount = overdueInvoices.filter((i) => i.canSendReminder).length;
 
-  if (loading) {
-    return (
-      <div className="flex-1 flex items-center justify-center p-6">
-        <div className="flex flex-col items-center gap-3">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          <p className="text-muted-foreground">Loading payment reminders...</p>
-        </div>
-      </div>
-    );
-  }
+  const sendLabel = (inv: OverdueInvoice) =>
+    inv.maxRemindersReached ? "Limit reached" : !inv.customerPhone ? "No phone" : inv.canSendReminder ? "Send" : "Wait";
+
+  const overdueColumns: Column<OverdueInvoice>[] = [
+    {
+      id: "customer",
+      header: "Customer",
+      cell: (i) => <EntityCell avatar={i.customerName} title={i.customerName} subtitle={i.customerPhone || "No phone number"} />,
+      sortValue: (i) => i.customerName.toLowerCase(),
+      className: "min-w-[210px]"
+    },
+    { id: "invoice", header: "Invoice", cell: (i) => <span className="font-mono text-[13px]">{i.invoiceNumber}</span>, sortValue: (i) => i.invoiceNumber },
+    {
+      id: "due",
+      header: "Due",
+      cell: (i) => (
+        <Stack
+          top={<span className="whitespace-nowrap">{formatDate(i.dueDate)}</span>}
+          bottom={<span className={i.daysOverdue > 30 ? "font-medium text-destructive-strong" : "text-destructive-strong"}>{plural(i.daysOverdue, "day")} overdue</span>}
+        />
+      ),
+      sortValue: (i) => i.daysOverdue,
+      hideBelow: "md"
+    },
+    { id: "total", header: "Invoice total", align: "right", cell: (i) => formatCurrency(i.totalAmount), sortValue: (i) => i.totalAmount, hideBelow: "lg" },
+    { id: "balance", header: "Balance", align: "right", cell: (i) => <span className="font-semibold text-destructive-strong">{formatCurrency(i.balanceAmount)}</span>, sortValue: (i) => i.balanceAmount },
+    {
+      id: "reminders",
+      header: "Reminders",
+      cell: (i) => <Stack top={plural(i.reminderCount, "sent", "sent")} bottom={i.lastReminderDate ? `Last ${formatDate(i.lastReminderDate)}` : undefined} />,
+      sortValue: (i) => i.reminderCount,
+      hideBelow: "lg"
+    },
+    {
+      id: "send",
+      header: <span className="sr-only">Send</span>,
+      align: "right",
+      cell: (i) => (
+        <Button
+          size="xs"
+          variant={i.canSendReminder && i.customerPhone ? "default" : "outline"}
+          disabled={!i.canSendReminder || sendingId === i._id || !i.customerPhone}
+          onClick={() => openSendDialog(i)}
+          title={!i.canSendReminder && !i.maxRemindersReached && i.customerPhone ? "Too soon since the last reminder" : undefined}
+        >
+          {sendingId === i._id ? <Loader2 className="animate-spin" /> : <Send />}
+          {sendLabel(i)}
+        </Button>
+      ),
+      className: "w-[120px]"
+    }
+  ];
+
+  const historyColumns: Column<Reminder>[] = [
+    { id: "at", header: "Sent", cell: (r) => <span className="whitespace-nowrap">{formatDateTime(r.sentAt || r.createdAt)}</span>, className: "w-[170px]" },
+    { id: "customer", header: "Customer", cell: (r) => <EntityCell avatar={r.customerName} title={r.customerName} subtitle={r.customerPhone} /> },
+    { id: "invoice", header: "Invoice", cell: (r) => <span className="font-mono text-[13px]">{r.invoiceNumber}</span>, hideBelow: "md" },
+    { id: "type", header: "Type", cell: (r) => <Tag>{REMINDER_TYPE[r.reminderType] || r.reminderType}</Tag>, hideBelow: "lg" },
+    { id: "balance", header: "Balance", align: "right", cell: (r) => formatCurrency(r.balanceAmount), hideBelow: "lg" },
+    { id: "count", header: "No.", align: "right", cell: (r) => `#${r.reminderCount}`, hideBelow: "xl" },
+    {
+      id: "status",
+      header: "Status",
+      cell: (r) => {
+        const st = REMINDER_STATUS[r.status] || { label: r.status, tone: "neutral" as PillTone };
+        return (
+          <div className="flex flex-col items-start gap-0.5">
+            <StatusPill tone={st.tone}>{st.label}</StatusPill>
+            {r.status === "failed" && r.failureReason && <span className="max-w-[220px] text-xs text-destructive-strong">{r.failureReason}</span>}
+          </div>
+        );
+      },
+      className: "w-[150px]"
+    }
+  ];
+
+  const refreshAll = async () => {
+    setLoading(true);
+    await Promise.all([fetchStats(), fetchOverdueInvoices(), fetchReminders(historyPage)]);
+    setLoading(false);
+  };
 
   return (
-    <div className="flex-1 space-y-6 p-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
-            <Bell className="h-8 w-8 text-orange-500" />
-            Payment Reminders
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Auto-detect overdue invoices and send WhatsApp reminders to customers
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            className="gap-2"
-            onClick={async () => {
-              setLoading(true);
-              await Promise.all([fetchStats(), fetchOverdueInvoices(), fetchReminders(historyPage)]);
-              setLoading(false);
-            }}
+    <PageShell>
+      <PageHeader
+        eyebrow="Billing & finance"
+        title="Payment reminders"
+        description="Invoices past their due date, and the WhatsApp reminders sent to collect them."
+        actions={
+          <>
+            <Button variant="outline" onClick={refreshAll} disabled={loading}>
+              <RefreshCw className={loading ? "animate-spin" : undefined} />
+              Refresh
+            </Button>
+            <Button onClick={() => setBulkConfirmOpen(true)} disabled={sendingBulk || eligibleCount === 0}>
+              {sendingBulk ? <Loader2 className="animate-spin" /> : <SendHorizonal />}
+              Send all ({eligibleCount})
+            </Button>
+          </>
+        }
+      />
+
+      <MetricBar
+        loading={loading}
+        metrics={[
+          { label: "Overdue invoices", value: stats.overdueInvoices, hint: "Past the due date", tone: stats.overdueInvoices > 0 ? "danger" : "success" },
+          { label: "Outstanding", value: formatINR(stats.totalOutstanding, { compact: stats.totalOutstanding >= 1e5 }), hint: "Owed on those invoices", tone: stats.totalOutstanding > 0 ? "warning" : "default" },
+          { label: "Customers to remind", value: stats.customersNeedingReminder, hint: `${plural(eligibleCount, "reminder")} ready to send`, tone: "info" },
+          { label: "Sent today", value: stats.sentToday, hint: `${stats.totalSent} all time`, tone: "success" }
+        ]}
+      />
+
+      <div className="space-y-4">
+        <ViewTabs
+          value={activeTab}
+          onChange={setActiveTab}
+          tabs={[
+            { value: "overdue", label: "Overdue invoices", count: overdueInvoices.length, tone: "danger" },
+            { value: "history", label: "Reminder history", count: historyTotal },
+            { value: "settings", label: "Settings", icon: Settings }
+          ]}
+        />
+
+        {activeTab === "overdue" && (
+          <DataCard
+            toolbar={<Toolbar search={<SearchField value={searchQuery} onChange={setSearchQuery} placeholder="Search customer, invoice or phone" />} />}
+            footer={!loading && filteredInvoices.length > 0 && `${plural(filteredInvoices.length, "invoice")} · ${eligibleCount} can be reminded now`}
           >
-            <RefreshCw className="h-4 w-4" />
-            Refresh
-          </Button>
-          <Button
-            className="gap-2 bg-green-600 hover:bg-green-700"
-            onClick={() => setBulkConfirmOpen(true)}
-            disabled={sendingBulk || eligibleCount === 0}
+            <DataTable
+              columns={overdueColumns}
+              rows={filteredInvoices}
+              rowKey={(i) => i._id}
+              loading={loading}
+              defaultSort={{ id: "due", dir: "desc" }}
+              rowClassName={(i) => (i.daysOverdue > 30 ? "bg-destructive-soft/30" : undefined)}
+              mobile={(i) => (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="truncate font-medium">{i.customerName}</span>
+                    <span className="num font-semibold text-destructive-strong">{formatCurrency(i.balanceAmount)}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                    <span>
+                      <span className="font-mono">{i.invoiceNumber}</span> · {plural(i.daysOverdue, "day")} overdue
+                    </span>
+                    <Button size="xs" disabled={!i.canSendReminder || !i.customerPhone || sendingId === i._id} onClick={() => openSendDialog(i)}>
+                      <Send />
+                      {sendLabel(i)}
+                    </Button>
+                  </div>
+                </div>
+              )}
+              empty={
+                <EmptyState
+                  tone="success"
+                  icon={CheckCircle2}
+                  title={searchQuery ? "No overdue invoices match" : "All clear"}
+                  description={searchQuery ? undefined : "No invoice is past its due date. Every payment is on time."}
+                />
+              }
+            />
+          </DataCard>
+        )}
+
+        {activeTab === "history" && (
+          <DataCard
+            toolbar={
+              <Toolbar>
+                <FilterSelect
+                  label="Status"
+                  value={statusFilter}
+                  onChange={(v) => {
+                    setStatusFilter(v);
+                    setHistoryPage(1);
+                  }}
+                  options={[
+                    { value: "sent", label: "Sent" },
+                    { value: "delivered", label: "Delivered" },
+                    { value: "failed", label: "Failed" },
+                    { value: "pending", label: "Pending" }
+                  ]}
+                />
+              </Toolbar>
+            }
+            footer={historyTotal > 0 && <Pagination page={historyPage} pageSize={20} total={historyTotal} onPageChange={setHistoryPage} noun="reminders" />}
           >
-            {sendingBulk ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <SendHorizonal className="h-4 w-4" />
-            )}
-            Send All Reminders ({eligibleCount})
-          </Button>
-        </div>
-      </div>
+            <DataTable
+              columns={historyColumns}
+              rows={reminders}
+              rowKey={(r) => r._id}
+              loading={loading}
+              mobile={(r) => {
+                const st = REMINDER_STATUS[r.status] || { label: r.status, tone: "neutral" as PillTone };
+                return (
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="truncate font-medium">{r.customerName}</span>
+                      <StatusPill tone={st.tone}>{st.label}</StatusPill>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {formatDateTime(r.sentAt || r.createdAt)} · <span className="font-mono">{r.invoiceNumber}</span> · #{r.reminderCount}
+                    </div>
+                  </div>
+                );
+              }}
+              empty={<EmptyState compact icon={MessageSquare} title="No reminders yet" description="Reminders appear here once you start sending them." />}
+            />
+          </DataCard>
+        )}
 
-      {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card className="border-l-4 border-l-red-500">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-red-500" />
-              Overdue Invoices
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold text-red-600">{stats.overdueInvoices}</div>
-            <p className="text-xs text-muted-foreground mt-1">invoices past due date</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-l-4 border-l-orange-500">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <IndianRupee className="h-4 w-4 text-orange-500" />
-              Total Outstanding
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold text-orange-600">{formatCurrency(stats.totalOutstanding)}</div>
-            <p className="text-xs text-muted-foreground mt-1">pending collection</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-l-4 border-l-blue-500">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <Users className="h-4 w-4 text-blue-500" />
-              Customers to Remind
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold text-blue-600">{stats.customersNeedingReminder}</div>
-            <p className="text-xs text-muted-foreground mt-1">unique customers</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-l-4 border-l-green-500">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <MessageSquare className="h-4 w-4 text-green-500" />
-              Reminders Sent Today
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold text-green-600">{stats.sentToday}</div>
-            <p className="text-xs text-muted-foreground mt-1">{stats.totalSent} total all time</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Main Content Tabs */}
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-        <TabsList className="grid w-full grid-cols-3 max-w-lg">
-          <TabsTrigger value="overdue" className="gap-2">
-            <AlertTriangle className="h-4 w-4" />
-            Overdue Invoices
-          </TabsTrigger>
-          <TabsTrigger value="history" className="gap-2">
-            <Clock className="h-4 w-4" />
-            Reminder History
-          </TabsTrigger>
-          <TabsTrigger value="settings" className="gap-2">
-            <Settings className="h-4 w-4" />
-            Settings
-          </TabsTrigger>
-        </TabsList>
-
-        {/* ===== OVERDUE INVOICES TAB ===== */}
-        <TabsContent value="overdue" className="space-y-4">
+        {activeTab === "settings" && (
+        <div className="grid gap-6 md:grid-cols-2">
+          {/* General Settings */}
           <Card>
             <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Settings className="h-5 w-5" />
+                Reminder Configuration
+              </CardTitle>
+              <CardDescription>
+                Configure when and how reminders are sent
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
               <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle className="flex items-center gap-2">
-                    <FileText className="h-5 w-5" />
-                    Overdue & Unpaid Invoices
-                  </CardTitle>
-                  <CardDescription className="mt-1">
-                    {overdueInvoices.length} invoices found · {eligibleCount} eligible for reminder
-                  </CardDescription>
+                <div className="space-y-0.5">
+                  <Label className="text-base">Enable Reminders</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Allow sending payment reminders via WhatsApp
+                  </p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <div className="relative">
-                    <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      placeholder="Search customer or invoice..."
-                      className="pl-9 w-[250px]"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
+                <Switch
+                  checked={settings.enabled}
+                  onCheckedChange={(checked) =>
+                    setSettings((prev) => ({ ...prev, enabled: checked }))
+                  }
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-base">Auto-Send</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Automatically send reminders every hour
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.autoSend}
+                  onCheckedChange={(checked) =>
+                    setSettings((prev) => ({ ...prev, autoSend: checked }))
+                  }
+                  disabled={!settings.enabled}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Days After Due Date</Label>
+                <p className="text-xs text-muted-foreground mb-1">
+                  Send first reminder X days after the invoice due date
+                </p>
+                <Input
+                  type="number"
+                  min={0}
+                  max={30}
+                  value={settings.daysAfterDue}
+                  onChange={(e) =>
+                    setSettings((prev) => ({ ...prev, daysAfterDue: parseInt(e.target.value) || 0 }))
+                  }
+                  disabled={!settings.enabled}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Reminder Interval (Days)</Label>
+                <p className="text-xs text-muted-foreground mb-1">
+                  Wait X days between each follow-up reminder
+                </p>
+                <Input
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={settings.reminderInterval}
+                  onChange={(e) =>
+                    setSettings((prev) => ({ ...prev, reminderInterval: parseInt(e.target.value) || 1 }))
+                  }
+                  disabled={!settings.enabled}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Maximum Reminders Per Invoice</Label>
+                <p className="text-xs text-muted-foreground mb-1">
+                  Stop sending after X reminders for the same invoice
+                </p>
+                <Input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={settings.maxReminders}
+                  onChange={(e) =>
+                    setSettings((prev) => ({ ...prev, maxReminders: parseInt(e.target.value) || 1 }))
+                  }
+                  disabled={!settings.enabled}
+                />
+              </div>
+
+              <Button
+                className="w-full gap-2"
+                onClick={handleSaveSettings}
+                disabled={savingSettings}
+              >
+                {savingSettings ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="h-4 w-4" />
+                )}
+                Save Settings
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* Message Template */}
+          {/* Message Template */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <MessageSquare className="h-5 w-5" />
+                Message Template
+              </CardTitle>
+              <CardDescription>
+                Customize the WhatsApp message sent to customers
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+            
+              {metaIntegrationEnabled ? (
+                <div className="space-y-4 border rounded-lg p-4 bg-muted/20">
+                  <div className="space-y-2">
+                    <Label>Select Meta Template</Label>
+                    <Select 
+                      disabled={!settings.enabled}
+                      value={settings.metaTemplateName || "none"}
+                      onValueChange={(val) => {
+                        setSettings(prev => ({ 
+                          ...prev, 
+                          metaTemplateName: val === "none" ? "" : val,
+                          templateVariableMapping: {} 
+                        }));
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Choose an approved template" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">-- Use Free Text (No Meta Template) --</SelectItem>
+                        {metaTemplates.filter(t => t.status === 'APPROVED').map(t => (
+                          <SelectItem key={t.name} value={t.name}>{t.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Only APPROVED templates from your Meta account are shown. 
+                      Go to the WhatsApp tab to manage templates.
+                    </p>
+                  </div>
+
+                  {settings.metaTemplateName && (() => {
+                    const selectedTemplateObj = metaTemplates.find(t => t.name === settings.metaTemplateName);
+                    const bodyText = getTemplateBodyText(selectedTemplateObj);
+                    const detected = getTemplateVariableNumbers(selectedTemplateObj);
+                    // Fall back to a 5-slot grid only if we couldn't read the template's real structure
+                    const varNumbers = selectedTemplateObj ? detected : [1, 2, 3, 4, 5];
+
+                    return (
+                      <div className="space-y-3 mt-4 border-t pt-4">
+                        <Label>Variable Mapping</Label>
+                        {bodyText && (
+                          <p className="text-xs bg-muted rounded p-2 font-mono whitespace-pre-wrap">{bodyText}</p>
+                        )}
+                        {varNumbers.length === 0 ? (
+                          <p className="text-xs text-muted-foreground">This template has no variables — nothing to map.</p>
+                        ) : (
+                          <>
+                            <p className="text-xs text-muted-foreground">
+                              Map your ERP data to each variable. Meta rejects the message if the count doesn't match exactly, so every slot below must be filled.
+                            </p>
+                            {varNumbers.map(num => (
+                              <div key={num} className="flex items-center gap-4">
+                                <span className="text-sm font-mono bg-muted px-2 py-1 rounded w-16 text-center">{`{{${num}}}`}</span>
+                                <Select
+                                  disabled={!settings.enabled}
+                                  value={settings.templateVariableMapping?.[num.toString()] || ""}
+                                  onValueChange={(val) => {
+                                    setSettings(prev => ({
+                                      ...prev,
+                                      templateVariableMapping: {
+                                        ...(prev.templateVariableMapping || {}),
+                                        [num.toString()]: val
+                                      }
+                                    }));
+                                  }}
+                                >
+                                  <SelectTrigger className="flex-1">
+                                    <SelectValue placeholder={`Select data for {{${num}}}`} />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="customerName">Customer Name</SelectItem>
+                                    <SelectItem value="invoiceNumber">Invoice Number</SelectItem>
+                                    <SelectItem value="totalAmount">Total Amount</SelectItem>
+                                    <SelectItem value="balanceAmount">Balance Amount</SelectItem>
+                                    <SelectItem value="dueDate">Due Date</SelectItem>
+                                    <SelectItem value="daysOverdue">Days Overdue</SelectItem>
+                                    <SelectItem value="businessName">Business Name</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            ))}
+                          </>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+              ) : (
+                <div className="bg-warning-soft border border-warning/30 text-warning-strong p-3 rounded text-sm mb-4">
+                  WhatsApp isn't connected yet, so reminders can't be sent. Connect it on the WhatsApp page. Note: a free-text message only reaches customers who wrote to you in the last 24 hours — use an approved Meta template for everyone else.
+                </div>
+              )}
+
+              {!settings.metaTemplateName && (
+                <>
+                  <div className="space-y-2">
+                    <Label>Free Text Message Template</Label>
+                    <Textarea
+                      value={settings.messageTemplate}
+                      onChange={(e) =>
+                        setSettings((prev) => ({ ...prev, messageTemplate: e.target.value }))
+                      }
+                      rows={6}
+                      placeholder="Enter your reminder message template..."
+                      disabled={!settings.enabled}
                     />
                   </div>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {filteredInvoices.length === 0 ? (
-                <div className="text-center py-12">
-                  <CheckCircle2 className="h-12 w-12 text-green-500 mx-auto mb-4" />
-                  <h3 className="text-lg font-semibold mb-2">All Clear!</h3>
-                  <p className="text-muted-foreground">
-                    No overdue invoices found. All payments are up to date.
-                  </p>
-                </div>
-              ) : (
-                <div className="rounded-md border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Customer</TableHead>
-                        <TableHead>Invoice</TableHead>
-                        <TableHead className="text-right">Total</TableHead>
-                        <TableHead className="text-right">Balance</TableHead>
-                        <TableHead>Due Date</TableHead>
-                        <TableHead className="text-center">Overdue</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead className="text-center">Reminders</TableHead>
-                        <TableHead className="text-right">Action</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredInvoices.map((invoice) => (
-                        <TableRow key={invoice._id} className={invoice.daysOverdue > 30 ? "bg-red-50/50 dark:bg-red-950/10" : ""}>
-                          <TableCell>
-                            <div>
-                              <p className="font-medium">{invoice.customerName}</p>
-                              <p className="text-xs text-muted-foreground flex items-center gap-1">
-                                <Phone className="h-3 w-3" />
-                                {invoice.customerPhone || "No phone"}
-                              </p>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <span className="font-mono text-sm">{invoice.invoiceNumber}</span>
-                          </TableCell>
-                          <TableCell className="text-right font-medium">
-                            {formatCurrency(invoice.totalAmount)}
-                          </TableCell>
-                          <TableCell className="text-right font-bold text-red-600">
-                            {formatCurrency(invoice.balanceAmount)}
-                          </TableCell>
-                          <TableCell>
-                            <span className="text-sm">{formatDate(invoice.dueDate)}</span>
-                          </TableCell>
-                          <TableCell className="text-center">
-                            <Badge
-                              variant={invoice.daysOverdue > 30 ? "destructive" : invoice.daysOverdue > 7 ? "default" : "secondary"}
-                              className="font-mono"
-                            >
-                              {invoice.daysOverdue}d
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            {getPaymentStatusBadge(invoice.paymentStatus)}
-                          </TableCell>
-                          <TableCell className="text-center">
-                            <div className="flex flex-col items-center gap-1">
-                              <span className="text-sm font-medium">{invoice.reminderCount}</span>
-                              {invoice.lastReminderDate && (
-                                <span className="text-xs text-muted-foreground">
-                                  Last: {formatDate(invoice.lastReminderDate)}
-                                </span>
-                              )}
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Button
-                              size="sm"
-                              variant={invoice.canSendReminder ? "default" : "outline"}
-                              className="gap-1"
-                              disabled={!invoice.canSendReminder || sendingId === invoice._id || !invoice.customerPhone}
-                              onClick={() => openSendDialog(invoice)}
-                            >
-                              {sendingId === invoice._id ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : (
-                                <Send className="h-3 w-3" />
-                              )}
-                              {invoice.maxRemindersReached
-                                ? "Max Reached"
-                                : !invoice.customerPhone
-                                ? "No Phone"
-                                : invoice.canSendReminder
-                                ? "Send"
-                                : "Wait"}
-                            </Button>
-                          </TableCell>
-                        </TableRow>
+
+                  <div className="rounded-lg bg-muted p-4 space-y-2">
+                    <p className="text-sm font-medium">Available Variables:</p>
+                    <div className="grid grid-cols-2 gap-1">
+                      {[
+                        { var: "{{customerName}}", desc: "Customer name" },
+                        { var: "{{invoiceNumber}}", desc: "Invoice number" },
+                        { var: "{{totalAmount}}", desc: "Invoice total" },
+                        { var: "{{balanceAmount}}", desc: "Balance due" },
+                        { var: "{{dueDate}}", desc: "Due date" },
+                        { var: "{{daysOverdue}}", desc: "Days overdue" },
+                        { var: "{{businessName}}", desc: "Your company name" },
+                      ].map((v) => (
+                        <div key={v.var} className="flex items-center gap-2">
+                          <code className="text-xs bg-background px-1.5 py-0.5 rounded border font-mono">
+                            {v.var}
+                          </code>
+                          <span className="text-xs text-muted-foreground">{v.desc}</span>
+                        </div>
                       ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* ===== REMINDER HISTORY TAB ===== */}
-        <TabsContent value="history" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle className="flex items-center gap-2">
-                    <Clock className="h-5 w-5" />
-                    Reminder History
-                  </CardTitle>
-                  <CardDescription>
-                    {historyTotal} reminders sent in total
-                  </CardDescription>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setHistoryPage(1); }}>
-                    <SelectTrigger className="w-[140px]">
-                      <Filter className="h-4 w-4 mr-2" />
-                      <SelectValue placeholder="Filter status" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Status</SelectItem>
-                      <SelectItem value="sent">Sent</SelectItem>
-                      <SelectItem value="delivered">Delivered</SelectItem>
-                      <SelectItem value="failed">Failed</SelectItem>
-                      <SelectItem value="pending">Pending</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {reminders.length === 0 ? (
-                <div className="text-center py-12">
-                  <MessageSquare className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                  <h3 className="text-lg font-semibold mb-2">No Reminders Yet</h3>
-                  <p className="text-muted-foreground">
-                    Reminders will appear here once you start sending them.
-                  </p>
-                </div>
-              ) : (
-                <>
-                  <div className="rounded-md border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Date & Time</TableHead>
-                          <TableHead>Customer</TableHead>
-                          <TableHead>Invoice</TableHead>
-                          <TableHead>Type</TableHead>
-                          <TableHead className="text-right">Balance</TableHead>
-                          <TableHead className="text-center">Overdue</TableHead>
-                          <TableHead className="text-center">#</TableHead>
-                          <TableHead>Status</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {reminders.map((reminder) => (
-                          <TableRow key={reminder._id}>
-                            <TableCell>
-                              <span className="text-sm">{formatDateTime(reminder.sentAt || reminder.createdAt)}</span>
-                            </TableCell>
-                            <TableCell>
-                              <div>
-                                <p className="font-medium">{reminder.customerName}</p>
-                                <p className="text-xs text-muted-foreground">{reminder.customerPhone}</p>
-                              </div>
-                            </TableCell>
-                            <TableCell>
-                              <span className="font-mono text-sm">{reminder.invoiceNumber}</span>
-                            </TableCell>
-                            <TableCell>{getReminderTypeBadge(reminder.reminderType)}</TableCell>
-                            <TableCell className="text-right font-medium text-red-600">
-                              {formatCurrency(reminder.balanceAmount)}
-                            </TableCell>
-                            <TableCell className="text-center">
-                              <Badge variant="outline" className="font-mono">{reminder.daysOverdue}d</Badge>
-                            </TableCell>
-                            <TableCell className="text-center">
-                              <span className="text-sm font-medium">#{reminder.reminderCount}</span>
-                            </TableCell>
-                            <TableCell>
-                              {getStatusBadge(reminder.status, reminder.failureReason)}
-                              {reminder.status === "failed" && reminder.failureReason && (
-                                <p className="text-xs text-red-500 mt-1 max-w-[220px]">{reminder.failureReason}</p>
-                              )}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-
-                  {/* Pagination */}
-                  {historyTotal > 20 && (
-                    <div className="flex items-center justify-between mt-4">
-                      <p className="text-sm text-muted-foreground">
-                        Showing {(historyPage - 1) * 20 + 1}–{Math.min(historyPage * 20, historyTotal)} of {historyTotal}
-                      </p>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={historyPage === 1}
-                          onClick={() => setHistoryPage((p) => p - 1)}
-                        >
-                          <ChevronLeft className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={historyPage * 20 >= historyTotal}
-                          onClick={() => setHistoryPage((p) => p + 1)}
-                        >
-                          <ChevronRight className="h-4 w-4" />
-                        </Button>
-                      </div>
                     </div>
-                  )}
+                  </div>
                 </>
               )}
-            </CardContent>
-          </Card>
-        </TabsContent>
 
-        {/* ===== SETTINGS TAB ===== */}
-        <TabsContent value="settings" className="space-y-4">
-          <div className="grid gap-6 md:grid-cols-2">
-            {/* General Settings */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Settings className="h-5 w-5" />
-                  Reminder Configuration
-                </CardTitle>
-                <CardDescription>
-                  Configure when and how reminders are sent
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label className="text-base">Enable Reminders</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Allow sending payment reminders via WhatsApp
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.enabled}
-                    onCheckedChange={(checked) =>
-                      setSettings((prev) => ({ ...prev, enabled: checked }))
-                    }
-                  />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label className="text-base">Auto-Send</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Automatically send reminders every hour
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.autoSend}
-                    onCheckedChange={(checked) =>
-                      setSettings((prev) => ({ ...prev, autoSend: checked }))
-                    }
+              <div className="flex gap-2">
+                {!settings.metaTemplateName && (
+                  <Button
+                    variant="outline"
+                    className="flex-1 gap-2"
+                    onClick={handlePreviewMessage}
                     disabled={!settings.enabled}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Days After Due Date</Label>
-                  <p className="text-xs text-muted-foreground mb-1">
-                    Send first reminder X days after the invoice due date
-                  </p>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={30}
-                    value={settings.daysAfterDue}
-                    onChange={(e) =>
-                      setSettings((prev) => ({ ...prev, daysAfterDue: parseInt(e.target.value) || 0 }))
-                    }
-                    disabled={!settings.enabled}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Reminder Interval (Days)</Label>
-                  <p className="text-xs text-muted-foreground mb-1">
-                    Wait X days between each follow-up reminder
-                  </p>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={30}
-                    value={settings.reminderInterval}
-                    onChange={(e) =>
-                      setSettings((prev) => ({ ...prev, reminderInterval: parseInt(e.target.value) || 1 }))
-                    }
-                    disabled={!settings.enabled}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Maximum Reminders Per Invoice</Label>
-                  <p className="text-xs text-muted-foreground mb-1">
-                    Stop sending after X reminders for the same invoice
-                  </p>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={20}
-                    value={settings.maxReminders}
-                    onChange={(e) =>
-                      setSettings((prev) => ({ ...prev, maxReminders: parseInt(e.target.value) || 1 }))
-                    }
-                    disabled={!settings.enabled}
-                  />
-                </div>
-
+                  >
+                    <Send className="h-4 w-4" />
+                    Preview
+                  </Button>
+                )}
                 <Button
-                  className="w-full gap-2"
+                  className="flex-1 gap-2 bg-green-600 hover:bg-green-700"
                   onClick={handleSaveSettings}
                   disabled={savingSettings}
                 >
                   {savingSettings ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
-                    <CheckCircle2 className="h-4 w-4" />
+                    <Save className="h-4 w-4" />
                   )}
-                  Save Settings
+                  Save Template Config
                 </Button>
-              </CardContent>
-            </Card>
-
-            {/* Message Template */}
-            {/* Message Template */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <MessageSquare className="h-5 w-5" />
-                  Message Template
-                </CardTitle>
-                <CardDescription>
-                  Customize the WhatsApp message sent to customers
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                
-                {metaIntegrationEnabled ? (
-                  <div className="space-y-4 border rounded-lg p-4 bg-muted/20">
-                    <div className="space-y-2">
-                      <Label>Select Meta Template</Label>
-                      <Select 
-                        disabled={!settings.enabled}
-                        value={settings.metaTemplateName || "none"}
-                        onValueChange={(val) => {
-                          setSettings(prev => ({ 
-                            ...prev, 
-                            metaTemplateName: val === "none" ? "" : val,
-                            templateVariableMapping: {} 
-                          }));
-                        }}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Choose an approved template" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">-- Use Free Text (No Meta Template) --</SelectItem>
-                          {metaTemplates.filter(t => t.status === 'APPROVED').map(t => (
-                            <SelectItem key={t.name} value={t.name}>{t.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <p className="text-xs text-muted-foreground">
-                        Only APPROVED templates from your Meta account are shown. 
-                        Go to the WhatsApp tab to manage templates.
-                      </p>
-                    </div>
-
-                    {settings.metaTemplateName && (() => {
-                      const selectedTemplateObj = metaTemplates.find(t => t.name === settings.metaTemplateName);
-                      const bodyText = getTemplateBodyText(selectedTemplateObj);
-                      const detected = getTemplateVariableNumbers(selectedTemplateObj);
-                      // Fall back to a 5-slot grid only if we couldn't read the template's real structure
-                      const varNumbers = selectedTemplateObj ? detected : [1, 2, 3, 4, 5];
-
-                      return (
-                        <div className="space-y-3 mt-4 border-t pt-4">
-                          <Label>Variable Mapping</Label>
-                          {bodyText && (
-                            <p className="text-xs bg-muted rounded p-2 font-mono whitespace-pre-wrap">{bodyText}</p>
-                          )}
-                          {varNumbers.length === 0 ? (
-                            <p className="text-xs text-muted-foreground">This template has no variables — nothing to map.</p>
-                          ) : (
-                            <>
-                              <p className="text-xs text-muted-foreground">
-                                Map your ERP data to each variable. Meta rejects the message if the count doesn't match exactly, so every slot below must be filled.
-                              </p>
-                              {varNumbers.map(num => (
-                                <div key={num} className="flex items-center gap-4">
-                                  <span className="text-sm font-mono bg-muted px-2 py-1 rounded w-16 text-center">{`{{${num}}}`}</span>
-                                  <Select
-                                    disabled={!settings.enabled}
-                                    value={settings.templateVariableMapping?.[num.toString()] || ""}
-                                    onValueChange={(val) => {
-                                      setSettings(prev => ({
-                                        ...prev,
-                                        templateVariableMapping: {
-                                          ...(prev.templateVariableMapping || {}),
-                                          [num.toString()]: val
-                                        }
-                                      }));
-                                    }}
-                                  >
-                                    <SelectTrigger className="flex-1">
-                                      <SelectValue placeholder={`Select data for {{${num}}}`} />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      <SelectItem value="customerName">Customer Name</SelectItem>
-                                      <SelectItem value="invoiceNumber">Invoice Number</SelectItem>
-                                      <SelectItem value="totalAmount">Total Amount</SelectItem>
-                                      <SelectItem value="balanceAmount">Balance Amount</SelectItem>
-                                      <SelectItem value="dueDate">Due Date</SelectItem>
-                                      <SelectItem value="daysOverdue">Days Overdue</SelectItem>
-                                      <SelectItem value="businessName">Business Name</SelectItem>
-                                    </SelectContent>
-                                  </Select>
-                                </div>
-                              ))}
-                            </>
-                          )}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                ) : (
-                  <div className="bg-yellow-50/50 border border-yellow-200 text-yellow-800 p-3 rounded text-sm mb-4">
-                    Meta WhatsApp integration is disabled. You are using Free Text simulation mode.
-                  </div>
-                )}
-
-                {!settings.metaTemplateName && (
-                  <>
-                    <div className="space-y-2">
-                      <Label>Free Text Message Template</Label>
-                      <Textarea
-                        value={settings.messageTemplate}
-                        onChange={(e) =>
-                          setSettings((prev) => ({ ...prev, messageTemplate: e.target.value }))
-                        }
-                        rows={6}
-                        placeholder="Enter your reminder message template..."
-                        disabled={!settings.enabled}
-                      />
-                    </div>
-
-                    <div className="rounded-lg bg-muted p-4 space-y-2">
-                      <p className="text-sm font-medium">Available Variables:</p>
-                      <div className="grid grid-cols-2 gap-1">
-                        {[
-                          { var: "{{customerName}}", desc: "Customer name" },
-                          { var: "{{invoiceNumber}}", desc: "Invoice number" },
-                          { var: "{{totalAmount}}", desc: "Invoice total" },
-                          { var: "{{balanceAmount}}", desc: "Balance due" },
-                          { var: "{{dueDate}}", desc: "Due date" },
-                          { var: "{{daysOverdue}}", desc: "Days overdue" },
-                          { var: "{{businessName}}", desc: "Your company name" },
-                        ].map((v) => (
-                          <div key={v.var} className="flex items-center gap-2">
-                            <code className="text-xs bg-background px-1.5 py-0.5 rounded border font-mono">
-                              {v.var}
-                            </code>
-                            <span className="text-xs text-muted-foreground">{v.desc}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                <div className="flex gap-2">
-                  {!settings.metaTemplateName && (
-                    <Button
-                      variant="outline"
-                      className="flex-1 gap-2"
-                      onClick={handlePreviewMessage}
-                      disabled={!settings.enabled}
-                    >
-                      <Send className="h-4 w-4" />
-                      Preview
-                    </Button>
-                  )}
-                  <Button
-                    className="flex-1 gap-2 bg-green-600 hover:bg-green-700"
-                    onClick={handleSaveSettings}
-                    disabled={savingSettings}
-                  >
-                    {savingSettings ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Save className="h-4 w-4" />
-                    )}
-                    Save Template Config
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
-      </Tabs>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+        )}
+      </div>
 
       {/* Send Reminder Dialog — pick template at send time */}
       <Dialog open={!!sendDialogInvoice} onOpenChange={(open) => !open && setSendDialogInvoice(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Send className="h-5 w-5 text-green-600" />
+              <Send className="h-5 w-5 text-success-strong" />
               Send Payment Reminder
             </DialogTitle>
             <DialogDescription>
@@ -1251,7 +993,7 @@ export default function PaymentReminders() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
-              <SendHorizonal className="h-5 w-5 text-green-600" />
+              <SendHorizonal className="h-5 w-5 text-success-strong" />
               Send Bulk Reminders?
             </AlertDialogTitle>
             <AlertDialogDescription>
@@ -1275,7 +1017,7 @@ export default function PaymentReminders() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <MessageSquare className="h-5 w-5 text-green-600" />
+              <MessageSquare className="h-5 w-5 text-success-strong" />
               Message Preview
             </DialogTitle>
             <DialogDescription>
@@ -1284,9 +1026,9 @@ export default function PaymentReminders() {
           </DialogHeader>
           <div className="bg-[#e5ded8] rounded-lg p-4">
             <div className="bg-[#dcf8c6] rounded-lg p-3 max-w-[90%] ml-auto shadow-sm">
-              <p className="text-sm text-gray-800 whitespace-pre-wrap">{previewMessage}</p>
+              <p className="text-sm text-foreground whitespace-pre-wrap">{previewMessage}</p>
               <div className="text-right mt-1">
-                <span className="text-[10px] text-gray-500">
+                <span className="text-[10px] text-muted-foreground">
                   {new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })} ✓✓
                 </span>
               </div>
@@ -1299,6 +1041,6 @@ export default function PaymentReminders() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageShell>
   );
 }

@@ -2,7 +2,8 @@ const mongoose = require('mongoose');
 const Invoice = require('./src/models/Invoice');
 require('dotenv').config();
 
-mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://akbarhaleel508_db_user:REMOVED_PASSWORD@cluster0.6je5xm0.mongodb.net/?appName=Cluster0')
+// The connection string comes from backend/.env only; it is never written in code.
+mongoose.connect(process.env.MONGODB_URI)
 .then(async () => {
   try {
     const invoices = await Invoice.find({

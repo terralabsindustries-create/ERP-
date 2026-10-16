@@ -1,226 +1,220 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { format } from "date-fns";
+import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import { Calendar } from "@/components/ui/calendar";
-import { format } from "date-fns";
-import { Calendar as CalendarIcon, Plus } from "lucide-react";
-import { cn } from "@/lib/utils";
-import apiClient from "@/lib/apiClient";
-import { useAuth } from "@/contexts/AuthContext";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { EditorSheet } from "@/components/users/EditorSheet";
 import { useToast } from "@/hooks/use-toast";
+import apiClient from "@/lib/apiClient";
+import { KIND_META, type CalKind, type RawEvent } from "@/lib/calendarItems";
+import { cn } from "@/lib/utils";
 
 interface CreateEventDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** The day to start a new event on. */
+  defaultDate?: Date;
+  /** Pass an event to edit it instead of creating one. */
+  event?: RawEvent | null;
   onEventCreated?: () => void;
-  selectedDate?: Date;
 }
 
-export function CreateEventDialog({ onEventCreated, selectedDate }: CreateEventDialogProps) {
-  const { user } = useAuth();
+const DURATIONS = [
+  { value: "15", label: "15 minutes" },
+  { value: "30", label: "30 minutes" },
+  { value: "60", label: "1 hour" },
+  { value: "120", label: "2 hours" },
+  { value: "240", label: "Half a day" }
+];
+const KINDS: CalKind[] = ["reminder", "meeting", "deadline", "delivery", "other"];
+
+const blank = (day?: Date) => ({
+  title: "",
+  description: "",
+  date: format(day || new Date(), "yyyy-MM-dd"),
+  time: "10:00",
+  duration: "60",
+  allDay: false,
+  eventType: "reminder" as string,
+  priority: "medium",
+  location: ""
+});
+
+/** Adds or edits a calendar event: what, when, how long and what kind. */
+export function CreateEventDialog({ open, onOpenChange, defaultDate, event, onEventCreated }: CreateEventDialogProps) {
   const { toast } = useToast();
-  const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [reminderDate, setReminderDate] = useState<Date | undefined>(
-    selectedDate || new Date()
-  );
-  const [formData, setFormData] = useState({
-    title: "",
-    description: "",
-    priority: "medium",
-    category: "reminder",
-  });
+  const [form, setForm] = useState(blank(defaultDate));
+  const [saving, setSaving] = useState(false);
 
-  const handleInputChange = (field: string, value: string) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
-  };
+  useEffect(() => {
+    if (!open) return;
+    if (event) {
+      const start = new Date(event.startDate);
+      const end = event.endDate ? new Date(event.endDate) : start;
+      const minutes = Math.max(15, Math.round((end.getTime() - start.getTime()) / 60000));
+      setForm({
+        title: event.title,
+        description: event.description || "",
+        date: format(start, "yyyy-MM-dd"),
+        time: format(start, "HH:mm"),
+        duration: DURATIONS.some((d) => d.value === String(minutes)) ? String(minutes) : "60",
+        allDay: !!event.allDay,
+        eventType: event.eventType || "other",
+        priority: event.priority || "medium",
+        location: event.location || ""
+      });
+    } else setForm(blank(defaultDate));
+  }, [open, event, defaultDate]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const set = <K extends keyof ReturnType<typeof blank>>(k: K, v: ReturnType<typeof blank>[K]) => setForm((f) => ({ ...f, [k]: v }));
+
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    
+    if (!form.title.trim() || !form.date) {
+      toast({ title: "Add a title and a date", variant: "destructive" });
+      return;
+    }
+    const start = form.allDay ? new Date(`${form.date}T00:00`) : new Date(`${form.date}T${form.time || "00:00"}`);
+    const end = form.allDay ? new Date(`${form.date}T23:59`) : new Date(start.getTime() + Number(form.duration) * 60000);
+    const payload = {
+      title: form.title.trim(),
+      description: form.description,
+      startDate: start.toISOString(),
+      endDate: end.toISOString(),
+      allDay: form.allDay,
+      eventType: form.eventType,
+      priority: form.priority,
+      location: form.location || undefined,
+      ...(event ? {} : { status: "scheduled" })
+    };
+    setSaving(true);
     try {
-      if (!formData.title || !reminderDate) {
-        toast({
-          title: "Missing Information",
-          description: "Please fill in all required fields",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      // Create event via API
-      const startDate = reminderDate;
-      const endDate = new Date(reminderDate.getTime() + 60 * 60 * 1000); // 1 hour later
-      
-      await apiClient.createEvent({
-        title: formData.title,
-        description: formData.description,
-        startDate: startDate,
-        endDate: endDate,
-        priority: formData.priority,
-        eventType: formData.category,
-        isRecurring: false,
-        recurrencePattern: null,
-        recurrenceEndDate: null,
-        status: 'scheduled'
-      });
-
-      toast({
-        title: "Success",
-        description: "Event created successfully!",
-      });
-      
-      setOpen(false);
-      setFormData({
-        title: "",
-        description: "",
-        priority: "medium",
-        category: "reminder",
-      });
-      
+      if (event) await apiClient.updateEvent(event._id, payload);
+      else await apiClient.createEvent(payload);
+      toast({ title: event ? "Event updated" : "Added to the calendar", description: `${payload.title} · ${format(start, form.allDay ? "d MMM" : "d MMM, h:mm a")}` });
+      onOpenChange(false);
       onEventCreated?.();
-    } catch (error: any) {
-      toast({
-        title: "Error creating event",
-        description: error.message || "Failed to create event",
-        variant: "destructive",
-      });
+    } catch (error) {
+      toast({ title: event ? "Not updated" : "Not added", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button className="gap-2">
-          <Plus className="h-4 w-4" />
-          Add Event
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="sm:max-w-[500px]">
-        <DialogHeader>
-          <DialogTitle>Create New Event</DialogTitle>
-          <DialogDescription>
-            Schedule a new reminder or event for your printing business.
-          </DialogDescription>
-        </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="title">Event Title *</Label>
-            <Input
-              id="title"
-              value={formData.title}
-              onChange={(e) => handleInputChange("title", e.target.value)}
-              placeholder="Enter event title"
-              required
-            />
-          </div>
+    <EditorSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title={event ? "Edit event" : "New event"}
+      description="Reminders, meetings, deadlines and deliveries show on everyone's calendar in your business."
+      onSubmit={submit}
+      footer={
+        <>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={saving}>
+            {saving && <Loader2 className="animate-spin" />}
+            {event ? "Save changes" : "Add event"}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="ev-title">Title</Label>
+          <Input id="ev-title" value={form.title} onChange={(e) => set("title", e.target.value)} placeholder="e.g. Collect proofs from Sharma Traders" autoFocus />
+        </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="description">Description</Label>
-            <Textarea
-              id="description"
-              value={formData.description}
-              onChange={(e) => handleInputChange("description", e.target.value)}
-              placeholder="Enter event description"
-              rows={3}
-            />
+        <div className="space-y-1.5">
+          <Label>Kind</Label>
+          <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Kind">
+            {KINDS.map((k) => (
+              <button
+                key={k}
+                type="button"
+                role="radio"
+                aria-checked={form.eventType === k}
+                onClick={() => set("eventType", k)}
+                className={cn(
+                  "inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-[13px] transition-colors",
+                  form.eventType === k ? "border-primary bg-primary-soft/50 font-medium text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                )}
+              >
+                <span className={cn("h-2 w-2 rounded-full", KIND_META[k].dot)} aria-hidden />
+                {KIND_META[k].label}
+              </button>
+            ))}
           </div>
+        </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Date & Time *</Label>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className={cn(
-                      "w-full justify-start text-left font-normal",
-                      !reminderDate && "text-muted-foreground"
-                    )}
-                  >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {reminderDate ? format(reminderDate, "PPP") : "Pick a date"}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar
-                    mode="single"
-                    selected={reminderDate}
-                    onSelect={setReminderDate}
-                    initialFocus
-                    className="p-3 pointer-events-auto"
-                  />
-                </PopoverContent>
-              </Popover>
+        <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+          <div className="space-y-1.5">
+            <Label htmlFor="ev-date">Date</Label>
+            <Input id="ev-date" type="date" value={form.date} onChange={(e) => set("date", e.target.value)} />
+          </div>
+          <div className="flex items-end gap-2 pb-2">
+            <Switch id="ev-allday" checked={form.allDay} onCheckedChange={(v) => set("allDay", v)} />
+            <Label htmlFor="ev-allday" className="font-normal">
+              All day
+            </Label>
+          </div>
+        </div>
+
+        {!form.allDay && (
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="ev-time">Starts at</Label>
+              <Input id="ev-time" type="time" value={form.time} onChange={(e) => set("time", e.target.value)} />
             </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="priority">Priority</Label>
-              <Select value={formData.priority} onValueChange={(value) => handleInputChange("priority", value)}>
-                <SelectTrigger>
+            <div className="space-y-1.5">
+              <Label htmlFor="ev-duration">Lasts</Label>
+              <Select value={form.duration} onValueChange={(v) => set("duration", v)}>
+                <SelectTrigger id="ev-duration">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="low">Low</SelectItem>
-                  <SelectItem value="medium">Medium</SelectItem>
-                  <SelectItem value="high">High</SelectItem>
+                  {DURATIONS.map((d) => (
+                    <SelectItem key={d.value} value={d.value}>
+                      {d.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
           </div>
+        )}
 
-          <div className="space-y-2">
-            <Label htmlFor="category">Category</Label>
-            <Select value={formData.category} onValueChange={(value) => handleInputChange("category", value)}>
-              <SelectTrigger>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="ev-priority">Priority</Label>
+            <Select value={form.priority} onValueChange={(v) => set("priority", v)}>
+              <SelectTrigger id="ev-priority">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {/* Must match the Event model's eventType enum */}
-                <SelectItem value="reminder">Reminder</SelectItem>
-                <SelectItem value="meeting">Meeting</SelectItem>
-                <SelectItem value="deadline">Deadline</SelectItem>
-                <SelectItem value="delivery">Delivery</SelectItem>
-                <SelectItem value="task">Task</SelectItem>
-                <SelectItem value="other">Other</SelectItem>
+                <SelectItem value="low">Low</SelectItem>
+                <SelectItem value="medium">Medium</SelectItem>
+                <SelectItem value="high">High</SelectItem>
+                <SelectItem value="urgent">Urgent</SelectItem>
               </SelectContent>
             </Select>
           </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="ev-location">Where</Label>
+            <Input id="ev-location" value={form.location} onChange={(e) => set("location", e.target.value)} placeholder="Optional" />
+          </div>
+        </div>
 
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={loading}>
-              {loading ? "Creating..." : "Create Event"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+        <div className="space-y-1.5">
+          <Label htmlFor="ev-notes">Notes</Label>
+          <Textarea id="ev-notes" rows={3} value={form.description} onChange={(e) => set("description", e.target.value)} placeholder="Optional" />
+        </div>
+      </div>
+    </EditorSheet>
   );
 }

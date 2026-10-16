@@ -1,10 +1,14 @@
 const express = require('express');
 const { body, query } = require('express-validator');
+const { validate } = require('../middleware/validate');
 const Job = require('../models/Job');
 const Customer = require('../models/Customer');
 const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
-const { requirePermission } = require('../middleware/requirePermission');
+const { requirePermission, userCan } = require('../middleware/requirePermission');
+const Task = require('../models/Task');
+const { isSameOrgUser, orgScope } = require('../utils/accessScope');
+const { notify } = require('../utils/notify');
 
 const router = express.Router();
 
@@ -12,21 +16,20 @@ const router = express.Router();
 const jobValidation = [
   body('title').notEmpty().withMessage('Job title is required').trim(),
   body('customerId').isMongoId().withMessage('Valid customer ID is required'),
-  body('priority').optional().isIn(['low', 'medium', 'high', 'urgent']),
+  body('priority').optional({ values: 'falsy' }).isIn(['low', 'medium', 'high', 'urgent']),
 ];
 
 // @route   GET /api/jobs
 // @desc    Get all jobs for the authenticated user
 // @access  Private
 router.get('/', protect, [
-  query('status').optional().isIn([
-    'inquiry', 'quotation_sent', 'quotation_approved', 'design_in_progress',
+  query('status').optional({ values: 'falsy' }).isIn(['all', 'inquiry', 'quotation_sent', 'quotation_approved', 'design_in_progress',
     'design_approved', 'production_ready', 'ready_for_print', 'quality_check',
     'completed', 'delivered', 'cancelled'
   ]),
-  query('priority').optional().isIn(['low', 'medium', 'high', 'urgent']),
-  query('search').optional().trim(),
-], async (req, res) => {
+  query('priority').optional({ values: 'falsy' }).isIn(['all', 'low', 'medium', 'high', 'urgent']),
+  query('search').optional({ values: 'falsy' }).trim(),
+], validate, async (req, res) => {
   try {
     const {
       status,
@@ -77,7 +80,9 @@ router.get('/', protect, [
       .populate('createdBy', 'fullName')
       .populate({
         path: 'invoices',
-        select: '_id invoiceNumber items totalAmount status',
+        select: '_id invoiceNumber items totalAmount status noGst',
+        // Cancelled invoices don't count, and No GST ones only for logins allowed to see them.
+        match: { status: { $ne: 'cancelled' }, ...(userCan(req.user, 'Invoicing (View No GST)') ? {} : { noGst: { $ne: true } }) },
         options: { sort: { createdAt: -1 } }
       })
       .sort(sort)
@@ -177,6 +182,35 @@ router.get('/staff/stats', protect, async (req, res) => {
   }
 });
 
+// @route   GET /api/jobs/mine
+// @desc    Jobs relevant to the caller: ones they are the handler for, or have a
+//          task on. Open to every login (no Jobs permission needed) because it
+//          only returns work already assigned to them.
+// @access  Private
+router.get('/mine', protect, async (req, res) => {
+  try {
+    const taskJobIds = await Task.distinct('jobId', {
+      assignedTo: req.user._id,
+      status: { $nin: ['completed', 'cancelled'] },
+      jobId: { $ne: null }
+    });
+    const jobs = await Job.find({
+      ...orgScope(req.user),
+      status: { $nin: ['delivered', 'cancelled'] },
+      $or: [{ 'assignedTo.handlerId': req.user._id }, { _id: { $in: taskJobIds } }]
+    })
+      .select('title status priority dueDate printSpecs customerId assignedTo updatedAt')
+      .populate('customerId', 'name')
+      .sort({ dueDate: 1, updatedAt: -1 })
+      .limit(50);
+
+    res.status(200).json({ status: 'success', data: { jobs } });
+  } catch (error) {
+    console.error('Get my jobs error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error while fetching your jobs' });
+  }
+});
+
 // @route   GET /api/jobs/:id
 // @desc    Get single job
 // @access  Private
@@ -188,7 +222,7 @@ router.get('/:id', protect, async (req, res) => {
     const job = await Job.findOne(findQuery)
       .populate('customerId', 'name email phone address company')
       .populate('assignedTo.handlerId', 'fullName')
-      .populate('assignedOperator', 'name')
+      .populate('assignedOperator', 'fullName')
       .populate('createdBy', 'fullName')
       .populate({
         path: 'flowHistory.updatedBy',
@@ -221,7 +255,7 @@ router.get('/:id', protect, async (req, res) => {
 // @route   POST /api/jobs
 // @desc    Create new job
 // @access  Private
-router.post('/', protect, requirePermission('Jobs: Create & Edit'), jobValidation, async (req, res) => {
+router.post('/', protect, requirePermission('Jobs: Create & Edit'), jobValidation, validate, async (req, res) => {
   try {
     // Verify customer exists and belongs to the authenticated user's dataScope or userId
     const customerQuery = req.user.dataScope
@@ -299,7 +333,7 @@ router.post('/', protect, requirePermission('Jobs: Create & Edit'), jobValidatio
 // @route   PUT /api/jobs/:id
 // @desc    Update job
 // @access  Private
-router.put('/:id', protect, requirePermission('Jobs: Create & Edit'), jobValidation, async (req, res) => {
+router.put('/:id', protect, requirePermission('Jobs: Create & Edit'), jobValidation, validate, async (req, res) => {
   try {
     const findQuery = req.user.dataScope
       ? { _id: req.params.id, dataScope: req.user.dataScope }
@@ -446,8 +480,8 @@ router.post('/:id/update-status', protect, requirePermission('Jobs: Change Statu
     'design_approved', 'production_ready', 'ready_for_print', 'quality_check',
     'completed', 'delivered', 'cancelled'
   ]).withMessage('Invalid status provided'),
-  body('remarks').optional().trim(),
-], async (req, res) => {
+  body('remarks').optional({ values: 'falsy' }).trim(),
+], validate, async (req, res) => {
   try {
     const { status, remarks } = req.body;
 
@@ -536,7 +570,7 @@ router.post('/:id/update-status', protect, requirePermission('Jobs: Change Statu
 router.post('/:id/assign', protect, [
   body('operatorId').isMongoId().withMessage('Valid operator ID is required'),
   body('operatorName').notEmpty().withMessage('Operator name is required').trim(),
-], async (req, res) => {
+], validate, async (req, res) => {
   try {
     const { operatorId, operatorName } = req.body;
 
@@ -552,7 +586,25 @@ router.post('/:id/assign', protect, [
       });
     }
 
+    // The handler has to be someone in this business.
+    if (!(await isSameOrgUser(req.user, operatorId))) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Choose a handler from your team'
+      });
+    }
+
     await job.assignToOperator(operatorId, operatorName);
+    await notify({
+      recipients: [operatorId],
+      actor: req.user,
+      type: 'job_assigned',
+      title: `Job handed to you: ${job.title}`,
+      message: `${req.user.fullName} made you the handler for this job.`,
+      link: `/jobs?q=${encodeURIComponent(job.title)}`,
+      entityType: 'job',
+      entityId: job._id
+    });
     
     // Update flow to "job_handler_assigned" if not already assigned
     if (job.flowStage === 'customer_inquiry') {
@@ -565,7 +617,7 @@ router.post('/:id/assign', protect, [
     }
     
     await job.populate([
-      { path: 'assignedOperator', select: 'name' },
+      { path: 'assignedOperator', select: 'fullName' },
       { path: 'customerId', select: 'name email' }
     ]);
 
@@ -611,8 +663,8 @@ router.post('/:id/update-flow-stage', protect, [
     'quality_check', 'payment_pending', 'payment_collected',
     'job_complete', 'product_received', 'exited'
   ]).withMessage('Invalid flow stage provided'),
-  body('remarks').optional().trim(),
-], async (req, res) => {
+  body('remarks').optional({ values: 'falsy' }).trim(),
+], validate, async (req, res) => {
   try {
     const { stage, remarks } = req.body;
 

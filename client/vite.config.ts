@@ -22,6 +22,9 @@ export default defineConfig(({ mode }) => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  // Release builds drop debug logging (console.log/debug/info); warnings and
+  // errors stay so real problems still reach the browser console.
+  esbuild: mode === 'development' ? {} : { pure: ['console.log', 'console.debug', 'console.info'] },
   build: {
     outDir: mode === 'desktop' ? 'dist-desktop' : 'dist',
     assetsDir: 'assets',

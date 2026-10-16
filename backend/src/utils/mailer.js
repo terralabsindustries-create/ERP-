@@ -46,7 +46,7 @@ const createTransporter = () => {
   });
 };
 
-const getFromAddress = (companyName = 'SerpY ERP') =>
+const getFromAddress = (companyName = 'Terralabs ERP') =>
   process.env.EMAIL_FROM && !PLACEHOLDER_PATTERN.test(process.env.EMAIL_FROM)
     ? process.env.EMAIL_FROM
     : `"${companyName}" <${process.env.EMAIL_USER}>`;

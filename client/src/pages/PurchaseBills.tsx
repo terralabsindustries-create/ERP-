@@ -1,291 +1,341 @@
-import { useEffect, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { CheckCircle2, Download, Pencil, Plus, ReceiptText, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Plus, Search, Download, MoreHorizontal, Pencil, Trash2, CheckCircle2, Receipt, Wallet, FileText } from "lucide-react";
-import apiClient from "@/lib/apiClient";
-import { useToast } from "@/hooks/use-toast";
-import { formatCurrency } from "@/lib/utils";
+import { EmptyState } from "@/components/common/EmptyState";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { PageShell } from "@/components/layout/PageShell";
+import { ConfirmDialog, DataCard, DataTable, EntityCell, FilterSelect, MetricBar, Pagination, SearchField, Stack, StatusPill, Toolbar, ViewTabs, type Column, type PillTone } from "@/components/data";
 import { NewPurchaseBillDialog } from "@/components/purchase-bills/NewPurchaseBillDialog";
+import { useAuth } from "@/contexts/AuthContext";
+import { useToast } from "@/hooks/use-toast";
+import { useDebounced } from "@/hooks/useDebounced";
+import apiClient from "@/lib/apiClient";
+import { daysUntil, dueLabel, fmtDate, formatINR } from "@/lib/format";
 
-const statusVariant: Record<string, "success" | "secondary" | "destructive" | "outline"> = {
-  paid: "success",
-  partial: "secondary",
-  pending: "outline",
-};
+interface Bill {
+  _id: string;
+  billNumber: string;
+  vendorName: string;
+  vendorInvoiceNumber?: string;
+  billDate: string;
+  dueDate?: string;
+  totalAmount: number;
+  paidAmount?: number;
+  balanceAmount?: number;
+  paymentStatus: "pending" | "partial" | "paid";
+}
+
+interface Stats {
+  totalBills: number;
+  totalAmount: number;
+  paidAmount: number;
+  outstandingAmount: number;
+  overdueAmount?: number;
+  counts?: Partial<Record<"pending" | "partial" | "paid" | "overdue", number>>;
+}
+
+type View = "all" | "pending" | "partial" | "overdue" | "paid";
+const PAGE_SIZE = 25;
+
+const isOverdue = (b: Bill) => b.paymentStatus !== "paid" && (daysUntil(b.dueDate) ?? 0) < 0;
+const statusOf = (b: Bill): { label: string; tone: PillTone } =>
+  b.paymentStatus === "paid"
+    ? { label: "Paid", tone: "success" }
+    : isOverdue(b)
+      ? { label: "Overdue", tone: "danger" }
+      : b.paymentStatus === "partial"
+        ? { label: "Part paid", tone: "info" }
+        : { label: "Unpaid", tone: "warning" };
 
 export default function PurchaseBills() {
+  const { hasPermission } = useAuth();
   const { toast } = useToast();
-  const [bills, setBills] = useState<any[]>([]);
-  const [stats, setStats] = useState<any>({ totalBills: 0, totalAmount: 0, paidAmount: 0, outstandingAmount: 0 });
+  const [params, setParams] = useSearchParams();
+  const vendor = params.get("vendor") || "all";
+  const [bills, setBills] = useState<Bill[]>([]);
+  const [total, setTotal] = useState(0);
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [vendors, setVendors] = useState<{ _id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingBill, setEditingBill] = useState<any | null>(null);
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const q = useDebounced(search.trim());
+  const [view, setView] = useState<View>("all");
+  const [page, setPage] = useState(1);
+  const [dialog, setDialog] = useState<{ open: boolean; bill: Bill | null }>({ open: false, bill: null });
+  const [deleting, setDeleting] = useState<Bill | null>(null);
 
-  const fetchData = async () => {
+  const canEdit = hasPermission("Purchase Bills: Create & Edit");
+  const canDelete = hasPermission("Purchase Bills: Delete");
+  const canPay = hasPermission("Purchase Bills: Record Payment") || canEdit;
+
+  const loadStats = useCallback(async () => {
+    try {
+      const res = (await apiClient.getPurchaseBillStats()) as { stats?: Stats };
+      setStats(res?.stats || null);
+    } catch {
+      setStats(null);
+    }
+  }, []);
+
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [billsRes, statsRes]: any = await Promise.all([
-        apiClient.getPurchaseBills(search ? { search } : undefined),
-        apiClient.getPurchaseBillStats(),
-      ]);
-      // apiClient.request() already unwraps the `data` envelope, so bills/stats
-      // live at the top level. Fall back to the nested shape just in case.
-      setBills(billsRes?.bills || billsRes?.data?.bills || []);
-      setStats(
-        statsRes?.stats || statsRes?.data?.stats || { totalBills: 0, totalAmount: 0, paidAmount: 0, outstandingAmount: 0 }
-      );
+      const p: Record<string, string> = { page: String(page), limit: String(PAGE_SIZE), sortBy: "billDate", sortOrder: "desc" };
+      if (q) p.search = q;
+      if (view !== "all") p.paymentStatus = view;
+      if (vendor !== "all") p.vendorId = vendor;
+      const res = (await apiClient.getPurchaseBills(p)) as { bills?: Bill[]; pagination?: { totalBills?: number } };
+      setBills(res?.bills || []);
+      setTotal(res?.pagination?.totalBills ?? (res?.bills || []).length);
     } catch (error) {
-      console.error("Error fetching purchase bills:", error);
-      toast({ title: "Error", description: "Failed to fetch purchase bills", variant: "destructive" });
+      toast({ title: "Purchase bills could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     } finally {
       setLoading(false);
     }
-  };
+  }, [page, q, view, vendor, toast]);
 
   useEffect(() => {
-    fetchData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    loadStats();
+    apiClient
+      .getVendors({ limit: 100 })
+      .then((r) => setVendors(((r as { vendors?: { _id: string; name: string }[] })?.vendors || []).sort((a, b) => a.name.localeCompare(b.name))))
+      .catch(() => setVendors([]));
+  }, [loadStats]);
+  useEffect(() => {
+    load();
+  }, [load]);
+  useEffect(() => setPage(1), [q, view, vendor]);
 
-  const handleNew = () => {
-    setEditingBill(null);
-    setDialogOpen(true);
+  const refresh = () => {
+    load();
+    loadStats();
   };
 
-  const handleEdit = (bill: any) => {
-    setEditingBill(bill);
-    setDialogOpen(true);
-  };
+  const setVendor = (v: string) => setParams(v === "all" ? {} : { vendor: v }, { replace: true });
 
-  const handleDownload = async (bill: any) => {
+  const markPaid = async (b: Bill) => {
     try {
-      toast({ title: "Generating PDF", description: `Preparing ${bill.billNumber}...` });
-      await apiClient.downloadPurchaseBillPDF(bill._id);
-    } catch (error: any) {
-      toast({
-        title: "Download failed",
-        description: error?.message || "Failed to download bill PDF",
-        variant: "destructive",
-      });
+      await apiClient.updatePurchaseBill(b._id, { paidAmount: b.totalAmount });
+      toast({ title: `${b.billNumber} marked as paid` });
+      refresh();
+    } catch (error) {
+      toast({ title: "Not updated", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     }
   };
 
-  const handleMarkPaid = async (bill: any) => {
+  const download = async (b: Bill) => {
     try {
-      await apiClient.updatePurchaseBill(bill._id, { paidAmount: bill.totalAmount });
-      toast({ title: "Marked as paid", description: `${bill.billNumber} is fully paid` });
-      fetchData();
-    } catch (error: any) {
-      toast({ title: "Error", description: error?.message || "Failed to update bill", variant: "destructive" });
+      toast({ title: `Preparing ${b.billNumber}…` });
+      await apiClient.downloadPurchaseBillPDF(b._id);
+    } catch (error) {
+      toast({ title: "Download failed", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     }
   };
 
-  const handleDelete = async () => {
-    if (!deleteId) return;
+  const remove = async () => {
+    if (!deleting) return;
     try {
-      await apiClient.deletePurchaseBill(deleteId);
-      toast({ title: "Deleted", description: "Purchase bill deleted" });
-      setDeleteId(null);
-      fetchData();
-    } catch (error: any) {
-      toast({ title: "Error", description: error?.message || "Failed to delete bill", variant: "destructive" });
+      await apiClient.deletePurchaseBill(deleting._id);
+      toast({ title: `${deleting.billNumber} deleted` });
+      setDeleting(null);
+      refresh();
+    } catch (error) {
+      toast({ title: "Not deleted", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      throw error;
     }
   };
 
-  const formatDate = (d?: string) =>
-    d ? new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" }) : "-";
+  const c = stats?.counts || {};
+  const vendorName = vendors.find((v) => v._id === vendor)?.name;
+
+  const columns: Column<Bill>[] = [
+    {
+      id: "bill",
+      header: "Bill",
+      cell: (b) => <EntityCell title={b.billNumber} mono subtitle={b.vendorInvoiceNumber ? `Supplier ref ${b.vendorInvoiceNumber}` : undefined} />,
+      sortValue: (b) => b.billNumber,
+      className: "min-w-[170px]"
+    },
+    { id: "vendor", header: "Supplier", cell: (b) => <span className="font-medium">{b.vendorName}</span>, sortValue: (b) => b.vendorName },
+    { id: "date", header: "Bill date", cell: (b) => <span className="whitespace-nowrap">{fmtDate(b.billDate)}</span>, sortValue: (b) => b.billDate, hideBelow: "lg" },
+    {
+      id: "due",
+      header: "Due",
+      cell: (b) => (
+        <Stack
+          top={<span className="whitespace-nowrap">{fmtDate(b.dueDate)}</span>}
+          bottom={b.paymentStatus !== "paid" && b.dueDate ? <span className={isOverdue(b) ? "text-destructive-strong" : undefined}>{dueLabel(b.dueDate)}</span> : undefined}
+        />
+      ),
+      sortValue: (b) => b.dueDate || "",
+      hideBelow: "md"
+    },
+    { id: "amount", header: "Amount", align: "right", cell: (b) => formatINR(b.totalAmount || 0), sortValue: (b) => b.totalAmount },
+    {
+      id: "balance",
+      header: "Balance",
+      align: "right",
+      cell: (b) =>
+        (b.balanceAmount || 0) > 0.5 ? <span className="font-semibold">{formatINR(b.balanceAmount || 0)}</span> : <span className="text-muted-foreground">—</span>,
+      sortValue: (b) => b.balanceAmount || 0
+    },
+    {
+      id: "status",
+      header: "Status",
+      cell: (b) => {
+        const s = statusOf(b);
+        return <StatusPill tone={s.tone}>{s.label}</StatusPill>;
+      },
+      className: "w-[110px]"
+    }
+  ];
 
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Purchase Bills</h1>
-          <p className="text-muted-foreground text-sm">Record and track bills received from vendors</p>
-        </div>
-        <Button className="gap-2" onClick={handleNew}>
-          <Plus className="w-4 h-4" />
-          New Purchase Bill
-        </Button>
-      </div>
-
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-        <Card>
-          <CardContent className="p-4 flex items-center gap-3">
-            <FileText className="w-5 h-5 text-muted-foreground" />
-            <div>
-              <p className="text-xs text-muted-foreground">Total Bills</p>
-              <p className="text-xl font-bold">{stats.totalBills || 0}</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4 flex items-center gap-3">
-            <Wallet className="w-5 h-5 text-muted-foreground" />
-            <div>
-              <p className="text-xs text-muted-foreground">Paid</p>
-              <p className="text-xl font-bold text-success">{formatCurrency(stats.paidAmount || 0)}</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4 flex items-center gap-3">
-            <Receipt className="w-5 h-5 text-muted-foreground" />
-            <div>
-              <p className="text-xs text-muted-foreground">Outstanding</p>
-              <p className="text-xl font-bold text-warning">{formatCurrency(stats.outstandingAmount || 0)}</p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Search */}
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          fetchData();
-        }}
-        className="flex items-center gap-2"
-      >
-        <div className="relative max-w-sm flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search bill #, vendor, invoice #"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-10"
-          />
-        </div>
-        <Button type="submit" variant="outline">
-          Search
-        </Button>
-      </form>
-
-      {/* Bills Table */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">All Bills</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          {loading ? (
-            <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
-              Loading purchase bills...
-            </div>
-          ) : bills.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
-              <FileText className="h-10 w-10 text-muted-foreground opacity-40" />
-              <h3 className="text-lg font-semibold">No purchase bills yet</h3>
-              <p className="text-muted-foreground text-sm max-w-sm">
-                Click "New Purchase Bill" to record one.
-              </p>
-              <Button onClick={handleNew} className="gap-2">
-                <Plus className="h-4 w-4" />
-                New Purchase Bill
-              </Button>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b bg-muted/50">
-                    <th className="text-left px-4 py-3 font-medium">Bill #</th>
-                    <th className="text-left px-4 py-3 font-medium">Vendor</th>
-                    <th className="text-left px-4 py-3 font-medium">Vendor Inv #</th>
-                    <th className="text-left px-4 py-3 font-medium">Date</th>
-                    <th className="text-left px-4 py-3 font-medium">Total</th>
-                    <th className="text-left px-4 py-3 font-medium">Status</th>
-                    <th className="px-4 py-3 font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {bills.map((bill) => (
-                    <tr key={bill._id} className="border-b hover:bg-muted/30 transition-colors">
-                      <td className="px-4 py-3 font-medium">{bill.billNumber}</td>
-                      <td className="px-4 py-3">{bill.vendorName}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{bill.vendorInvoiceNumber || "-"}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{formatDate(bill.billDate)}</td>
-                      <td className="px-4 py-3 font-medium">{formatCurrency(bill.totalAmount || 0)}</td>
-                      <td className="px-4 py-3">
-                        <Badge variant={statusVariant[bill.paymentStatus] || "outline"} className="capitalize">
-                          {bill.paymentStatus}
-                        </Badge>
-                      </td>
-                      <td className="px-4 py-3">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8">
-                              <MoreHorizontal className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => handleDownload(bill)}>
-                              <Download className="h-4 w-4 mr-2" /> Download PDF
-                            </DropdownMenuItem>
-                            {bill.paymentStatus !== "paid" && (
-                              <DropdownMenuItem onClick={() => handleMarkPaid(bill)}>
-                                <CheckCircle2 className="h-4 w-4 mr-2" /> Mark Paid
-                              </DropdownMenuItem>
-                            )}
-                            <DropdownMenuItem onClick={() => handleEdit(bill)}>
-                              <Pencil className="h-4 w-4 mr-2" /> Edit
-                            </DropdownMenuItem>
-                            <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setDeleteId(bill._id)}>
-                              <Trash2 className="h-4 w-4 mr-2" /> Delete
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <NewPurchaseBillDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        onSaved={fetchData}
-        bill={editingBill}
+    <PageShell>
+      <PageHeader
+        eyebrow="Materials & purchase"
+        title="Purchase bills"
+        description="Bills from paper, ink and plate suppliers — what you bought, what's paid and what's still due."
+        actions={
+          canEdit && (
+            <Button onClick={() => setDialog({ open: true, bill: null })}>
+              <Plus />
+              Record a bill
+            </Button>
+          )
+        }
       />
 
-      <AlertDialog open={Boolean(deleteId)} onOpenChange={(o) => !o && setDeleteId(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete purchase bill?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This action cannot be undone. The bill will be permanently removed.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete}>Delete</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
+      <MetricBar
+        loading={!stats && loading}
+        metrics={[
+          { label: "Purchases", value: formatINR(stats?.totalAmount || 0, { compact: (stats?.totalAmount || 0) >= 1e5 }), hint: `${stats?.totalBills || 0} bills` },
+          { label: "Paid", value: formatINR(stats?.paidAmount || 0, { compact: (stats?.paidAmount || 0) >= 1e5 }), hint: `${c.paid || 0} bills settled`, tone: "success" },
+          {
+            label: "Outstanding",
+            value: formatINR(stats?.outstandingAmount || 0, { compact: (stats?.outstandingAmount || 0) >= 1e5 }),
+            hint: `${(c.pending || 0) + (c.partial || 0)} bills to pay`,
+            tone: (stats?.outstandingAmount || 0) > 0 ? "warning" : "default",
+            onClick: () => setView(view === "pending" ? "all" : "pending"),
+            active: view === "pending"
+          },
+          {
+            label: "Overdue",
+            value: formatINR(stats?.overdueAmount || 0, { compact: (stats?.overdueAmount || 0) >= 1e5 }),
+            hint: c.overdue ? `${c.overdue} past the due date` : "Nothing overdue",
+            tone: c.overdue ? "danger" : "default",
+            onClick: () => setView(view === "overdue" ? "all" : "overdue"),
+            active: view === "overdue"
+          }
+        ]}
+      />
+
+      <div className="space-y-4">
+        <ViewTabs<View>
+          value={view}
+          onChange={setView}
+          tabs={[
+            { value: "all", label: "All bills", count: stats?.totalBills },
+            { value: "pending", label: "Unpaid", count: c.pending || 0 },
+            { value: "partial", label: "Part paid", count: c.partial || 0 },
+            { value: "overdue", label: "Overdue", count: c.overdue || 0, tone: "danger" },
+            { value: "paid", label: "Paid", count: c.paid || 0 }
+          ]}
+        />
+
+        <DataCard
+          toolbar={
+            <Toolbar search={<SearchField value={search} onChange={setSearch} placeholder="Search bill no., supplier or supplier ref" />}>
+              <FilterSelect label="Supplier" value={vendor} onChange={setVendor} options={vendors.map((v) => ({ value: v._id, label: v.name }))} />
+            </Toolbar>
+          }
+          footer={!loading && total > 0 && <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} noun="bills" />}
+        >
+          <DataTable
+            columns={columns}
+            rows={bills}
+            rowKey={(b) => b._id}
+            loading={loading}
+            onRowClick={canEdit ? (b) => setDialog({ open: true, bill: b }) : undefined}
+            actions={(b) => [
+              { label: "Edit bill", icon: Pencil, onClick: () => setDialog({ open: true, bill: b }), hidden: !canEdit },
+              { label: "Mark as paid", icon: CheckCircle2, onClick: () => markPaid(b), hidden: !canPay || b.paymentStatus === "paid" },
+              { label: "Download PDF", icon: Download, onClick: () => download(b) },
+              { label: "Delete bill", icon: Trash2, destructive: true, separated: true, onClick: () => setDeleting(b), hidden: !canDelete }
+            ]}
+            actionsLabel={(b) => `Actions for ${b.billNumber}`}
+            mobile={(b) => {
+              const s = statusOf(b);
+              return (
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="truncate font-medium">{b.vendorName}</span>
+                    <span className="num font-semibold">{formatINR(b.totalAmount || 0)}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                    <span className="font-mono">
+                      {b.billNumber} · {fmtDate(b.billDate)}
+                    </span>
+                    <StatusPill tone={s.tone}>{s.label}</StatusPill>
+                  </div>
+                </div>
+              );
+            }}
+            empty={
+              q || view !== "all" || vendor !== "all" ? (
+                <EmptyState
+                  compact
+                  icon={ReceiptText}
+                  title={vendorName ? `No bills from ${vendorName} in this view` : "No bills in this view"}
+                  action={
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setSearch("");
+                        setView("all");
+                        setVendor("all");
+                      }}
+                    >
+                      Show all bills
+                    </Button>
+                  }
+                />
+              ) : (
+                <EmptyState
+                  icon={ReceiptText}
+                  title="No purchase bills yet"
+                  description="Record supplier bills to track what you owe and claim input GST."
+                  action={
+                    canEdit && (
+                      <Button onClick={() => setDialog({ open: true, bill: null })}>
+                        <Plus />
+                        Record a bill
+                      </Button>
+                    )
+                  }
+                />
+              )
+            }
+          />
+        </DataCard>
+      </div>
+
+      <NewPurchaseBillDialog
+        open={dialog.open}
+        onOpenChange={(open) => setDialog((d) => ({ ...d, open }))}
+        onSaved={refresh}
+        bill={dialog.bill}
+        defaultVendorId={vendor !== "all" ? vendor : undefined}
+      />
+      <ConfirmDialog
+        open={!!deleting}
+        onOpenChange={(o) => !o && setDeleting(null)}
+        title={`Delete ${deleting?.billNumber}?`}
+        description="The bill is removed permanently, along with what it says you owe this supplier."
+        onConfirm={remove}
+      />
+    </PageShell>
   );
 }

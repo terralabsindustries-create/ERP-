@@ -310,14 +310,14 @@ export function EditCustomerDialog({ customer, onCustomerUpdated, onCustomerDele
             </div>
 
             {duplicateWarning && (
-              <div className="text-sm text-orange-600 bg-orange-50 p-2 rounded">
+              <div className="text-sm text-warning-strong bg-warning-soft p-2 rounded">
                 {duplicateWarning}
               </div>
             )}
 
             <DialogFooter className="flex justify-between">
               <Button type="button" variant="destructive" onClick={handleDelete}>
-                <Trash2 className="h-4 w-4 mr-2" />
+                <Trash2 className="h-4 w-4" />
                 Delete
               </Button>
               <div className="flex space-x-2">

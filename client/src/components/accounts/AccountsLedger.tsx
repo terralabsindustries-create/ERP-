@@ -57,7 +57,7 @@ export function AccountsLedger({ onTransactionUpdate }: AccountsLedgerProps) {
 
       // Map the transactions to ledger entries format
       // Note: apiClient already unwraps the response, so we access transactions directly
-      const transactions = response.transactions || [];
+      const transactions = (response as { transactions?: any[] }).transactions || [];
       console.log('📋 Transactions:', transactions);
 
       const mappedEntries = transactions.map((t: any) => ({
@@ -300,12 +300,12 @@ export function AccountsLedger({ onTransactionUpdate }: AccountsLedgerProps) {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Receipt className="h-4 w-4 text-green-500" />
+              <Receipt className="h-4 w-4 text-success" />
               Total Income
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-600">₹{totalIncome.toLocaleString()}</div>
+            <div className="text-2xl font-bold text-success-strong">₹{totalIncome.toLocaleString()}</div>
             <p className="text-xs text-muted-foreground">this period</p>
           </CardContent>
         </Card>
@@ -313,12 +313,12 @@ export function AccountsLedger({ onTransactionUpdate }: AccountsLedgerProps) {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <CreditCard className="h-4 w-4 text-red-500" />
+              <CreditCard className="h-4 w-4 text-destructive" />
               Total Expenses
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-red-600">₹{totalExpenses.toLocaleString()}</div>
+            <div className="text-2xl font-bold text-destructive-strong">₹{totalExpenses.toLocaleString()}</div>
             <p className="text-xs text-muted-foreground">this period</p>
           </CardContent>
         </Card>
@@ -326,12 +326,12 @@ export function AccountsLedger({ onTransactionUpdate }: AccountsLedgerProps) {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Wallet className="h-4 w-4 text-blue-500" />
+              <Wallet className="h-4 w-4 text-info" />
               Net Amount
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className={`text-2xl font-bold ${netAmount >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+            <div className={`text-2xl font-bold ${netAmount >= 0 ? 'text-success-strong' : 'text-destructive-strong'}`}>
               ₹{netAmount.toLocaleString()}
             </div>
             <p className="text-xs text-muted-foreground">profit/loss</p>
@@ -340,7 +340,7 @@ export function AccountsLedger({ onTransactionUpdate }: AccountsLedgerProps) {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center space-x-4">
+      <div className="page-filter-row">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -371,12 +371,12 @@ export function AccountsLedger({ onTransactionUpdate }: AccountsLedgerProps) {
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-4">
                   <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                    entry.type === 'income' ? 'bg-green-100' : 'bg-red-100'
+                    entry.type === 'income' ? 'bg-success-soft' : 'bg-destructive-soft'
                   }`}>
                     {entry.type === 'income' ? (
-                      <Receipt className="h-5 w-5 text-green-600" />
+                      <Receipt className="h-5 w-5 text-success-strong" />
                     ) : (
-                      <CreditCard className="h-5 w-5 text-red-600" />
+                      <CreditCard className="h-5 w-5 text-destructive-strong" />
                     )}
                   </div>
                   <div>
@@ -392,7 +392,7 @@ export function AccountsLedger({ onTransactionUpdate }: AccountsLedgerProps) {
                 
                 <div className="text-right">
                   <div className={`text-lg font-semibold ${
-                    entry.type === 'income' ? 'text-green-600' : 'text-red-600'
+                    entry.type === 'income' ? 'text-success-strong' : 'text-destructive-strong'
                   }`}>
                     {entry.type === 'income' ? '+' : '-'}₹{entry.amount.toLocaleString()}
                   </div>

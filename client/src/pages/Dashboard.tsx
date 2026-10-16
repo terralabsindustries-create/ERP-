@@ -1,24 +1,27 @@
-import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-import { format } from "date-fns";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { differenceInCalendarDays, format } from "date-fns";
 import { useAuth } from "@/contexts/AuthContext";
 import {
-  Briefcase,
-  Users,
-  TrendingUp,
-  Package,
-  Clock,
-  AlertTriangle,
-  BarChart3,
-  DollarSign,
+  Factory,
+  CalendarClock,
+  IndianRupee,
   Target,
-  CreditCard,
-  Edit,
-  Save,
+  FileWarning,
+  Landmark,
+  Truck,
+  Layers,
+  Users,
+  Wallet,
+  Pencil,
+  Check,
   X,
+  CircleAlert,
+  CircleCheck,
+  Loader2,
+  Zap,
+  type LucideIcon,
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import apiClient from "@/lib/apiClient";
@@ -29,514 +32,576 @@ import { PaymentDuesWidget } from "@/components/dashboard/PaymentDuesWidget";
 import { QuickReminderDialog } from "@/components/dashboard/QuickReminderDialog";
 import { DashboardShortcuts } from "@/components/dashboard/DashboardShortcuts";
 import { StaffDashboard } from "@/components/dashboard/StaffDashboard";
+import { KpiTile } from "@/components/common/StatTile";
+import { Panel, PanelLink } from "@/components/common/Panel";
+import { EmptyState } from "@/components/common/EmptyState";
+import { PipelineStrip } from "@/components/production/PipelineStrip";
+import { TeamWorkloadPanel } from "@/components/dashboard/TeamWorkloadPanel";
+import { JobStatusBadge } from "@/components/jobs/JobStatusBadge";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { PageShell } from "@/components/layout/PageShell";
+import { dueState, formatINR, SHOP_FLOOR_STATUSES } from "@/lib/printWorkflow";
+import { cn } from "@/lib/utils";
+
+const greeting = (d: Date) => {
+  const h = d.getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
+};
+
+/** GET /api/dashboard/stats — null means the login's permissions don't cover that figure. */
+interface DashboardStats {
+  monthlyTarget: number;
+  todaysJobs: number | null;
+  urgentJobs: number | null;
+  openJobs: number | null;
+  totalCustomers: number | null;
+  unpaidInvoices: number | null;
+  overdueInvoices: number | null;
+  receivables: number | null;
+  invoicedThisMonth: number | null;
+  collectedToday: number | null;
+  cashBalance: number | null;
+  bankBalance: number | null;
+  lowStockItems: number | null;
+  pendingDeliveries: number | null;
+}
+
+const has = (n: number | null | undefined): n is number => typeof n === "number";
 
 export default function Dashboard() {
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, hasPermission } = useAuth();
+  // The monthly target is the business's; the owner and managers set it.
+  const canSetTarget = user?.role === "admin" || user?.role === "manager" || hasPermission("Settings: Edit");
+  const canSeeJobs = hasPermission("Jobs");
+  const seesWholeTeam = !!user && (user.role === "admin" || (user.canViewAllData === true && hasPermission("Staff & Tasks")));
   const navigate = useNavigate();
-  const [currentTime, setCurrentTime] = useState(new Date());
-  const [stats, setStats] = useState({
-    todaysJobs: 0,
-    completedJobs: 0,
-    todaysRevenue: 0,
-    pendingDeliveries: 0,
-    lowStockItems: 0,
-    totalCustomers: 0,
-    unpaidInvoices: 0,
-    thisMonthRevenue: 0,
-    monthlyTarget: 100000, // Default target, can be made configurable
-    taxPayable: 0,
-    cashBalance: 0,
-    bankBalance: 0,
-    todaysCheques: 0,
-    loading: true
-  });
+  const [lastUpdated, setLastUpdated] = useState(new Date());
+  const [jobs, setJobs] = useState<any[]>([]);
+  const [jobsLoading, setJobsLoading] = useState(true);
+  const [statsError, setStatsError] = useState(false);
+  const [jobsError, setJobsError] = useState(false);
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [sources, setSources] = useState<Record<string, string>>({});
   const { toast } = useToast();
   const [isEditingRevenue, setIsEditingRevenue] = useState(false);
-  const [tempMonthlyTarget, setTempMonthlyTarget] = useState(stats.monthlyTarget);
+  const [tempMonthlyTarget, setTempMonthlyTarget] = useState(0);
 
-  useEffect(() => {
-    if (user && !authLoading) {
-      fetchDashboardStats();
-      // Auto-refresh every 30 seconds for real-time updates
-      const interval = setInterval(fetchDashboardStats, 30000);
-      return () => clearInterval(interval);
+  const fetchDashboardStats = useCallback(async () => {
+    try {
+      const response = (await apiClient.getDashboardStats()) as { stats: DashboardStats; sources?: Record<string, string> };
+      setStats(response.stats);
+      setSources(response.sources || {});
+      setStatsError(false);
+      setLastUpdated(new Date());
+    } catch (error) {
+      console.error('Error fetching dashboard stats:', error);
+      setStatsError(true);
     }
-  }, [user, authLoading]);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 1000);
-
-    return () => clearInterval(timer);
   }, []);
 
-  const fetchDashboardStats = async () => {
-    try {
-      console.log('📊 Fetching dashboard stats...');
-
-      // Fetch data from the actual backend endpoints
-      const [jobStatsResponse, dashboardStatsResponse] = await Promise.all([
-        apiClient.getJobStats() as any,
-        apiClient.getDashboardStats() as any
-      ]);
-
-      console.log('📊 Job stats response:', jobStatsResponse);
-      console.log('📊 Dashboard stats response:', dashboardStatsResponse);
-
-      // Extract stats from the API responses
-      const jobStats = jobStatsResponse?.stats || {};
-      const dashboardStats = dashboardStatsResponse?.stats || {};
-
-      // Set the stats with the actual data from backend
-      setStats({
-        todaysJobs: jobStats.todayJobs || 0,
-        completedJobs: jobStats.completedToday || 0,
-        todaysRevenue: dashboardStats.totalRevenue || 0, // Use actual revenue from dashboard stats
-        pendingDeliveries: dashboardStats.pendingDeliveries || 0,
-        lowStockItems: dashboardStats.lowStockItems || 0,
-        totalCustomers: dashboardStats.totalCustomers || 0,
-        unpaidInvoices: dashboardStats.unpaidInvoices || 0,
-        thisMonthRevenue: jobStats.monthlyRevenue || 0,
-        monthlyTarget: dashboardStats.monthlyTarget || 100000, // Use API response or fallback
-        taxPayable: dashboardStats.taxPayable || 0,
-        cashBalance: dashboardStats.cashBalance || 0,
-        bankBalance: dashboardStats.bankBalance || 0,
-        todaysCheques: dashboardStats.todaysCheques || 0,
-        loading: false
-      });
-
-      console.log('📊 Stats updated successfully');
-    } catch (error) {
-      console.error('📊 Error fetching dashboard stats:', error);
-      toast({
-        title: "Error",
-        description: "Failed to load dashboard statistics",
-        variant: "destructive",
-      });
-      setStats(prev => ({ ...prev, loading: false }));
+  // The pipeline and due-list are built from the job list itself.
+  const fetchJobs = useCallback(async () => {
+    if (!canSeeJobs) {
+      setJobsLoading(false);
+      return;
     }
-  };
+    try {
+      const response: any = await apiClient.getJobs({ limit: 500 });
+      setJobs(response?.jobs || (Array.isArray(response) ? response : []));
+      setJobsError(false);
+    } catch (error) {
+      console.error('Error fetching jobs for dashboard:', error);
+      setJobsError(true);
+    } finally {
+      setJobsLoading(false);
+    }
+  }, [canSeeJobs]);
 
-  const handleEditRevenue = () => {
-    setIsEditingRevenue(true);
-    setTempMonthlyTarget(stats.monthlyTarget);
-  };
+  const refresh = useCallback(() => {
+    fetchDashboardStats();
+    fetchJobs();
+  }, [fetchDashboardStats, fetchJobs]);
+
+  useEffect(() => {
+    if (user && !authLoading && user.role !== 'staff') {
+      refresh();
+      // Auto-refresh every 30 seconds for real-time updates
+      const interval = setInterval(refresh, 30000);
+      return () => clearInterval(interval);
+    }
+  }, [user, authLoading, refresh]);
+
+  const stageCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const job of jobs) counts[job.status] = (counts[job.status] || 0) + 1;
+    return counts;
+  }, [jobs]);
+
+  const inProduction = useMemo(
+    () => jobs.filter((j) => SHOP_FLOOR_STATUSES.includes(j.status) && j.status !== "completed").length,
+    [jobs]
+  );
+
+  const dueJobs = useMemo(() => {
+    return jobs
+      .map((j) => ({ ...j, due: dueState(j.dueDate, j.status) }))
+      .filter((j) => j.due)
+      .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+  }, [jobs]);
+  const overdueCount = dueJobs.filter((j) => j.due === "overdue").length;
+  const dueTodayCount = dueJobs.filter((j) => j.due === "today").length;
 
   const handleSaveRevenue = async () => {
     try {
-      console.log('💾 Saving monthly target:', tempMonthlyTarget);
-      
-      const response = await apiClient.put('/dashboard/monthly-target', {
-        monthlyTarget: tempMonthlyTarget
-      }) as any;
-
-      console.log('📡 Full API Response:', response);
-
-      // Handle different response structures
-      const monthlyTargetValue = response?.data?.monthlyTarget || response?.monthlyTarget || tempMonthlyTarget;
-      
-      if (response && (response.status === 'success' || response.message === 'Monthly target updated successfully')) {
-        setStats(prev => ({ ...prev, monthlyTarget: monthlyTargetValue }));
-        setIsEditingRevenue(false);
-        
-        toast({
-          title: "Success",
-          description: "Monthly target updated successfully",
-        });
-      } else {
-        console.error('❌ API Error Response:', response);
-        throw new Error(response?.message || 'Failed to update monthly target');
-      }
-    } catch (error: any) {
-      console.error('❌ Error saving monthly target:', error);
-      console.error('❌ Error details:', {
-        message: error?.message,
-        response: error?.response,
-        status: error?.response?.status,
-        data: error?.response?.data
-      });
-      
-      toast({
-        title: "Error",
-        description: error?.response?.data?.message || error?.message || "Failed to update monthly target",
-        variant: "destructive",
-      });
+      const response = (await apiClient.put('/dashboard/monthly-target', { monthlyTarget: tempMonthlyTarget })) as { monthlyTarget?: number };
+      setStats((prev) => (prev ? { ...prev, monthlyTarget: response?.monthlyTarget ?? tempMonthlyTarget } : prev));
+      setIsEditingRevenue(false);
+      toast({ title: "Monthly target updated" });
+    } catch (error) {
+      toast({ title: "Target not saved", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     }
   };
 
-  const handleCancelEdit = () => {
-    setIsEditingRevenue(false);
-    setTempMonthlyTarget(stats.monthlyTarget);
-  };
-
-  // Show loading state while checking authentication
   if (authLoading) {
     return (
-      <div className="p-3 md:p-4">
-        <div className="flex items-center justify-center h-64">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mx-auto mb-4"></div>
-            <p className="text-gray-600">Loading dashboard...</p>
-          </div>
+      <div className="flex h-64 items-center justify-center">
+        <div className="flex flex-col items-center gap-3 text-sm text-muted-foreground">
+          <Loader2 className="h-6 w-6 animate-spin text-primary" />
+          Loading dashboard…
         </div>
       </div>
     );
   }
 
-  // Show login prompt if user is not authenticated
   if (!user) {
     return (
-      <div className="p-3 md:p-4">
-        <div className="flex items-center justify-center h-64">
-          <div className="text-center">
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">Welcome to SerpY ERP</h2>
-            <p className="text-gray-600 mb-4">Please login to access your dashboard</p>
-            <Button onClick={() => navigate('/auth')} className="bg-blue-600 hover:bg-blue-700">
-              Go to Login
-            </Button>
-          </div>
-        </div>
-      </div>
+      <EmptyState
+        className="h-64"
+        title="Welcome to Terralabs ERP"
+        description="Please sign in to access your dashboard"
+        action={<Button onClick={() => navigate('/auth')}>Go to Sign In</Button>}
+      />
     );
   }
 
-  // Show Staff Dashboard for staff role users
-  console.log('🔍 Dashboard routing check:');
-  console.log('🔍 User role:', user?.role);
-  console.log('🔍 Is staff?', user?.role === 'staff');
-  console.log('🔍 User data:', user);
-  
   if (user.role === 'staff') {
-    console.log('🎯 Rendering StaffDashboard component');
     return <StaffDashboard />;
   }
 
+  const loadingStats = !stats && !statsError;
+  const s = stats;
+  const target = isEditingRevenue ? tempMonthlyTarget : s?.monthlyTarget || 0;
+  const invoiced = s?.invoicedThisMonth ?? 0;
+  const targetPct = target > 0 ? Math.round((invoiced / target) * 100) : 0;
+  const firstName = (user.fullName || "").split(" ")[0];
+  const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+  const scrollToDeadlines = () =>
+    document.getElementById("deadlines")?.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  // Exceptions that need someone's attention today, most urgent first.
+  const attention: AttentionItem[] = [
+    overdueCount > 0 && { tone: "danger", icon: CircleAlert, label: `${plural(overdueCount, "job")} overdue`, onClick: scrollToDeadlines },
+    dueTodayCount > 0 && { tone: "warning", icon: CalendarClock, label: `${plural(dueTodayCount, "job")} due today`, onClick: scrollToDeadlines },
+    has(s?.urgentJobs) && s.urgentJobs > 0 && { tone: "warning", icon: Zap, label: plural(s.urgentJobs, "rush job"), href: "/production" },
+    has(s?.lowStockItems) && s.lowStockItems > 0 && { tone: "warning", icon: Layers, label: `${plural(s.lowStockItems, "material")} low on stock`, href: "/inventory" },
+    has(s?.overdueInvoices) && s.overdueInvoices > 0 && { tone: "info", icon: FileWarning, label: `${plural(s.overdueInvoices, "invoice")} overdue for payment`, href: hasPermission("Payment Reminders") ? "/payment-reminders" : "/invoices" },
+  ].filter(Boolean) as AttentionItem[];
+
+  const shopRows = [
+    has(s?.pendingDeliveries) && { label: "Awaiting dispatch", value: String(s.pendingDeliveries), icon: Truck, href: "/delivery", warn: false, source: sources.pendingDeliveries },
+    has(s?.lowStockItems) && { label: "Low-stock materials", value: String(s.lowStockItems), icon: Layers, href: "/inventory", warn: s.lowStockItems > 0, source: sources.lowStockItems },
+    has(s?.totalCustomers) && { label: "Customers", value: String(s.totalCustomers), icon: Users, href: "/customers", warn: false, source: undefined },
+    has(s?.cashBalance) && { label: "Cash balance", value: formatINR(s.cashBalance, { compact: true }), icon: Wallet, href: "/accounts", warn: false, source: sources.cashBalance },
+    has(s?.bankBalance) && { label: "Bank balance", value: formatINR(s.bankBalance, { compact: true }), icon: Landmark, href: "/accounts", warn: false, source: sources.bankBalance },
+  ].filter(Boolean) as { label: string; value: string; icon: LucideIcon; href: string; warn: boolean; source?: string }[];
+
+  const tiles: React.ReactNode[] = [];
+  if (canSeeJobs) {
+    tiles.push(
+      <KpiTile
+        key="production"
+        label="In production"
+        icon={Factory}
+        value={inProduction}
+        loading={jobsLoading}
+        hint={has(s?.urgentJobs) && s.urgentJobs > 0 ? plural(s.urgentJobs, "rush job") : has(s?.todaysJobs) ? `${s.todaysJobs} new today` : undefined}
+        tone={has(s?.urgentJobs) && s.urgentJobs > 0 ? "warning" : "default"}
+        href="/production"
+      />,
+      <KpiTile
+        key="due"
+        label="Due today"
+        icon={CalendarClock}
+        value={dueTodayCount}
+        loading={jobsLoading}
+        hint={overdueCount > 0 ? `${overdueCount} overdue` : "Nothing overdue"}
+        tone={overdueCount > 0 ? "danger" : dueTodayCount > 0 ? "warning" : "success"}
+        href="/production"
+      />
+    );
+  }
+  if (loadingStats || has(s?.collectedToday)) {
+    tiles.push(
+      <KpiTile key="collected" label="Collected today" icon={IndianRupee} value={formatINR(s?.collectedToday ?? 0, { compact: true })} loading={loadingStats} hint="Payments recorded today" href={hasPermission("Payments") ? "/payments" : undefined} />
+    );
+  }
+  if (loadingStats || has(s?.invoicedThisMonth)) {
+    tiles.push(
+      <KpiTile
+        key="invoiced"
+        label="Invoiced this month"
+        icon={Target}
+        value={formatINR(invoiced, { compact: true })}
+        loading={loadingStats}
+        progress={targetPct}
+        hint={target ? `${targetPct}% of your ${formatINR(target, { compact: true })} target` : "Issued invoices"}
+        tone={targetPct >= 100 ? "success" : "default"}
+        href="/invoices"
+      />
+    );
+  }
+  if (loadingStats || has(s?.receivables)) {
+    tiles.push(
+      <KpiTile
+        key="receivables"
+        label="Receivables"
+        icon={FileWarning}
+        value={formatINR(s?.receivables ?? 0, { compact: true })}
+        loading={loadingStats}
+        hint={has(s?.unpaidInvoices) ? `${plural(s.unpaidInvoices, "unpaid invoice")}${s.overdueInvoices ? ` · ${s.overdueInvoices} overdue` : ""}` : undefined}
+        tone={has(s?.overdueInvoices) && s.overdueInvoices > 0 ? "warning" : "default"}
+        href={hasPermission("Payment Reminders") ? "/payment-reminders" : "/invoices?view=overdue"}
+      />
+    );
+  }
+  const tileCols = tiles.length >= 6 ? "xl:grid-cols-6" : tiles.length === 5 ? "xl:grid-cols-5" : tiles.length === 4 ? "xl:grid-cols-4" : "xl:grid-cols-3";
+
   return (
-    <div className="min-h-screen bg-slate-50">
-      {/* Enterprise Header Bar */}
-      <div className="bg-white border-b border-slate-200 px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold text-slate-900">Business Intelligence Dashboard</h1>
-            <div className="flex items-center gap-4 mt-1">
-              <p className="text-xs text-slate-500">
-                Last Updated: {format(currentTime, 'dd MMM yyyy, HH:mm:ss')}
-              </p>
-              <div className="flex items-center gap-1.5">
-                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
-                <span className="text-xs text-slate-600 font-medium">Live</span>
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
+    <PageShell>
+      <PageHeader
+        eyebrow={format(new Date(), "EEEE, d MMMM yyyy")}
+        title={`${greeting(new Date())}${firstName ? `, ${firstName}` : ""}`}
+        description={
+          <span className="inline-flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-success" aria-hidden />
+            Live shop-floor view · updated {format(lastUpdated, "HH:mm")}
+          </span>
+        }
+        actions={
+          <>
             <DashboardShortcuts
-              onJobCreated={fetchDashboardStats}
-              onQuotationCreated={fetchDashboardStats}
-              onOrderCreated={fetchDashboardStats}
-              onCustomerCreated={fetchDashboardStats}
+              onJobCreated={refresh}
+              onQuotationCreated={refresh}
+              onOrderCreated={refresh}
+              onCustomerCreated={refresh}
             />
-            <QuickReminderDialog onReminderCreated={fetchDashboardStats} />
-          </div>
+            {hasPermission("Staff & Tasks: Assign Tasks") && <QuickReminderDialog onReminderCreated={refresh} />}
+          </>
+        }
+      />
+
+      {/* What needs attention right now */}
+      {(statsError || jobsError) && (
+        <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/35 bg-warning-soft px-3 py-2 text-sm text-warning-strong">
+          <span className="inline-flex items-center gap-2 font-medium">
+            <CircleAlert className="h-4 w-4 shrink-0" />
+            Some live figures are unavailable. Retry to refresh the dashboard.
+          </span>
+          <Button size="xs" variant="outline" onClick={refresh}>Retry</Button>
         </div>
-      </div>
+      )}
+      {!loadingStats && !jobsLoading && !statsError && !jobsError && <AttentionBar items={attention} />}
 
-      <div className="p-6 space-y-6">
-        {/* Key Performance Indicators */}
-        <div>
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-1 h-5 bg-blue-600 rounded-full"></div>
-            <h2 className="text-sm font-semibold text-slate-700 uppercase tracking-wider">Key Performance Indicators</h2>
-          </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* Jobs Metric */}
-            <Card className="border-slate-200 shadow-sm hover:shadow-md transition-shadow bg-white">
-              <CardContent className="p-5">
-                <div className="flex items-start justify-between mb-3">
-                  <div className="p-2 bg-blue-50 rounded-lg">
-                    <Briefcase className="h-5 w-5 text-blue-600" />
-                  </div>
-                  <Badge variant="outline" className="text-xs font-normal border-slate-200 text-slate-600">
-                    Today
-                  </Badge>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Active Jobs</p>
-                  <p className="text-3xl font-bold text-slate-900">
-                    {stats.loading ? "—" : stats.todaysJobs}
-                  </p>
-                  <div className="flex items-center gap-2 mt-2">
-                    <div className="flex-1 bg-slate-100 rounded-full h-1.5">
-                      <div 
-                        className="bg-blue-600 h-1.5 rounded-full transition-all duration-500"
-                        style={{ width: stats.todaysJobs > 0 ? `${(stats.completedJobs / stats.todaysJobs) * 100}%` : '0%' }}
-                      ></div>
-                    </div>
-                    <span className="text-xs font-semibold text-slate-600">
-                      {stats.todaysJobs > 0 ? Math.round((stats.completedJobs / stats.todaysJobs) * 100) : 0}%
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-500 mt-1">{stats.completedJobs} completed</p>
-                </div>
-              </CardContent>
-            </Card>
+      {/* Headline numbers: only the ones this login's permissions cover */}
+      {tiles.length > 0 && (
+        <section aria-label="Key figures" className={cn("grid grid-cols-2 gap-3 md:grid-cols-3", tileCols)}>
+          {tiles}
+        </section>
+      )}
 
-            {/* Revenue Metric */}
-            <Card className="border-slate-200 shadow-sm hover:shadow-md transition-shadow bg-white">
-              <CardContent className="p-5">
-                <div className="flex items-start justify-between mb-3">
-                  <div className="p-2 bg-emerald-50 rounded-lg">
-                    <DollarSign className="h-5 w-5 text-emerald-600" />
-                  </div>
-                  <Badge variant="outline" className="text-xs font-normal border-slate-200 text-slate-600">
-                    Today
-                  </Badge>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Revenue</p>
-                  <p className="text-3xl font-bold text-slate-900">
-                    ₹{stats.loading ? "—" : (stats.todaysRevenue / 1000).toFixed(1)}K
-                  </p>
-                  <p className="text-xs text-slate-500 mt-1">From paid invoices</p>
-                </div>
-              </CardContent>
-            </Card>
+      {canSeeJobs && <PipelineStrip counts={stageCounts} loading={jobsLoading} />}
 
-            {/* Monthly Target */}
-            <Card className="border-slate-200 shadow-sm hover:shadow-md transition-shadow bg-white">
-              <CardContent className="p-5">
-                <div className="flex items-start justify-between mb-3">
-                  <div className="p-2 bg-indigo-50 rounded-lg">
-                    <Target className="h-5 w-5 text-indigo-600" />
-                  </div>
-                  <Badge variant="outline" className="text-xs font-normal border-slate-200 text-slate-600">
-                    MTD
-                  </Badge>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Target Achievement</p>
-                  <p className="text-3xl font-bold text-slate-900">
-                    {Math.round((stats.thisMonthRevenue / stats.monthlyTarget) * 100)}%
-                  </p>
-                  <div className="flex items-center gap-2 mt-2">
-                    <div className="flex-1 bg-slate-100 rounded-full h-1.5">
-                      <div 
-                        className="bg-indigo-600 h-1.5 rounded-full transition-all duration-500"
-                        style={{ width: `${Math.min((stats.thisMonthRevenue / stats.monthlyTarget) * 100, 100)}%` }}
-                      ></div>
-                    </div>
-                  </div>
-                  <p className="text-xs text-slate-500 mt-1">
-                    ₹{(stats.thisMonthRevenue / 1000).toFixed(0)}K / ₹{(stats.monthlyTarget / 1000).toFixed(0)}K
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Tax Liability */}
-            <Card className="border-slate-200 shadow-sm hover:shadow-md transition-shadow bg-white">
-              <CardContent className="p-5">
-                <div className="flex items-start justify-between mb-3">
-                  <div className="p-2 bg-amber-50 rounded-lg">
-                    <CreditCard className="h-5 w-5 text-amber-600" />
-                  </div>
-                  <Badge variant="outline" className="text-xs font-normal border-slate-200 text-slate-600">
-                    GST
-                  </Badge>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Tax Payable</p>
-                  <p className="text-3xl font-bold text-slate-900">
-                    ₹{stats.loading ? "—" : (stats.taxPayable / 1000).toFixed(1)}K
-                  </p>
-                  <p className="text-xs text-slate-500 mt-1">Current month liability</p>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-
-        {/* Operational Overview */}
-        <div>
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-1 h-5 bg-slate-600 rounded-full"></div>
-            <h2 className="text-sm font-semibold text-slate-700 uppercase tracking-wider">Operational Overview</h2>
-          </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <Card className="border-slate-200 bg-white shadow-sm">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Customers</p>
-                    <p className="text-2xl font-bold text-slate-900">{stats.loading ? "—" : stats.totalCustomers}</p>
-                  </div>
-                  <div className="p-2.5 bg-slate-50 rounded-lg">
-                    <Users className="h-5 w-5 text-slate-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-slate-200 bg-white shadow-sm">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Pending Deliveries</p>
-                    <p className="text-2xl font-bold text-slate-900">{stats.loading ? "—" : stats.pendingDeliveries}</p>
-                  </div>
-                  <div className="p-2.5 bg-slate-50 rounded-lg">
-                    <Clock className="h-5 w-5 text-slate-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-slate-200 bg-white shadow-sm">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Low Stock Items</p>
-                    <div className="flex items-center gap-2">
-                      <p className="text-2xl font-bold text-slate-900">{stats.loading ? "—" : stats.lowStockItems}</p>
-                      {stats.lowStockItems > 0 && (
-                        <AlertTriangle className="h-4 w-4 text-amber-500" />
+      {/* Deadlines, shop status and the monthly target */}
+      <section className={cn("grid grid-cols-1 gap-4", canSeeJobs && "xl:grid-cols-3")}>
+        {canSeeJobs && (
+        <Panel
+          id="deadlines"
+          className="scroll-mt-4 xl:col-span-2"
+          title="Deadlines"
+          description="Open jobs overdue or due in the next two days"
+          count={jobsLoading ? undefined : dueJobs.length}
+          countTone={overdueCount > 0 ? "danger" : dueTodayCount > 0 ? "warning" : "default"}
+          action={<PanelLink to="/jobs">All job tickets</PanelLink>}
+        >
+          {jobsLoading ? (
+            <div className="space-y-2 p-4 sm:p-5">
+              {[0, 1, 2].map((i) => <div key={i} className="h-10 animate-pulse rounded-md bg-muted" />)}
+            </div>
+          ) : dueJobs.length === 0 ? (
+            <EmptyState
+              compact
+              tone="success"
+              icon={Check}
+              title="No deadlines at risk"
+              description="Every open job is due later than two days from now."
+            />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/60 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    <th className="px-4 py-2.5 sm:px-5">Job</th>
+                    <th className="hidden px-3 py-2.5 md:table-cell">Customer</th>
+                    <th className="hidden px-3 py-2.5 sm:table-cell">Stage</th>
+                    <th className="px-4 py-2.5 text-right sm:px-5">Due</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dueJobs.slice(0, 8).map((job) => (
+                    <tr
+                      key={job._id || job.id}
+                      className={cn(
+                        "border-b last:border-0 hover:bg-muted/50",
+                        job.due === "overdue" && "bg-destructive-soft/40"
                       )}
-                    </div>
-                  </div>
-                  <div className="p-2.5 bg-slate-50 rounded-lg">
-                    <Package className="h-5 w-5 text-slate-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-slate-200 bg-white shadow-sm">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Monthly Revenue</p>
-                    <p className="text-2xl font-bold text-slate-900">
-                      ₹{stats.loading ? "—" : (stats.thisMonthRevenue / 1000).toFixed(0)}K
-                    </p>
-                  </div>
-                  <div className="p-2.5 bg-slate-50 rounded-lg">
-                    <TrendingUp className="h-5 w-5 text-slate-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-
-        {/* Workflow Management */}
-        <div>
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-1 h-5 bg-slate-600 rounded-full"></div>
-            <h2 className="text-sm font-semibold text-slate-700 uppercase tracking-wider">Workflow Management</h2>
-          </div>
-          
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <TaskWidget onRefresh={fetchDashboardStats} />
-            <PaymentDuesWidget onRefresh={fetchDashboardStats} />
-          </div>
-        </div>
-
-        {/* Analytics & Notifications */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <NotificationCenter />
-          
-          <Card className="border-slate-200 bg-white shadow-sm">
-            <CardHeader className="border-b border-slate-100 pb-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle className="text-base font-semibold text-slate-900">Revenue Analytics</CardTitle>
-                  <p className="text-xs text-slate-500 mt-1">Monthly performance trends</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  {!isEditingRevenue ? (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={handleEditRevenue}
-                      className="h-8 w-8 p-0 hover:bg-slate-100"
                     >
-                      <Edit className="h-4 w-4 text-slate-600" />
-                    </Button>
-                  ) : (
-                    <div className="flex items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleSaveRevenue}
-                        className="h-8 w-8 p-0 hover:bg-emerald-100"
-                      >
-                        <Save className="h-4 w-4 text-emerald-600" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleCancelEdit}
-                        className="h-8 w-8 p-0 hover:bg-red-100"
-                      >
-                        <X className="h-4 w-4 text-red-600" />
-                      </Button>
-                    </div>
-                  )}
-                  <div className="p-2 bg-slate-50 rounded-lg">
-                    <BarChart3 className="h-5 w-5 text-slate-600" />
-                  </div>
+                      <td className="w-full max-w-0 px-4 py-2.5 sm:px-5">
+                        <div className="truncate font-medium">{job.title}</div>
+                        <div className="truncate text-xs text-muted-foreground">
+                          <span className="md:hidden">{job.customerId?.name || job.customerName || "—"}</span>
+                          {job.printSpecs?.quantity > 1 && (
+                            <span className="hidden md:inline">
+                              {job.printSpecs.quantity.toLocaleString("en-IN")} pcs
+                              {job.printSpecs.paperType ? ` · ${job.printSpecs.paperType}` : ""}
+                            </span>
+                          )}
+                        </div>
+                        <JobStatusBadge status={job.status} className="mt-1.5 sm:hidden" />
+                      </td>
+                      <td className="hidden max-w-[200px] truncate whitespace-nowrap px-3 py-2.5 text-muted-foreground md:table-cell">
+                        {job.customerId?.name || job.customerName || "—"}
+                      </td>
+                      <td className="hidden px-3 py-2.5 sm:table-cell">
+                        <JobStatusBadge status={job.status} />
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2.5 text-right sm:px-5">
+                        <DuePill due={job.due} dueDate={job.dueDate} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {dueJobs.length > 8 && (
+                <div className="border-t px-4 py-2.5 text-xs text-muted-foreground sm:px-5">
+                  Showing 8 of {dueJobs.length}.{" "}
+                  <Link to="/production" className="font-medium text-primary hover:underline">
+                    See them all on the board
+                  </Link>
                 </div>
-              </div>
-            </CardHeader>
-            <CardContent className="pt-6">
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-slate-600">Current Month Revenue</span>
-                  <span className="text-lg font-bold text-slate-900">₹{(stats.thisMonthRevenue / 1000).toFixed(0)}K</span>
+              )}
+            </div>
+          )}
+        </Panel>
+        )}
+
+        <div className={cn("flex flex-col gap-4", !canSeeJobs && "md:grid md:grid-cols-2")}>
+          {shopRows.length > 0 && (
+          <Panel title="Shop status" description="Dispatch, materials and account balances">
+            <ul className="divide-y">
+              {shopRows.map((row) => (
+                <li key={row.label}>
+                  <Link
+                    to={row.href}
+                    className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none sm:px-5"
+                  >
+                    <span
+                      className={cn(
+                        "flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground",
+                        row.warn && "bg-warning-soft text-warning-strong"
+                      )}
+                    >
+                      <row.icon className="h-4 w-4" />
+                    </span>
+                    <span className={cn("flex-1 text-sm", row.warn ? "font-medium text-foreground" : "text-muted-foreground")}>
+                      {row.label}
+                    </span>
+                    <span className={cn("num text-sm font-semibold", row.warn && "text-warning-strong")} title={row.source}>
+                      {loadingStats ? "—" : row.value}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </Panel>
+          )}
+
+          {has(s?.invoicedThisMonth) && (
+          <Panel
+            title="Invoiced vs target"
+            description="Issued invoices this month"
+            action={
+              !canSetTarget ? undefined : !isEditingRevenue ? (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => {
+                    setIsEditingRevenue(true);
+                    setTempMonthlyTarget(s?.monthlyTarget || 0);
+                  }}
+                >
+                  <Pencil /> Edit target
+                </Button>
+              ) : (
+                <>
+                  <Button variant="ghost" size="icon-xs" onClick={handleSaveRevenue} className="text-success-strong" aria-label="Save target">
+                    <Check />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={() => {
+                      setIsEditingRevenue(false);
+                      setTempMonthlyTarget(s?.monthlyTarget || 0);
+                    }}
+                    className="text-destructive-strong"
+                    aria-label="Cancel editing target"
+                  >
+                    <X />
+                  </Button>
+                </>
+              )
+            }
+          >
+            <div className="space-y-3 p-4 sm:p-5">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="min-w-0">
+                  <div className="text-xs text-muted-foreground">This month</div>
+                  <div className="num mt-1 truncate text-base font-semibold">{formatINR(invoiced, { compact: true })}</div>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-slate-600">Monthly Target</span>
+                <div className="min-w-0">
+                  <div className="text-xs text-muted-foreground">Target</div>
                   {isEditingRevenue ? (
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-slate-500">₹</span>
+                    <div className="mt-1 flex items-center gap-1">
+                      <span className="text-sm text-muted-foreground">₹</span>
                       <Input
                         type="number"
                         value={tempMonthlyTarget / 1000}
                         onChange={(e) => setTempMonthlyTarget(Number(e.target.value) * 1000)}
-                        className="w-20 h-8 text-right text-lg font-bold"
+                        className="h-7 w-20 px-2 text-right font-semibold"
                         min="0"
                         step="10"
+                        aria-label="Monthly target in thousands of rupees"
                       />
-                      <span className="text-sm text-slate-500">K</span>
+                      <span className="text-sm text-muted-foreground">K</span>
                     </div>
                   ) : (
-                    <span className="text-lg font-bold text-slate-900">₹{(stats.monthlyTarget / 1000).toFixed(0)}K</span>
+                    <div className="num mt-1 truncate text-base font-semibold">{formatINR(s?.monthlyTarget || 0, { compact: true })}</div>
                   )}
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-slate-600">Achievement Rate</span>
-                  <span className="text-lg font-bold text-emerald-600">
-                    {Math.round((stats.thisMonthRevenue / (isEditingRevenue ? tempMonthlyTarget : stats.monthlyTarget)) * 100)}%
-                  </span>
-                </div>
-                <div className="w-full bg-slate-100 rounded-full h-3">
-                  <div 
-                    className="bg-emerald-500 h-3 rounded-full transition-all duration-500"
-                    style={{ width: `${Math.min((stats.thisMonthRevenue / (isEditingRevenue ? tempMonthlyTarget : stats.monthlyTarget)) * 100, 100)}%` }}
-                  ></div>
-                </div>
-                <div className="text-xs text-slate-500 text-center">
-                  {stats.thisMonthRevenue >= (isEditingRevenue ? tempMonthlyTarget : stats.monthlyTarget) 
-                    ? '🎉 Target Achieved!' 
-                    : ''}
+                <div className="min-w-0">
+                  <div className="text-xs text-muted-foreground">Achieved</div>
+                  <div className={cn("num mt-1 text-base font-semibold", targetPct >= 100 ? "text-success-strong" : "text-foreground")}>
+                    {targetPct}%
+                  </div>
                 </div>
               </div>
-            </CardContent>
-          </Card>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={Math.min(targetPct, 100)} aria-valuemin={0} aria-valuemax={100} aria-label="Monthly target achieved">
+                <div
+                  className={cn("h-full rounded-full transition-all duration-500", targetPct >= 100 ? "bg-success" : "bg-primary")}
+                  style={{ width: `${Math.min(targetPct, 100)}%` }}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {targetPct >= 100
+                  ? "Target achieved for this month."
+                  : `${formatINR(Math.max(target - invoiced, 0), { compact: true })} to go this month.`}
+              </p>
+            </div>
+          </Panel>
+          )}
         </div>
+      </section>
+
+      {/* Team workload, for the admin and managers who see all staff data */}
+      {seesWholeTeam && <TeamWorkloadPanel />}
+
+      {/* Follow-ups */}
+      <section className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
+        {hasPermission("Invoicing") && <PaymentDuesWidget onRefresh={refresh} />}
+        <TaskWidget onRefresh={refresh} />
+        <NotificationCenter className={hasPermission("Invoicing") ? "lg:col-span-2 xl:col-span-1" : undefined} />
+      </section>
+    </PageShell>
+  );
+}
+
+interface AttentionItem {
+  tone: "danger" | "warning" | "info";
+  icon: LucideIcon;
+  label: string;
+  href?: string;
+  onClick?: () => void;
+}
+
+const ATTENTION_TONES: Record<AttentionItem["tone"], string> = {
+  danger: "border-destructive/30 bg-destructive-soft text-destructive-strong hover:border-destructive/50",
+  warning: "border-warning/35 bg-warning-soft text-warning-strong hover:border-warning/60",
+  info: "border-info/25 bg-info-soft text-info-strong hover:border-info/50",
+};
+
+/** A single row of the exceptions that need action, or an all-clear. */
+function AttentionBar({ items }: { items: AttentionItem[] }) {
+  if (items.length === 0) {
+    return (
+      <div className="flex items-center gap-2 rounded-lg border border-success/25 bg-success-soft px-3 py-2 text-sm text-success-strong">
+        <CircleCheck className="h-4 w-4 shrink-0" />
+        <span className="font-medium">All clear</span>
+        <span className="hidden text-success-strong/80 sm:inline">— no overdue or rush jobs flagged.</span>
       </div>
-    </div>
+    );
+  }
+
+  const chip = "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&_svg]:h-3.5 [&_svg]:w-3.5 [&_svg]:shrink-0";
+  return (
+    <section aria-label="Needs attention" className="flex flex-wrap items-center gap-2">
+      <span className="section-label mr-1">Needs attention</span>
+      {items.map((item) =>
+        item.href ? (
+          <Link key={item.label} to={item.href} className={cn(chip, ATTENTION_TONES[item.tone])}>
+            <item.icon />
+            {item.label}
+          </Link>
+        ) : (
+          <button key={item.label} type="button" onClick={item.onClick} className={cn(chip, ATTENTION_TONES[item.tone])}>
+            <item.icon />
+            {item.label}
+          </button>
+        )
+      )}
+    </section>
+  );
+}
+
+/** How soon a job is due: late jobs show how late, the rest show the day. */
+function DuePill({ due, dueDate }: { due: "overdue" | "today" | "soon"; dueDate: string }) {
+  const date = new Date(dueDate);
+  const days = differenceInCalendarDays(date, new Date());
+  const label =
+    due === "overdue" ? `${-days}d late` : due === "today" ? "Today" : days === 1 ? "Tomorrow" : format(date, "d MMM");
+  return (
+    <span
+      title={format(date, "EEE, d MMM yyyy")}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-semibold",
+        due === "overdue" && "bg-destructive-soft text-destructive-strong",
+        due === "today" && "bg-warning-soft text-warning-strong",
+        due === "soon" && "bg-muted font-medium text-muted-foreground"
+      )}
+    >
+      {due === "overdue" && <CircleAlert className="h-3 w-3" />}
+      {label}
+    </span>
   );
 }

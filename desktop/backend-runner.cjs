@@ -1,5 +1,5 @@
 /**
- * Runs the SerpY Express backend inside the desktop app.
+ * Runs the Terralabs ERP Express backend inside the desktop app.
  *
  * The server is spawned as a child process using Electron's own bundled Node
  * (ELECTRON_RUN_AS_NODE=1), so the target machine needs nothing installed — no

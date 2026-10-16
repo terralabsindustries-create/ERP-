@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Navigate, Link } from "react-router-dom";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,7 +12,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Building2, Eye, EyeOff, Shield, Users, BarChart3, AlertCircle, UserCheck } from "lucide-react";
+import { Eye, EyeOff, AlertCircle, UserCheck, Calculator, SquareKanban, Layers, FileText } from "lucide-react";
+import { BrandLogo } from "@/components/brand/BrandMark";
 import { useAuth } from "@/contexts/AuthContext";
 import { OTPVerification } from "@/components/auth/OTPVerification";
 import { BASE_URL } from "@/lib/apiClient";
@@ -155,17 +155,14 @@ export default function Auth() {
   // when the field is in error.
   const signUpInputClass = (field: string, extra = "") =>
     [
-      "h-12 md:h-14 bg-white border-2 text-gray-900 placeholder-gray-400 focus:ring-4",
-      "rounded-xl md:rounded-2xl px-4 md:px-5 text-base md:text-lg transition-all duration-300",
+      "h-10 bg-card",
       extra,
-      fieldErrors[field]
-        ? "border-red-400 focus:border-red-500 focus:ring-red-500/10"
-        : "border-gray-200 focus:border-orange-500 focus:ring-orange-500/10",
+      fieldErrors[field] ? "border-destructive focus-visible:border-destructive focus-visible:ring-destructive/15" : "",
     ].join(" ");
 
   const renderFieldError = (field: string) =>
     fieldErrors[field] ? (
-      <p id={`signup-${FIELD_INPUT_IDS[field]}-error`} className="text-sm font-medium text-red-600">
+      <p id={`signup-${FIELD_INPUT_IDS[field]}-error`} className="text-xs font-medium text-destructive">
         {fieldErrors[field]}
       </p>
     ) : null;
@@ -190,333 +187,280 @@ export default function Auth() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-orange-400"></div>
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-muted border-t-primary"></div>
       </div>
     );
   }
 
+  const labelClass = "text-[13px] font-medium text-foreground";
+  const inputClass = "h-10 bg-card";
+  const eyeButtonClass =
+    "absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 p-0 text-muted-foreground hover:text-foreground";
+
   return (
-    <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-50 via-orange-50/30 to-white">
-      {/* Animated Background */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-0 left-1/4 w-96 h-96 bg-orange-200/20 rounded-full blur-3xl animate-pulse" />
-        <div className="absolute bottom-0 right-1/4 w-[500px] h-[500px] bg-orange-300/20 rounded-full blur-3xl animate-pulse delay-1000" />
-        <div className="absolute top-1/2 left-1/2 w-64 h-64 bg-orange-100/30 rounded-full blur-2xl animate-pulse delay-500" />
-      </div>
+    <div className="min-h-screen grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] bg-background">
+      {/* Brand panel */}
+      <aside className="relative hidden overflow-hidden bg-slate-950 text-white lg:flex lg:flex-col">
+        {/* crop-mark grid, like the corner of a press sheet */}
+        <svg className="pointer-events-none absolute inset-0 h-full w-full opacity-[0.07]" aria-hidden>
+          <defs>
+            <pattern id="crop" width="96" height="96" patternUnits="userSpaceOnUse">
+              <path d="M0 12 H8 M12 0 V8 M96 84 H88 M84 96 V88" stroke="white" strokeWidth="1" />
+              <circle cx="48" cy="48" r="6" fill="none" stroke="white" strokeWidth="1" />
+              <path d="M48 38 V58 M38 48 H58" stroke="white" strokeWidth="1" />
+            </pattern>
+          </defs>
+          <rect width="100%" height="100%" fill="url(#crop)" />
+        </svg>
+        <div className="absolute -right-32 -top-32 h-96 w-96 rounded-full bg-sky-500/20 blur-3xl" aria-hidden />
+        <div className="absolute -bottom-40 -left-24 h-96 w-96 rounded-full bg-fuchsia-600/10 blur-3xl" aria-hidden />
 
-      {/* Main Content */}
-      <div className="relative z-10 flex-1 flex flex-col items-center justify-center p-4 md:p-8 py-8 md:py-16">
-        <div className="w-full max-w-6xl">
-          <div className="grid lg:grid-cols-2 gap-12 lg:gap-20 items-center">
-            
-            {/* Left Side - Branding */}
-            <div className="hidden lg:flex flex-col justify-center order-1">
-              <div className="space-y-8">
-                <div className="flex items-center space-x-4">
-                  <div className="p-4 bg-gradient-to-br from-orange-500 to-orange-600 rounded-2xl shadow-xl shadow-orange-500/30">
-                    <Building2 className="h-10 w-10 text-white" />
-                  </div>
+        <div className="relative flex flex-1 flex-col justify-between p-10 xl:p-14">
+          <BrandLogo tone="light" />
+
+          <div className="max-w-lg">
+            <p className="section-label !text-sky-300">Built for printers</p>
+            <h1 className="mt-3 text-3xl font-semibold leading-tight tracking-tight xl:text-[40px]">
+              Run your print shop from estimate to dispatch.
+            </h1>
+            <p className="mt-4 text-[15px] leading-relaxed text-slate-300">
+              One system for offset, digital and large-format work — quoting, job tickets, the production floor,
+              paper stock and GST billing.
+            </p>
+
+            <ul className="mt-10 space-y-5">
+              {[
+                { icon: Calculator, title: "Accurate estimates", text: "Imposition, paper, plates, press and finishing priced in seconds." },
+                { icon: SquareKanban, title: "Live production board", text: "Every job ticket from pre-press through press to dispatch." },
+                { icon: Layers, title: "Paper & ink stock", text: "GSM-wise stock, purchase bills and supplier ledgers." },
+                { icon: FileText, title: "GST billing & follow-ups", text: "Invoices, payment reminders and WhatsApp updates." },
+              ].map(({ icon: Icon, title, text }) => (
+                <li key={title} className="flex gap-4">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/[0.06] ring-1 ring-white/10">
+                    <Icon className="h-[18px] w-[18px] text-sky-300" />
+                  </span>
                   <div>
-                    <h1 className="text-4xl font-bold text-gray-900">SerpY</h1>
-                    <p className="text-sm text-orange-600 font-medium tracking-wider uppercase">Enterprise ERP</p>
+                    <div className="text-sm font-medium">{title}</div>
+                    <div className="text-sm text-slate-400">{text}</div>
                   </div>
-                </div>
-                <div className="space-y-4">
-                  <p className="text-2xl text-gray-700 font-light leading-relaxed">
-                    Streamline your business with intelligent automation
-                  </p>
-                  <p className="text-gray-500 leading-relaxed">
-                    Manage customers, jobs, inventory, and more with our comprehensive ERP solution designed for modern businesses.
-                  </p>
-                </div>
+                </li>
+              ))}
+            </ul>
+          </div>
 
-                {/* Feature Cards */}
-                <div className="space-y-4 mt-8">
-                  <div className="flex items-center space-x-4 p-5 bg-white/80 backdrop-blur-sm rounded-2xl border border-orange-100/50 shadow-lg shadow-orange-100/20 hover:shadow-xl hover:shadow-orange-200/30 transition-all duration-300">
-                    <div className="p-3 bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl flex-shrink-0 shadow-md">
-                      <Users className="h-6 w-6 text-white" />
-                    </div>
-                    <div className="text-left">
-                      <h3 className="font-semibold text-gray-900 text-base">
-                        Team Collaboration
-                      </h3>
-                      <p className="text-sm text-gray-500">
-                        Seamless teamwork across departments
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center space-x-4 p-5 bg-white/80 backdrop-blur-sm rounded-2xl border border-orange-100/50 shadow-lg shadow-orange-100/20 hover:shadow-xl hover:shadow-orange-200/30 transition-all duration-300">
-                    <div className="p-3 bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl flex-shrink-0 shadow-md">
-                      <BarChart3 className="h-6 w-6 text-white" />
-                    </div>
-                    <div className="text-left">
-                      <h3 className="font-semibold text-gray-900 text-base">
-                        Real-time Analytics
-                      </h3>
-                      <p className="text-sm text-gray-500">Data-driven business insights</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+          <div className="flex items-center gap-3 text-xs text-slate-500">
+            <span className="cmyk-strip h-1 w-12 rounded-full" aria-hidden />
+            Cyan · Magenta · Yellow · Key
+          </div>
+        </div>
+      </aside>
 
-            {/* Right Side - Login Form */}
-            <div className="flex justify-center w-full order-2 lg:order-2">
-              <Card className="w-full max-w-md border-0 shadow-2xl bg-white/95 backdrop-blur-sm rounded-3xl overflow-hidden">
-                <CardHeader className="text-center pb-6 md:pb-8 pt-8 md:pt-10 px-6 md:px-8 bg-gradient-to-br from-orange-50 to-white">
-                  <div className="lg:hidden flex justify-center mb-4 md:mb-6 p-4 bg-gradient-to-br from-orange-500 to-orange-600 rounded-2xl shadow-xl shadow-orange-500/30">
-                    <Building2 className="h-10 w-10 text-white" />
-                  </div>
-                  <CardTitle className="text-2xl md:text-3xl font-bold text-gray-900 mb-2">
-                    Welcome Back
-                  </CardTitle>
-                  <p className="text-sm md:text-base text-gray-500">
-                    Sign in to access your ERP dashboard
-                  </p>
-                </CardHeader>
-                <CardContent className="px-6 md:px-8 pb-8 md:pb-10">
-                  <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                    <TabsList className="grid w-full grid-cols-2 mb-6 md:mb-8 bg-gradient-to-r from-orange-50 to-orange-100/50 backdrop-blur-xl p-1 rounded-2xl border border-orange-200/50 shadow-sm">
-                      <TabsTrigger
-                        value="signin"
-                        className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-orange-500 data-[state=active]:to-orange-600 data-[state=active]:shadow-lg data-[state=active]:shadow-orange-500/30 hover:bg-gradient-to-r hover:from-orange-500 hover:to-orange-600 hover:text-white hover:shadow-lg hover:shadow-orange-500/30 text-gray-600 data-[state=active]:text-white font-medium rounded-xl transition-all duration-300"
-                      >
-                        Sign In
-                      </TabsTrigger>
-                      <TabsTrigger
-                        value="signup"
-                        className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-orange-500 data-[state=active]:to-orange-600 data-[state=active]:shadow-lg data-[state=active]:shadow-orange-500/30 hover:bg-gradient-to-r hover:from-orange-500 hover:to-orange-600 hover:text-white hover:shadow-lg hover:shadow-orange-500/30 text-gray-600 data-[state=active]:text-white font-medium rounded-xl transition-all duration-300"
-                      >
-                        Sign Up
-                      </TabsTrigger>
-                    </TabsList>
+      {/* Form panel */}
+      <main className="flex flex-col">
+        <div className="flex flex-1 items-center justify-center px-5 py-10 sm:px-8">
+          <div className="w-full max-w-[400px]">
+            <BrandLogo className="mb-10 lg:hidden" />
 
-                  <TabsContent value="signin" className="space-y-4 md:space-y-5">
-                    <form onSubmit={handleSignIn} className="space-y-4 md:space-y-5">
-                      <div className="space-y-2 md:space-y-3">
-                        <Label
-                          htmlFor="signin-email"
-                          className="text-sm font-semibold text-gray-700 uppercase tracking-wide"
-                        >
-                          Email Address
-                        </Label>
-                        <Input
-                          id="signin-email"
-                          name="email"
-                          type="email"
-                          placeholder="john@enterprise.com"
-                          value={formData.email}
-                          onChange={handleInputChange}
-                          required
-                          className="h-12 md:h-14 bg-white border-2 border-gray-200 text-gray-900 placeholder-gray-400 focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 rounded-xl md:rounded-2xl px-4 md:px-5 text-base md:text-lg transition-all duration-300"
-                        />
-                      </div>
-                      <div className="space-y-2 md:space-y-3">
-                        <Label
-                          htmlFor="signin-password"
-                          className="text-sm font-semibold text-gray-700 uppercase tracking-wide"
-                        >
-                          Password
-                        </Label>
-                        <div className="relative">
-                          <Input
-                            id="signin-password"
-                            name="password"
-                            type={showPassword ? "text" : "password"}
-                            placeholder="Enter your secure password"
-                            value={formData.password}
-                            onChange={handleInputChange}
-                            required
-                            className="h-12 md:h-14 bg-white border-2 border-gray-200 text-gray-900 placeholder-gray-400 focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 pr-12 md:pr-14 rounded-xl md:rounded-2xl px-4 md:px-5 text-base md:text-lg transition-all duration-300"
-                          />
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="absolute right-1 md:right-2 top-1/2 transform -translate-y-1/2 h-8 w-8 md:h-10 md:w-10 hover:bg-orange-100/50 text-gray-400 hover:text-gray-600 rounded-lg md:rounded-xl transition-all duration-300"
-                            onClick={() => setShowPassword(!showPassword)}
-                          >
-                            {showPassword ? (
-                              <EyeOff className="h-4 w-4 md:h-5 md:w-5" />
-                            ) : (
-                              <Eye className="h-4 w-4 md:h-5 md:w-5" />
-                            )}
-                          </Button>
-                        </div>
-                      </div>
+            <h2 className="text-2xl font-semibold tracking-tight">
+              {activeTab === "signin" ? "Sign in to your workspace" : "Create your workspace"}
+            </h2>
+            <p className="mt-1.5 text-sm text-muted-foreground">
+              {activeTab === "signin"
+                ? "Welcome back. Enter your details to continue."
+                : "Set up Terralabs ERP for your print business."}
+            </p>
+
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-8 w-full">
+              <TabsList className="grid h-10 w-full grid-cols-2">
+                <TabsTrigger value="signin" className="h-full">Sign in</TabsTrigger>
+                <TabsTrigger value="signup" className="h-full">Create account</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="signin" className="mt-6">
+                <form onSubmit={handleSignIn} className="space-y-4">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="signin-email" className={labelClass}>Email</Label>
+                    <Input
+                      id="signin-email"
+                      name="email"
+                      type="email"
+                      autoComplete="email"
+                      placeholder="you@yourpress.com"
+                      value={formData.email}
+                      onChange={handleInputChange}
+                      required
+                      className={inputClass}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="signin-password" className={labelClass}>Password</Label>
+                    <div className="relative">
+                      <Input
+                        id="signin-password"
+                        name="password"
+                        type={showPassword ? "text" : "password"}
+                        autoComplete="current-password"
+                        placeholder="Enter your password"
+                        value={formData.password}
+                        onChange={handleInputChange}
+                        required
+                        className={`${inputClass} pr-10`}
+                      />
                       <Button
-                        type="submit"
-                        className="w-full h-12 md:h-14 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 font-semibold text-white text-base md:text-lg rounded-xl md:rounded-2xl shadow-lg shadow-orange-500/30 hover:shadow-xl hover:shadow-orange-500/40 transition-all duration-300 transform hover:scale-[1.01] tracking-wide"
-                        disabled={isLoading}
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className={eyeButtonClass}
+                        onClick={() => setShowPassword(!showPassword)}
+                        aria-label={showPassword ? "Hide password" : "Show password"}
                       >
-                        {isLoading
-                          ? "Authenticating..."
-                          : "Sign In"}
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </Button>
-                    </form>
-                  </TabsContent>
+                    </div>
+                  </div>
+                  <Button type="submit" className="h-10 w-full" disabled={isLoading}>
+                    {isLoading ? "Signing in…" : "Sign in"}
+                  </Button>
+                </form>
+              </TabsContent>
 
-                  <TabsContent value="signup" className="space-y-4 md:space-y-5">
-                    <form onSubmit={handleSignUp} className="space-y-4 md:space-y-5">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <Label
-                            htmlFor="signup-name"
-                            className="text-xs font-semibold text-gray-700 uppercase tracking-wider"
-                          >
-                            Full Name
-                          </Label>
-                          <Input
-                            id="signup-name"
-                            name="fullName"
-                            type="text"
-                            placeholder="John Anderson"
-                            value={formData.fullName}
-                            onChange={handleInputChange}
-                            required
-                            aria-invalid={!!fieldErrors.fullName}
-                            aria-describedby={fieldErrors.fullName ? "signup-name-error" : undefined}
-                            className={signUpInputClass("fullName")}
-                          />
-                          {renderFieldError("fullName")}
-                        </div>
-                        <div className="space-y-2">
-                          <Label
-                            htmlFor="signup-phone"
-                            className="text-xs font-semibold text-gray-700 uppercase tracking-wider"
-                          >
-                            Phone (Optional)
-                          </Label>
-                          <Input
-                            id="signup-phone"
-                            name="phone"
-                            type="tel"
-                            placeholder="+1 234 567 8900"
-                            value={formData.phone}
-                            onChange={handleInputChange}
-                            aria-invalid={!!fieldErrors.phone}
-                            aria-describedby={fieldErrors.phone ? "signup-phone-error" : undefined}
-                            className={signUpInputClass("phone")}
-                          />
-                          {renderFieldError("phone")}
-                        </div>
-                      </div>
-                      <div className="space-y-2">
-                        <Label
-                          htmlFor="signup-email"
-                          className="text-xs font-semibold text-gray-700 uppercase tracking-wider"
-                        >
-                          Email Address
-                        </Label>
-                        <Input
-                          id="signup-email"
-                          name="email"
-                          type="email"
-                          placeholder="john@enterprise.com"
-                          value={formData.email}
-                          onChange={handleInputChange}
-                          required
-                          aria-invalid={!!fieldErrors.email}
-                          aria-describedby={fieldErrors.email ? "signup-email-error" : undefined}
-                          className={signUpInputClass("email")}
-                        />
-                        {renderFieldError("email")}
-                      </div>
-                      <div className="space-y-2">
-                        <Label
-                          htmlFor="signup-password"
-                          className="text-xs font-semibold text-gray-700 uppercase tracking-wider"
-                        >
-                          Password
-                        </Label>
-                        <div className="relative">
-                          <Input
-                            id="signup-password"
-                            name="password"
-                            type={showPassword ? "text" : "password"}
-                            placeholder="Create a strong password"
-                            value={formData.password}
-                            onChange={handleInputChange}
-                            required
-                            minLength={6}
-                            aria-invalid={!!fieldErrors.password}
-                            aria-describedby={fieldErrors.password ? "signup-password-error" : undefined}
-                            className={signUpInputClass("password", "pr-12 md:pr-14")}
-                          />
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="absolute right-1 md:right-2 top-1/2 transform -translate-y-1/2 h-8 w-8 md:h-10 md:w-10 hover:bg-orange-100/50 text-gray-400 hover:text-gray-600 rounded-lg md:rounded-xl transition-all duration-300"
-                            onClick={() => setShowPassword(!showPassword)}
-                          >
-                            {showPassword ? (
-                              <EyeOff className="h-4 w-4 md:h-5 md:w-5" />
-                            ) : (
-                              <Eye className="h-4 w-4 md:h-5 md:w-5" />
-                            )}
-                          </Button>
-                        </div>
-                        {renderFieldError("password")}
-                      </div>
-                      <div className="space-y-2">
-                        <Label
-                          htmlFor="signup-company"
-                          className="text-xs font-semibold text-gray-700 uppercase tracking-wider"
-                        >
-                          Company Name (Optional)
-                        </Label>
-                        <Input
-                          id="signup-company"
-                          name="companyName"
-                          type="text"
-                          placeholder="Acme Corporation"
-                          value={formData.companyName}
-                          onChange={handleInputChange}
-                          aria-invalid={!!fieldErrors.companyName}
-                          aria-describedby={fieldErrors.companyName ? "signup-company-error" : undefined}
-                          className={signUpInputClass("companyName")}
-                        />
-                        {renderFieldError("companyName")}
-                      </div>
+              <TabsContent value="signup" className="mt-6">
+                <form onSubmit={handleSignUp} className="space-y-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="signup-name" className={labelClass}>Full name</Label>
+                      <Input
+                        id="signup-name"
+                        name="fullName"
+                        type="text"
+                        autoComplete="name"
+                        placeholder="Your name"
+                        value={formData.fullName}
+                        onChange={handleInputChange}
+                        required
+                        aria-invalid={!!fieldErrors.fullName}
+                        aria-describedby={fieldErrors.fullName ? "signup-name-error" : undefined}
+                        className={signUpInputClass("fullName")}
+                      />
+                      {renderFieldError("fullName")}
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="signup-phone" className={labelClass}>
+                        Phone <span className="font-normal text-muted-foreground">(optional)</span>
+                      </Label>
+                      <Input
+                        id="signup-phone"
+                        name="phone"
+                        type="tel"
+                        autoComplete="tel"
+                        placeholder="+91 98765 43210"
+                        value={formData.phone}
+                        onChange={handleInputChange}
+                        aria-invalid={!!fieldErrors.phone}
+                        aria-describedby={fieldErrors.phone ? "signup-phone-error" : undefined}
+                        className={signUpInputClass("phone")}
+                      />
+                      {renderFieldError("phone")}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="signup-company" className={labelClass}>
+                      Press / company name <span className="font-normal text-muted-foreground">(optional)</span>
+                    </Label>
+                    <Input
+                      id="signup-company"
+                      name="companyName"
+                      type="text"
+                      autoComplete="organization"
+                      placeholder="e.g. Sri Lakshmi Offset Printers"
+                      value={formData.companyName}
+                      onChange={handleInputChange}
+                      aria-invalid={!!fieldErrors.companyName}
+                      aria-describedby={fieldErrors.companyName ? "signup-company-error" : undefined}
+                      className={signUpInputClass("companyName")}
+                    />
+                    {renderFieldError("companyName")}
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="signup-email" className={labelClass}>Work email</Label>
+                    <Input
+                      id="signup-email"
+                      name="email"
+                      type="email"
+                      autoComplete="email"
+                      placeholder="you@yourpress.com"
+                      value={formData.email}
+                      onChange={handleInputChange}
+                      required
+                      aria-invalid={!!fieldErrors.email}
+                      aria-describedby={fieldErrors.email ? "signup-email-error" : undefined}
+                      className={signUpInputClass("email")}
+                    />
+                    {renderFieldError("email")}
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="signup-password" className={labelClass}>Password</Label>
+                    <div className="relative">
+                      <Input
+                        id="signup-password"
+                        name="password"
+                        type={showPassword ? "text" : "password"}
+                        autoComplete="new-password"
+                        placeholder="At least 6 characters"
+                        value={formData.password}
+                        onChange={handleInputChange}
+                        required
+                        minLength={6}
+                        aria-invalid={!!fieldErrors.password}
+                        aria-describedby={fieldErrors.password ? "signup-password-error" : undefined}
+                        className={signUpInputClass("password", "pr-10")}
+                      />
                       <Button
-                        type="submit"
-                        className="w-full h-12 md:h-14 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 font-semibold text-white text-base md:text-lg rounded-xl md:rounded-2xl shadow-lg shadow-orange-500/30 hover:shadow-xl hover:shadow-orange-500/40 transition-all duration-300 transform hover:scale-[1.01] tracking-wide"
-                        disabled={isLoading}
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className={eyeButtonClass}
+                        onClick={() => setShowPassword(!showPassword)}
+                        aria-label={showPassword ? "Hide password" : "Show password"}
                       >
-                        {isLoading
-                          ? "Sending OTP..."
-                          : "Create Account"}
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </Button>
-                    </form>
-                  </TabsContent>
-                </Tabs>
-              </CardContent>
-            </Card>
+                    </div>
+                    {renderFieldError("password")}
+                  </div>
+                  <Button type="submit" className="h-10 w-full" disabled={isLoading}>
+                    {isLoading ? "Sending verification code…" : "Create account"}
+                  </Button>
+                  <p className="text-center text-xs text-muted-foreground">
+                    We'll email you a one-time code to verify your address.
+                  </p>
+                </form>
+              </TabsContent>
+            </Tabs>
           </div>
         </div>
 
         {/* Sign-up error dialog */}
         <Dialog open={!!signUpError} onOpenChange={(open) => !open && setSignUpError(null)}>
-          <DialogContent className="sm:max-w-md rounded-2xl border-2 border-orange-100">
-            <DialogHeader className="space-y-4">
-              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-orange-100">
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader className="space-y-3">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
                 {signUpError?.kind === "existingAccount" ? (
-                  <UserCheck className="h-7 w-7 text-orange-600" />
+                  <UserCheck className="h-6 w-6 text-primary" />
                 ) : (
-                  <AlertCircle className="h-7 w-7 text-orange-600" />
+                  <AlertCircle className="h-6 w-6 text-destructive" />
                 )}
               </div>
-              <DialogTitle className="text-center text-xl font-bold text-gray-900">
+              <DialogTitle className="text-center text-lg font-semibold">
                 {signUpError?.kind === "existingAccount"
                   ? "Account already exists"
                   : "Sign up failed"}
               </DialogTitle>
-              <DialogDescription className="text-center text-base text-gray-600">
+              <DialogDescription className="text-center">
                 {signUpError?.kind === "existingAccount" ? (
                   <>
-                    <span className="font-semibold text-gray-900">{formData.email}</span> is already
+                    <span className="font-medium text-foreground">{formData.email}</span> is already
                     registered. Please sign in with this account instead.
                   </>
                 ) : (
@@ -525,31 +469,18 @@ export default function Auth() {
               </DialogDescription>
             </DialogHeader>
 
-            <DialogFooter className="mt-2 gap-2 sm:gap-3">
+            <DialogFooter className="mt-2 gap-2">
               {signUpError?.kind === "existingAccount" ? (
                 <>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={handleUseDifferentEmail}
-                    className="h-12 flex-1 rounded-xl border-2 border-gray-200 text-gray-700 font-semibold hover:bg-gray-50"
-                  >
+                  <Button type="button" variant="outline" onClick={handleUseDifferentEmail} className="flex-1">
                     Use another email
                   </Button>
-                  <Button
-                    type="button"
-                    onClick={handleGoToSignIn}
-                    className="h-12 flex-1 rounded-xl bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 font-semibold text-white shadow-lg shadow-orange-500/30"
-                  >
+                  <Button type="button" onClick={handleGoToSignIn} className="flex-1">
                     Sign in instead
                   </Button>
                 </>
               ) : (
-                <Button
-                  type="button"
-                  onClick={() => setSignUpError(null)}
-                  className="h-12 w-full rounded-xl bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 font-semibold text-white shadow-lg shadow-orange-500/30"
-                >
+                <Button type="button" onClick={() => setSignUpError(null)} className="w-full">
                   Try again
                 </Button>
               )}
@@ -558,37 +489,17 @@ export default function Auth() {
         </Dialog>
 
         {/* Footer */}
-        <div className="relative z-10 pt-6 md:pt-8 pb-4 px-4">
-          <div className="text-center space-y-2">
-            <p className="text-xs text-gray-600 font-medium">
-              © 2026 Synx Automation Private Limited. All rights reserved.
-            </p>
-            <div className="flex flex-wrap justify-center items-center gap-2 md:gap-3 text-xs">
-              <Link
-                to="/terms-and-conditions"
-                className="text-gray-600 hover:text-orange-600 transition-colors duration-200 font-medium hover:underline underline-offset-2"
-              >
-                Terms & Conditions
-              </Link>
-              <span className="text-gray-300">•</span>
-              <Link
-                to="/privacy-policy"
-                className="text-gray-600 hover:text-orange-600 transition-colors duration-200 font-medium hover:underline underline-offset-2"
-              >
-                Privacy Policy
-              </Link>
-              <span className="text-gray-300">•</span>
-              <Link
-                to="/data-security-policy"
-                className="text-gray-600 hover:text-orange-600 transition-colors duration-200 font-medium hover:underline underline-offset-2"
-              >
-                Data Security Policy
-              </Link>
-            </div>
+        <footer className="border-t px-5 py-4 sm:px-8">
+          <div className="mx-auto flex max-w-[400px] flex-col items-center gap-2 text-xs text-muted-foreground sm:max-w-none sm:flex-row sm:justify-between">
+            <p>© 2026 Synx Automation Private Limited. All rights reserved.</p>
+            <nav className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+              <Link to="/terms-and-conditions" className="hover:text-foreground hover:underline underline-offset-2">Terms</Link>
+              <Link to="/privacy-policy" className="hover:text-foreground hover:underline underline-offset-2">Privacy</Link>
+              <Link to="/data-security-policy" className="hover:text-foreground hover:underline underline-offset-2">Data security</Link>
+            </nav>
           </div>
-        </div>
-      </div>
+        </footer>
+      </main>
     </div>
-  </div>
   );
 }

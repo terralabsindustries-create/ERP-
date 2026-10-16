@@ -22,10 +22,11 @@ const inventoryMovementSchema = new mongoose.Schema({
     required: true,
     min: [0, 'Quantity cannot be negative']
   },
+  // Any unit a stock item can have (same list as the Inventory model).
   unit: {
     type: String,
     required: true,
-    enum: ['pieces', 'kg', 'meters', 'liters', 'boxes', 'reams'],
+    enum: ['pieces', 'boxes', 'reams', 'kg', 'grams', 'liters', 'meters', 'sqft', 'sqm', 'rolls', 'sheets'],
     default: 'pieces'
   },
   unitCost: {
@@ -53,9 +54,9 @@ const inventoryMovementSchema = new mongoose.Schema({
     enum: ['invoice', 'purchase_order', 'adjustment', 'return', 'damage', 'transfer'],
     required: true
   },
+  // The invoice or purchase behind the movement; manual adjustments have none.
   referenceId: {
-    type: mongoose.Schema.Types.ObjectId,
-    required: true
+    type: mongoose.Schema.Types.ObjectId
   },
   referenceNumber: {
     type: String,
@@ -73,6 +74,15 @@ const inventoryMovementSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
+  },
+  performedByName: {
+    type: String,
+    trim: true
+  },
+  // The business the stock belongs to (copied from the item).
+  dataScope: {
+    type: String,
+    index: true
   },
   createdAt: {
     type: Date,

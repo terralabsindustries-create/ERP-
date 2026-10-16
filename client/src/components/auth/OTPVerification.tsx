@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { BrandLogo } from "@/components/brand/BrandMark";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -212,20 +213,19 @@ export function OTPVerification({
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-orange-50 via-white to-orange-50 p-4">
-      <div className="absolute inset-0 bg-grid-orange-100/[0.03] bg-[size:120px_120px]" />
-      
-      <Card className="w-full max-w-md border-0 shadow-2xl bg-white/95 backdrop-blur-sm relative z-10">
+    <div className="min-h-screen flex flex-col items-center justify-center gap-8 bg-background p-4">
+      <BrandLogo />
+      <Card className="w-full max-w-md shadow-elevated">
         <CardHeader className="text-center pb-6 pt-8">
-          <div className="flex justify-center mb-6 p-3 bg-gradient-to-r from-orange-100 to-orange-200 rounded-2xl shadow-lg">
-            <Mail className="h-8 w-8 text-orange-600" />
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+            <Mail className="h-6 w-6 text-primary" />
           </div>
-          <CardTitle className="text-2xl font-bold text-gray-800 mb-2">
+          <CardTitle className="text-xl font-semibold mb-1">
             Verify Your Email
           </CardTitle>
-          <p className="text-gray-600 text-sm">
+          <p className="text-muted-foreground text-sm">
             We've sent a 6-digit code to<br />
-            <span className="font-semibold text-orange-600">{email}</span>
+            <span className="font-semibold text-primary">{email}</span>
           </p>
         </CardHeader>
         
@@ -233,7 +233,7 @@ export function OTPVerification({
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* OTP Input Fields */}
             <div className="space-y-4">
-              <Label className="text-sm font-semibold text-gray-700 uppercase tracking-wide text-center block">
+              <Label className="block text-center text-[13px] font-medium">
                 Enter Verification Code
               </Label>
               <div className="flex justify-center space-x-2">
@@ -249,7 +249,7 @@ export function OTPVerification({
                     onChange={(e) => handleInputChange(index, e.target.value)}
                     onKeyDown={(e) => handleKeyDown(index, e)}
                     onPaste={index === 0 ? handlePaste : undefined}
-                    className="w-12 h-12 text-center text-lg font-bold border-orange-200/50 focus:border-orange-400 focus:ring-2 focus:ring-orange-400/20 rounded-xl"
+                    className="num h-12 w-11 text-center text-lg font-semibold"
                     required
                   />
                 ))}
@@ -258,7 +258,7 @@ export function OTPVerification({
 
             {/* Timer */}
             <div className="text-center space-y-2">
-              <div className="flex items-center justify-center space-x-2 text-sm text-gray-600">
+              <div className="flex items-center justify-center space-x-2 text-sm text-muted-foreground">
                 <Timer className="h-4 w-4" />
                 <span>Code expires in {formatTime(timeLeft)}</span>
               </div>
@@ -269,14 +269,14 @@ export function OTPVerification({
                   variant="link"
                   onClick={handleResendOTP}
                   disabled={isResending}
-                  className="text-orange-600 hover:text-orange-700 text-sm"
+                  className="text-primary hover:text-primary/80 text-sm"
                 >
                   {isResending ? "Resending..." : "Resend OTP"}
                 </Button>
               ) : (
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-muted-foreground">
                   Didn't get the code? Resend in{" "}
-                  <span className="font-semibold text-gray-700">{formatTime(resendIn)}</span>
+                  <span className="font-semibold text-foreground/80">{formatTime(resendIn)}</span>
                 </p>
               )}
             </div>
@@ -284,7 +284,7 @@ export function OTPVerification({
             {/* Submit Button */}
             <Button
               type="submit"
-              className="w-full h-14 bg-gradient-to-r from-orange-500 via-orange-600 to-orange-700 hover:from-orange-600 hover:via-orange-700 hover:to-orange-800 font-bold text-white text-lg rounded-2xl shadow-2xl hover:shadow-orange-500/25 transition-all duration-500 transform hover:scale-[1.02] tracking-wide"
+              className="h-10 w-full"
               disabled={isLoading}
             >
               {isLoading ? "Verifying..." : "Verify & Create Account"}
@@ -295,18 +295,18 @@ export function OTPVerification({
               type="button"
               variant="ghost"
               onClick={onBack}
-              className="w-full h-12 text-gray-600 hover:text-gray-800 font-semibold rounded-xl transition-all duration-300"
+              className="h-10 w-full text-muted-foreground"
             >
-              <ArrowLeft className="h-4 w-4 mr-2" />
+              <ArrowLeft className="h-4 w-4" />
               Back to Sign Up
             </Button>
           </form>
 
           {/* Security Note */}
-          <div className="mt-6 p-4 bg-blue-50 rounded-xl border border-blue-200/50">
+          <div className="mt-6 p-4 bg-info-soft rounded-xl border border-info/25">
             <div className="flex items-start space-x-3">
-              <Shield className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
-              <div className="text-sm text-blue-800">
+              <Shield className="h-5 w-5 text-info-strong flex-shrink-0 mt-0.5" />
+              <div className="text-sm text-info-strong">
                 <p className="font-semibold mb-1">Security Notice</p>
                 <p>Never share this verification code with anyone. Our team will never ask for your OTP.</p>
               </div>

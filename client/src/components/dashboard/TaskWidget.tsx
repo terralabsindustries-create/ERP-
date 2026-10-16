@@ -1,11 +1,14 @@
 import { useState, useEffect } from "react";
-import { format, isAfter, isBefore, addHours } from "date-fns";
-import { Clock, AlertTriangle, CheckCircle, User, Calendar } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Link } from "react-router-dom";
+import { format, isBefore, addHours, differenceInCalendarDays } from "date-fns";
+import { CheckCircle2, ListChecks, RotateCw, User, Calendar, Ticket } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Panel } from "@/components/common/Panel";
+import { EmptyState } from "@/components/common/EmptyState";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
 
 interface Task {
   _id: string;
@@ -15,6 +18,9 @@ interface Task {
   description?: string;
   priority: string;
   due_date?: string;
+  dueDate?: string;
+  jobId?: { title?: string } | null;
+  jobTitle?: string;
   createdAt?: string;
   updatedAt?: string;
   assignedTo?: any;
@@ -29,6 +35,7 @@ interface TaskWidgetProps {
 export function TaskWidget({ onRefresh }: TaskWidgetProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
+  const [completing, setCompleting] = useState<string | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -59,24 +66,33 @@ export function TaskWidget({ onRefresh }: TaskWidgetProps) {
     return task.status === 'completed';
   };
 
-  const getTaskUrgency = (dueDate: string | null, priority: string) => {
-    if (!dueDate) return { color: "bg-slate-500", label: "No deadline" };
-    
+  // The API sends dueDate / assignedTo / jobId; older records used the snake_case names.
+  const dueOf = (task: Task) => task.dueDate || task.due_date || null;
+  const assigneeOf = (task: Task) => task.assignedTo?.fullName || task.staff?.name;
+  const jobOf = (task: Task) => task.jobId?.title || task.jobTitle || task.jobs?.title;
+
+  type Urgency = { rank: number; label: string; tone: "danger" | "warning" | "info" | "muted" };
+
+  const getTaskUrgency = (dueDate: string | null, priority: string): Urgency => {
+    if (!dueDate) return { rank: 4, label: "No deadline", tone: "muted" };
+
     const due = new Date(dueDate);
     const now = new Date();
     const urgent = addHours(now, 4); // Next 4 hours
     const soon = addHours(now, 24); // Next 24 hours
 
-    if (isBefore(due, now)) {
-      return { color: "bg-red-500", label: "Overdue" };
+    // Overdue once the due day has ended (the team overview's rule); earlier
+    // the same day it is still "due today".
+    if (differenceInCalendarDays(due, now) < 0) {
+      return { rank: 0, label: "Overdue", tone: "danger" };
     } else if (isBefore(due, urgent)) {
-      return { color: "bg-red-400", label: "Urgent" };
+      return { rank: 1, label: isBefore(due, now) ? "Due today" : "Urgent", tone: "danger" };
     } else if (isBefore(due, soon)) {
-      return { color: "bg-yellow-500", label: "Due soon" };
+      return { rank: 2, label: "Due soon", tone: "warning" };
     } else if (priority === 'high') {
-      return { color: "bg-orange-500", label: "High priority" };
+      return { rank: 3, label: "High priority", tone: "warning" };
     } else {
-      return { color: "bg-green-500", label: "On track" };
+      return { rank: 4, label: "On track", tone: "info" };
     }
   };
 
@@ -101,132 +117,97 @@ export function TaskWidget({ onRefresh }: TaskWidgetProps) {
     }
   };
 
-  if (loading) {
-    return (
-      <Card className="border-0 shadow-card bg-card">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
-            <Clock className="w-4 h-4" />
-            Active Tasks
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="animate-pulse space-y-3">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="h-16 bg-muted rounded-lg"></div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
+  const completeTask = async (taskId: string) => {
+    setCompleting(taskId);
+    await updateTaskStatus(taskId, 'completed');
+    setCompleting(null);
+  };
+
+  const list = Array.isArray(tasks) ? tasks : [];
+  const rows = list
+    .map((task) => ({ task, done: isTaskCompleted(task), urgency: getTaskUrgency(dueOf(task), task.priority) }))
+    // Open work first, most urgent at the top; finished tasks sink to the bottom.
+    .sort((a, b) => Number(a.done) - Number(b.done) || a.urgency.rank - b.urgency.rank);
+  const openCount = rows.filter((r) => !r.done).length;
+  const lateCount = rows.filter((r) => !r.done && r.urgency.tone === "danger").length;
+
+  const DOT = { danger: "bg-destructive", warning: "bg-warning", info: "bg-info", muted: "bg-muted-foreground/40" };
+  const BADGE = { danger: "destructive", warning: "warning", info: "info", muted: "secondary" } as const;
 
   return (
-    <Card className="border-0 shadow-card bg-card">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
-            <Clock className="w-4 h-4" />
-            Active Tasks
-            <Badge variant="secondary" className="ml-2">
-              {tasks.length}
-            </Badge>
-          </CardTitle>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={fetchTasks}
-            className="h-8 w-8 p-0"
-          >
-            <Clock className="w-4 h-4" />
-          </Button>
+    <Panel
+      title="Active tasks"
+      icon={ListChecks}
+      count={loading ? undefined : openCount}
+      countTone={lateCount > 0 ? "danger" : "default"}
+      description={loading ? "Loading…" : lateCount > 0 ? `${lateCount} overdue or due within 4 hours` : "Assigned work across the team"}
+      action={
+        <Button variant="ghost" size="icon-xs" onClick={fetchTasks} aria-label="Refresh tasks" className="text-muted-foreground">
+          <RotateCw />
+        </Button>
+      }
+    >
+      {loading ? (
+        <div className="space-y-2 p-4 sm:p-5">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-12 animate-pulse rounded-md bg-muted" />
+          ))}
         </div>
-        <p className="text-xs text-muted-foreground">Real-time task monitoring</p>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {tasks.length === 0 ? (
-          <div className="text-center py-4">
-            <CheckCircle className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
-            <p className="text-sm text-muted-foreground">All tasks completed!</p>
-          </div>
-        ) : (
-          tasks.map((task) => {
-            const urgency = getTaskUrgency(task.due_date, task.priority);
-            
+      ) : rows.length === 0 ? (
+        <EmptyState compact tone="success" icon={CheckCircle2} title="All tasks completed!" description="Nothing is waiting on the team right now." />
+      ) : (
+        <ul className="max-h-[22rem] divide-y overflow-y-auto">
+          {rows.map(({ task, done, urgency }) => {
+            const due = dueOf(task);
+            const job = jobOf(task);
+            const assignee = assigneeOf(task);
+            const id = task._id || task.id;
             return (
-              <div key={task._id || task.id} className={`border rounded-lg p-3 space-y-2 hover:shadow-md transition-shadow ${
-                isTaskCompleted(task) ? 'bg-green-50 border-green-200' : ''
-              }`}>
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      {isTaskCompleted(task) ? (
-                        <CheckCircle className="w-4 h-4 text-green-600" />
-                      ) : (
-                        <div className={`w-2 h-2 rounded-full ${urgency.color}`}></div>
-                      )}
-                      <h4 className={`font-medium text-sm truncate ${
-                        isTaskCompleted(task) ? 'text-green-700 line-through' : ''
-                      }`}>{task.title}</h4>
-                      {isTaskCompleted(task) && (
-                        <Badge variant="default" className="ml-2 bg-green-100 text-green-800 text-xs">
-                          Completed
-                        </Badge>
-                      )}
-                    </div>
-                    
-                    {task.jobs?.title && (
-                      <p className="text-xs text-muted-foreground mb-1">
-                        Job: {task.jobs.title}
-                      </p>
+              <li key={id} className={cn("flex items-start gap-3 px-4 py-3 sm:px-5", done && "bg-muted/30")}>
+                {done ? (
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+                ) : (
+                  <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", DOT[urgency.tone])} />
+                )}
+                <div className="min-w-0 flex-1">
+                  <Link to={`/tasks/${id}`} className={cn("block truncate text-sm font-medium hover:underline", done && "text-muted-foreground line-through")}>
+                    {task.title}
+                  </Link>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                    {job && (
+                      <span className="inline-flex min-w-0 items-center gap-1">
+                        <Ticket className="h-3 w-3 shrink-0" />
+                        <span className="truncate">{job}</span>
+                      </span>
                     )}
-                    
-                    <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                      {task.staff?.name && (
-                        <div className="flex items-center gap-1">
-                          <User className="w-3 h-3" />
-                          {task.staff.name}
-                        </div>
-                      )}
-                      
-                      {task.due_date && (
-                        <div className="flex items-center gap-1">
-                          <Calendar className="w-3 h-3" />
-                          {format(new Date(task.due_date), 'MMM dd, HH:mm')}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  
-                  <div className="flex flex-col gap-1 ml-2">
-                    <Badge 
-                      variant={isTaskCompleted(task) ? 'default' : 
-                              urgency.color.includes('red') ? 'destructive' : 
-                              urgency.color.includes('yellow') ? 'warning' : 'default'}
-                      className={`text-xs ${
-                        isTaskCompleted(task) ? 'bg-green-100 text-green-800' : ''
-                      }`}
-                    >
-                      {isTaskCompleted(task) ? 'Completed' : urgency.label}
-                    </Badge>
-                    
-                    {!isTaskCompleted(task) && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => updateTaskStatus(task._id || task.id, 'completed')}
-                        className="h-6 text-xs"
-                      >
-                        Complete
-                      </Button>
+                    {assignee && (
+                      <span className="inline-flex items-center gap-1">
+                        <User className="h-3 w-3" />
+                        {assignee}
+                      </span>
+                    )}
+                    {due && (
+                      <span className={cn("inline-flex items-center gap-1", !done && urgency.tone === "danger" && "font-medium text-destructive-strong")}>
+                        <Calendar className="h-3 w-3" />
+                        {format(new Date(due), 'd MMM, HH:mm')}
+                      </span>
                     )}
                   </div>
                 </div>
-              </div>
+                <div className="flex shrink-0 flex-col items-end gap-1.5">
+                  <Badge variant={done ? "success" : BADGE[urgency.tone]}>{done ? "Completed" : urgency.label}</Badge>
+                  {!done && (
+                    <Button size="xs" variant="outline" loading={completing === id} onClick={() => completeTask(id)}>
+                      {completing !== id && <CheckCircle2 />}
+                      Complete
+                    </Button>
+                  )}
+                </div>
+              </li>
             );
-          })
-        )}
-      </CardContent>
-    </Card>
+          })}
+        </ul>
+      )}
+    </Panel>
   );
 }

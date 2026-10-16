@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
+import { localDate } from "@/lib/format";
 
 interface EditTaskDialogProps {
   open: boolean;
@@ -49,7 +50,7 @@ export function EditTaskDialog({ open, onOpenChange, onTaskUpdated, task }: Edit
         if (isNaN(date.getTime())) {
           return '';
         }
-        return date.toISOString().split('T')[0];
+        return localDate(date);
       };
 
       // Set initial form data
@@ -127,32 +128,8 @@ export function EditTaskDialog({ open, onOpenChange, onTaskUpdated, task }: Edit
 
   const fetchStaff = async () => {
     try {
-      // Use users endpoint with role filter to get staff users (same as Staff component)
-      const response: any = await apiClient.get('/users', { role: 'staff' });
-      console.log('👥 Staff response:', response);
-      
-      // Handle the actual response structure from API (same as Staff component)
-      let staffData = [];
-      if (response && typeof response === 'object' && response.users && Array.isArray(response.users)) {
-        staffData = response.users;
-        console.log('👥 Extracted staff from response.users:', staffData);
-      } else if (response && response.data && Array.isArray(response.data.users)) {
-        staffData = response.data.users;
-        console.log('👥 Extracted staff from response.data.users:', staffData);
-      } else if (Array.isArray(response)) {
-        staffData = response;
-        console.log('👥 Using direct response array:', staffData);
-      } else if (response && Array.isArray(response.data)) {
-        staffData = response.data;
-        console.log('👥 Using response.data array:', staffData);
-      } else {
-        console.log('👥 Unexpected response structure:', response);
-      }
-      
-      console.log('👥 Final staff data:', staffData);
-      console.log('👥 Staff count:', staffData.length);
-      
-      setStaff(Array.isArray(staffData) ? staffData : []);
+      const users: any[] = await apiClient.listAll('/users', 'users', { sortBy: 'fullName', sortOrder: 'asc' });
+      setStaff(users.filter((u) => u.isActive !== false && u.status !== 'invited'));
     } catch (error) {
       console.error('Error fetching staff:', error);
     }
@@ -161,28 +138,9 @@ export function EditTaskDialog({ open, onOpenChange, onTaskUpdated, task }: Edit
   const fetchJobs = async () => {
     setJobsLoading(true);
     try {
-      const response: any = await apiClient.getJobs();
-      console.log('📋 Jobs response:', response);
-      
-      // Handle different response structures
-      let jobsData = [];
-      if (response?.data?.jobs) {
-        jobsData = response.data.jobs;
-      } else if (response?.jobs) {
-        jobsData = response.jobs;
-      } else if (Array.isArray(response)) {
-        jobsData = response;
-      } else if (Array.isArray(response?.data)) {
-        jobsData = response.data;
-      }
-      
-      console.log('📋 Final jobs data:', jobsData);
-      setJobs(jobsData);
-      // Process jobs to ensure we have the right structure
+      const jobsData: any[] = await apiClient.listAll('/jobs', 'jobs');
       const processedJobs = jobsData.map(job => {
-        // Handle populated customer data
         const customerName = job.customerId?.name || job.customer || job.customerName || 'Unknown Customer';
-        
         return {
           _id: job._id || job.id,
           title: job.title || job.name || 'Untitled Job',
@@ -193,7 +151,6 @@ export function EditTaskDialog({ open, onOpenChange, onTaskUpdated, task }: Edit
         };
       });
       
-      console.log('📋 Processed jobs with structure:', processedJobs);
       setJobs(processedJobs);
     } catch (error) {
       console.error('Error fetching jobs:', error);
@@ -245,7 +202,7 @@ export function EditTaskDialog({ open, onOpenChange, onTaskUpdated, task }: Edit
       console.error('Error updating task:', error);
       toast({
         title: "Error",
-        description: error.response?.data?.message || "Failed to update task",
+        description: error?.message || "Failed to update task",
         variant: "destructive",
       });
     } finally {
@@ -255,11 +212,11 @@ export function EditTaskDialog({ open, onOpenChange, onTaskUpdated, task }: Edit
 
   const getPriorityColor = (priority: string) => {
     switch (priority) {
-      case 'urgent': return 'bg-red-100 text-red-800';
-      case 'high': return 'bg-orange-100 text-orange-800';
-      case 'medium': return 'bg-yellow-100 text-yellow-800';
-      case 'low': return 'bg-green-100 text-green-800';
-      default: return 'bg-gray-100 text-gray-800';
+      case 'urgent': return 'bg-destructive-soft text-destructive-strong';
+      case 'high': return 'bg-warning-soft text-warning-strong';
+      case 'medium': return 'bg-warning-soft text-warning-strong';
+      case 'low': return 'bg-success-soft text-success-strong';
+      default: return 'bg-muted text-foreground';
     }
   };
 
@@ -346,13 +303,13 @@ export function EditTaskDialog({ open, onOpenChange, onTaskUpdated, task }: Edit
                     <SelectItem value="none">
                       <div className="flex flex-col">
                         <span className="font-medium">No Job</span>
-                        <span className="text-xs text-gray-500">Standalone task</span>
+                        <span className="text-xs text-muted-foreground">Standalone task</span>
                       </div>
                     </SelectItem>
                     {jobsLoading ? (
                       <SelectItem value="loading" disabled>
                         <div className="flex items-center gap-2">
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900"></div>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-foreground"></div>
                           <span>Loading jobs...</span>
                         </div>
                       </SelectItem>
@@ -363,23 +320,23 @@ export function EditTaskDialog({ open, onOpenChange, onTaskUpdated, task }: Edit
                             <div className="flex justify-between items-start w-full">
                               <div className="flex-1 min-w-0">
                                 <div className="font-medium truncate">{job.title}</div>
-                                <div className="text-xs text-gray-500 truncate">
+                                <div className="text-xs text-muted-foreground truncate">
                                   Customer: {job.customer}
                                 </div>
                               </div>
                               <div className="flex flex-col items-end ml-2">
                                 <Badge 
                                   className={`text-xs ${
-                                    job.status === 'completed' ? 'bg-green-100 text-green-800' :
-                                    job.status === 'in_progress' ? 'bg-blue-100 text-blue-800' :
-                                    job.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
-                                    'bg-gray-100 text-gray-800'
+                                    job.status === 'completed' ? 'bg-success-soft text-success-strong' :
+                                    job.status === 'in_progress' ? 'bg-info-soft text-info-strong' :
+                                    job.status === 'pending' ? 'bg-warning-soft text-warning-strong' :
+                                    'bg-muted text-foreground'
                                   }`}
                                 >
                                   {job.status?.replace('_', ' ')}
                                 </Badge>
                                 {job.dueDate && (
-                                  <div className="text-xs text-gray-500 mt-1">
+                                  <div className="text-xs text-muted-foreground mt-1">
                                     Due: {new Date(job.dueDate).toLocaleDateString()}
                                   </div>
                                 )}
@@ -392,7 +349,7 @@ export function EditTaskDialog({ open, onOpenChange, onTaskUpdated, task }: Edit
                       <SelectItem value="no-jobs" disabled>
                         <div className="flex flex-col">
                           <span className="font-medium">No Jobs Available</span>
-                          <span className="text-xs text-gray-500">Create a job first</span>
+                          <span className="text-xs text-muted-foreground">Create a job first</span>
                         </div>
                       </SelectItem>
                     )}
@@ -458,22 +415,22 @@ export function EditTaskDialog({ open, onOpenChange, onTaskUpdated, task }: Edit
                   <SelectContent>
                     <SelectItem value="low">
                       <div className="flex items-center gap-2">
-                        <Badge className="bg-green-100 text-green-800">Low</Badge>
+                        <Badge className="bg-success-soft text-success-strong">Low</Badge>
                       </div>
                     </SelectItem>
                     <SelectItem value="medium">
                       <div className="flex items-center gap-2">
-                        <Badge className="bg-yellow-100 text-yellow-800">Medium</Badge>
+                        <Badge className="bg-warning-soft text-warning-strong">Medium</Badge>
                       </div>
                     </SelectItem>
                     <SelectItem value="high">
                       <div className="flex items-center gap-2">
-                        <Badge className="bg-orange-100 text-orange-800">High</Badge>
+                        <Badge className="bg-warning-soft text-warning-strong">High</Badge>
                       </div>
                     </SelectItem>
                     <SelectItem value="urgent">
                       <div className="flex items-center gap-2">
-                        <Badge className="bg-red-100 text-red-800">Urgent</Badge>
+                        <Badge className="bg-destructive-soft text-destructive-strong">Urgent</Badge>
                       </div>
                     </SelectItem>
                   </SelectContent>

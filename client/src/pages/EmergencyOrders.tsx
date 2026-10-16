@@ -1,432 +1,353 @@
-import { useState, useEffect } from "react";
-import { format } from "date-fns";
-import { Plus, Search, User, Phone, UserPlus, AlertTriangle } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { startOfWeek } from "date-fns";
+import { Link, useNavigate } from "react-router-dom";
+import { Ban, CheckCircle2, ExternalLink, Pencil, Play, Plus, Ticket, Trash2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import apiClient from "@/lib/apiClient";
+import { EmptyState } from "@/components/common/EmptyState";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { PageShell } from "@/components/layout/PageShell";
+import { ConfirmDialog, DataCard, DataTable, EntityCell, FilterSelect, MetricBar, Pagination, SearchField, Stack, StatusPill, Tag, Toolbar, ViewTabs, type Column, type RowAction } from "@/components/data";
+import { fmtPhone } from "@/components/delivery/deliveryMeta";
+import { ConvertToJobDialog } from "@/components/emergency-orders/ConvertToJobDialog";
+import { RushOrderEditor } from "@/components/emergency-orders/RushOrderEditor";
+import { PRIORITY_LABEL, STATUS_META, dueNote, isOpen, jobOf, neededBy } from "@/components/emergency-orders/rushMeta";
+import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useDebounced } from "@/hooks/useDebounced";
+import { rushOrdersApi, type RushList, type RushOrder, type RushView } from "@/lib/api/rushOrders";
+import { formatINR } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
-interface EmergencyOrder {
-  id: string;
-  customer_name: string;
-  customer_phone: string;
-  order_details: string;
-  estimated_amount: number;
-  priority: string;
-  status: string;
-  created_at: string;
-  notes: string;
-  job_id?: string;
+const PAGE_SIZE = 25;
+const jobLink = (title: string) => `/jobs?q=${encodeURIComponent(title)}`;
+
+function Due({ o }: { o: RushOrder }) {
+  const n = dueNote(o);
+  if (!n.text) return null;
+  return <span className={cn(n.overdue ? "font-medium text-destructive-strong" : n.soon ? "text-warning-strong" : undefined)}>{n.text}</span>;
 }
 
 export default function EmergencyOrders() {
-  const [orders, setOrders] = useState<EmergencyOrder[]>([]);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [formData, setFormData] = useState({
-    customer_name: "",
-    customer_phone: "",
-    order_details: "",
-    estimated_amount: "",
-    priority: "high",
-    notes: ""
-  });
+  const { hasPermission } = useAuth();
   const { toast } = useToast();
+  const navigate = useNavigate();
+  const canEdit = hasPermission("Emergency Orders: Create & Edit");
+  const canConvert = canEdit && hasPermission("Jobs: Create & Edit");
+  const [data, setData] = useState<RushList | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [view, setView] = useState<RushView>("open");
+  const [search, setSearch] = useState("");
+  const q = useDebounced(search.trim());
+  const [priority, setPriority] = useState("all");
+  const [page, setPage] = useState(1);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editing, setEditing] = useState<RushOrder | null>(null);
+  const [converting, setConverting] = useState<RushOrder | null>(null);
+  const [cancelling, setCancelling] = useState<RushOrder | null>(null);
+  const [deleting, setDeleting] = useState<RushOrder | null>(null);
 
-  useEffect(() => {
-    fetchEmergencyOrders();
-  }, []);
-
-  const fetchEmergencyOrders = async () => {
-    try {
-      const response = await apiClient.getEmergencyOrders();
-      console.log('🚨 Emergency Orders response:', response);
-      setOrders(response.data?.emergencyOrders || []);
-    } catch (error) {
-      console.error('Error fetching emergency orders:', error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch emergency orders",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const load = useCallback(async () => {
     setLoading(true);
-
     try {
-      await apiClient.createEmergencyOrder({
-        customerName: formData.customer_name,
-        customerPhone: formData.customer_phone,
-        orderDetails: formData.order_details,
-        estimatedAmount: parseFloat(formData.estimated_amount),
-        priority: formData.priority,
-        notes: formData.notes
-      });
-
-      toast({
-        title: "Success",
-        description: "Emergency order created successfully",
-      });
-
-      // Reset form
-      setFormData({
-        customer_name: "",
-        customer_phone: "",
-        order_details: "",
-        estimated_amount: "",
-        priority: "high",
-        notes: ""
-      });
-      
-      setShowCreateDialog(false);
-      fetchEmergencyOrders();
-    } catch (error: any) {
-      console.error('Error creating emergency order:', error);
-      toast({
-        title: "Error",
-        description: error.message || "Failed to create emergency order",
-        variant: "destructive",
-      });
+      setData(
+        await rushOrdersApi.list({
+          view,
+          search: q || undefined,
+          priority: priority === "all" ? undefined : priority,
+          weekStart: startOfWeek(new Date(), { weekStartsOn: 1 }).toISOString(),
+          page,
+          limit: PAGE_SIZE
+        })
+      );
+    } catch (error) {
+      toast({ title: "Rush orders could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     } finally {
       setLoading(false);
     }
+  }, [view, q, priority, page, toast]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+  useEffect(() => setPage(1), [view, q, priority]);
+
+  const openEditor = (o: RushOrder | null) => {
+    setEditing(o);
+    setEditorOpen(true);
   };
 
-  const convertToFullJob = async (orderId: string) => {
+  const setStatus = async (o: RushOrder, status: "in_progress" | "completed" | "cancelled") => {
     try {
-      const order = orders.find(o => o.id === orderId);
-      if (!order) return;
-
-      const user = await apiClient.getCurrentUser();
-      if (!user) throw new Error('User not authenticatedjobs')
-        .insert([{
-          user_id: user.id,
-          title: `Emergency Order - ${order.customer_name}`,
-          description: order.order_details,
-          estimated_cost: order.estimated_amount,
-          priority: order.priority,
-          status: 'pending'
-        }])
-        .select()
-        .single();
-
-      if (jobError) throw jobError;
-
-      // Update the emergency order with job reference
-
-      if (updateError) throw updateError;
-
-      toast({
-        title: "Success",
-        description: "Emergency order converted to full job",
-      });
-
-      fetchEmergencyOrders();
-    } catch (error: any) {
-      console.error('Error converting to job:', error);
-      toast({
-        title: "Error",
-        description: error.message || "Failed to convert to job",
-        variant: "destructive",
-      });
+      const saved = await rushOrdersApi.setStatus(o._id, status);
+      toast({ title: status === "in_progress" ? `${o.orderId} started` : status === "completed" ? `${o.orderId} completed` : `${o.orderId} cancelled` });
+      load();
+      return saved;
+    } catch (error) {
+      toast({ title: "Not updated", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      throw error;
     }
   };
 
-  const filteredOrders = orders.filter(order => 
-    order.customer_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    order.customer_phone.includes(searchTerm) ||
-    order.order_details.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  const getPriorityColor = (priority: string) => {
-    switch (priority) {
-      case 'urgent': return 'destructive';
-      case 'high': return 'warning';
-      case 'medium': return 'default';
-      default: return 'secondary';
+  const remove = async () => {
+    if (!deleting) return;
+    try {
+      await rushOrdersApi.remove(deleting._id);
+      toast({ title: `${deleting.orderId} deleted`, description: jobOf(deleting) ? "The job it became is kept." : undefined });
+      setDeleting(null);
+      load();
+    } catch (error) {
+      toast({ title: "Not deleted", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      throw error;
     }
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'converted': return 'success';
-      case 'completed': return 'default';
-      case 'cancelled': return 'secondary';
-      default: return 'warning';
-    }
+  const s = data?.summary;
+  const rows = data?.emergencyOrders || [];
+  const total = data?.pagination.totalEmergencyOrders || 0;
+  const toggle = (v: RushView) => setView(view === v ? "all" : v);
+
+  const actions = (o: RushOrder): RowAction[] => {
+    const job = jobOf(o);
+    return [
+      { label: "Start work", icon: Play, onClick: () => setStatus(o, "in_progress").catch(() => undefined), hidden: !canEdit || o.status !== "pending" },
+      { label: "Mark complete", icon: CheckCircle2, onClick: () => setStatus(o, "completed").catch(() => undefined), hidden: !canEdit || !isOpen(o) },
+      { label: "Convert to job", icon: Ticket, onClick: () => setConverting(o), hidden: !canConvert || !!job || !(isOpen(o) || o.status === "completed") },
+      { label: "Open job", icon: ExternalLink, onClick: () => job && navigate(jobLink(job.title)), hidden: !job },
+      { label: "Edit", icon: Pencil, onClick: () => openEditor(o), hidden: !canEdit || o.status === "converted" || o.status === "cancelled", separated: true },
+      { label: "Cancel order", icon: Ban, onClick: () => setCancelling(o), hidden: !canEdit || !isOpen(o) },
+      { label: "Delete", icon: Trash2, destructive: true, separated: true, onClick: () => setDeleting(o), hidden: !canEdit }
+    ];
   };
+
+  const columns: Column<RushOrder>[] = [
+    {
+      id: "customer",
+      header: "Order",
+      cell: (o) => (
+        <EntityCell
+          className="max-w-[300px]"
+          avatar={o.customerName}
+          title={o.customerName}
+          subtitle={
+            <>
+              <span className="font-mono">{o.orderId}</span> · {fmtPhone(o.customerPhone)}
+            </>
+          }
+        />
+      ),
+      sortValue: (o) => o.customerName.toLowerCase(),
+      className: "min-w-[230px]"
+    },
+    {
+      id: "details",
+      header: "Details",
+      cell: (o) => (
+        <span className="block max-w-[240px] truncate text-muted-foreground" title={o.orderDetails}>
+          {o.orderDetails}
+        </span>
+      ),
+      hideBelow: "md"
+    },
+    {
+      id: "needed",
+      header: "Needed by",
+      cell: (o) => <Stack top={<span className="whitespace-nowrap">{neededBy(o)}</span>} bottom={<Due o={o} />} />,
+      sortValue: (o) => o.expectedCompletion || "",
+      className: "w-[160px]"
+    },
+    {
+      id: "amount",
+      header: "Estimate",
+      align: "right",
+      cell: (o) => <Stack top={<span className="font-semibold">{formatINR(o.estimatedAmount)}</span>} bottom={o.advancePaid ? `${formatINR(o.advancePaid)} advance` : undefined} />,
+      sortValue: (o) => o.estimatedAmount,
+      hideBelow: "sm"
+    },
+    {
+      id: "status",
+      header: "Status",
+      cell: (o) => {
+        const job = jobOf(o);
+        return (
+          <Stack
+            className="max-w-[220px]"
+            top={
+              <span className="inline-flex items-center gap-1.5">
+                <StatusPill tone={STATUS_META[o.status].tone}>{STATUS_META[o.status].label}</StatusPill>
+                {o.priority === "urgent" && isOpen(o) && <Tag className="border-destructive/30 text-destructive-strong">Urgent</Tag>}
+              </span>
+            }
+            bottom={
+              job ? (
+                <Link to={jobLink(job.title)} onClick={(e) => e.stopPropagation()} className="text-primary underline-offset-4 hover:underline">
+                  {job.title}
+                </Link>
+              ) : o.status === "cancelled" && o.cancelReason ? (
+                o.cancelReason
+              ) : undefined
+            }
+          />
+        );
+      },
+      sortValue: (o) => o.status,
+      className: "w-[220px]"
+    }
+  ];
+
+  const filtered = !!q || priority !== "all";
 
   return (
-    <div className="flex-1 space-y-6 p-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Emergency Orders</h1>
-          <p className="text-muted-foreground">Quick orders for walk-ins and urgent requests</p>
-        </div>
-        <Button onClick={() => setShowCreateDialog(true)} className="gap-2">
-          <Plus className="h-4 w-4" />
-          Quick Order
-        </Button>
-      </div>
+    <PageShell>
+      <PageHeader
+        eyebrow="Sales & estimating"
+        title="Rush orders"
+        description="Same-day and urgent work that jumps the queue. Convert one to a job when it needs the full workflow."
+        actions={
+          canEdit && (
+            <Button onClick={() => openEditor(null)}>
+              <Plus />
+              New rush order
+            </Button>
+          )
+        }
+      />
 
-      {/* Stats */}
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Total Orders</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{orders.length}</div>
-          </CardContent>
-        </Card>
-        
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Pending</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-orange-600">
-              {orders.filter(o => o.status === 'pending').length}
-            </div>
-          </CardContent>
-        </Card>
-        
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Converted</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">
-              {orders.filter(o => o.status === 'converted').length}
-            </div>
-          </CardContent>
-        </Card>
-        
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Urgent Orders</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-red-600">
-              {orders.filter(o => o.priority === 'urgent' && o.status === 'pending').length}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <MetricBar
+        loading={!data}
+        metrics={[
+          { label: "Open", value: s?.open ?? 0, hint: `${formatINR(s?.openEstimated || 0)} estimated`, onClick: () => toggle("open"), active: view === "open" },
+          {
+            label: "Due within 24 h",
+            value: s?.due ?? 0,
+            hint: s?.overdue ? `${s.overdue} overdue` : "Nothing overdue",
+            tone: s?.overdue ? "danger" : s?.due ? "warning" : "default",
+            onClick: () => toggle("due"),
+            active: view === "due"
+          },
+          {
+            label: "Completed",
+            value: s?.completedThisWeek ?? 0,
+            hint: `This week · ${(s?.converted || 0).toLocaleString("en-IN")} became jobs`,
+            tone: "success",
+            onClick: () => toggle("completed"),
+            active: view === "completed"
+          },
+          { label: "To collect", value: formatINR(Math.max(0, (s?.openEstimated || 0) - (s?.openAdvance || 0))), hint: `${formatINR(s?.openAdvance || 0)} advance received` }
+        ]}
+      />
 
-      {/* Search */}
-      <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          placeholder="Search orders..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="pl-10"
-        />
-      </div>
-
-      {/* Orders List */}
       <div className="space-y-4">
-        {filteredOrders.map((order) => (
-          <Card key={order.id} className="hover:shadow-md transition-shadow">
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-2">
-                    <div className="flex items-center gap-2">
-                      <User className="w-4 h-4" />
-                      <h3 className="font-semibold">{order.customer_name}</h3>
-                    </div>
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Phone className="w-3 h-3" />
-                      {order.customer_phone}
-                    </div>
-                    <Badge variant={getPriorityColor(order.priority)}>
-                      {order.priority.toUpperCase()}
-                    </Badge>
-                    <Badge variant={getStatusColor(order.status)}>
-                      {order.status.toUpperCase()}
-                    </Badge>
-                    {order.priority === 'urgent' && (
-                      <AlertTriangle className="w-4 h-4 text-red-500" />
-                    )}
+        <ViewTabs<RushView>
+          value={view}
+          onChange={setView}
+          tabs={[
+            { value: "open", label: "Open", count: s?.open },
+            { value: "due", label: "Due within 24 h", count: s?.due, tone: s?.overdue ? "danger" : "warning" },
+            { value: "completed", label: "Completed", count: s?.completed },
+            { value: "cancelled", label: "Cancelled", count: s?.cancelled },
+            { value: "all", label: "All", count: s?.all }
+          ]}
+        />
+
+        <DataCard
+          toolbar={
+            <Toolbar search={<SearchField value={search} onChange={setSearch} placeholder="Search customer, phone, order no. or details" />}>
+              <FilterSelect label="Priority" value={priority} onChange={setPriority} options={(Object.keys(PRIORITY_LABEL) as (keyof typeof PRIORITY_LABEL)[]).map((p) => ({ value: p, label: PRIORITY_LABEL[p] }))} />
+            </Toolbar>
+          }
+          footer={!loading && total > 0 && <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} noun="orders" />}
+        >
+          <DataTable
+            columns={columns}
+            rows={rows}
+            rowKey={(o) => o._id}
+            loading={loading && !data}
+            onRowClick={canEdit ? (o) => o.status !== "converted" && o.status !== "cancelled" && openEditor(o) : undefined}
+            actions={actions}
+            actionsLabel={(o) => `Actions for ${o.orderId}`}
+            mobile={(o) => {
+              const job = jobOf(o);
+              return (
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="truncate font-medium">{o.customerName}</span>
+                    <span className="num shrink-0 font-semibold">{formatINR(o.estimatedAmount)}</span>
                   </div>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                    <div>
-                      <span className="text-muted-foreground">Order Details:</span>
-                      <p className="font-medium">{order.order_details}</p>
-                    </div>
-                    
-                    <div>
-                      <span className="text-muted-foreground">Estimated Amount:</span>
-                      <p className="font-bold text-lg">₹{order.estimated_amount.toLocaleString()}</p>
-                    </div>
-                    
-                    <div>
-                      <span className="text-muted-foreground">Created:</span>
-                      <p>{format(new Date(order.created_at), 'MMM dd, yyyy HH:mm')}</p>
-                    </div>
+                  <div className="truncate text-xs text-muted-foreground">{o.orderDetails}</div>
+                  <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                    <span className="truncate">
+                      {neededBy(o)}
+                      {dueNote(o).text && (
+                        <>
+                          {" · "}
+                          <Due o={o} />
+                        </>
+                      )}
+                    </span>
+                    <StatusPill tone={STATUS_META[o.status].tone}>{job ? "Job created" : STATUS_META[o.status].label}</StatusPill>
                   </div>
-                  
-                  {order.notes && (
-                    <div className="mt-2 text-sm">
-                      <span className="text-muted-foreground">Notes:</span>
-                      <p className="text-muted-foreground">{order.notes}</p>
-                    </div>
-                  )}
                 </div>
-                
-                <div className="flex items-center gap-2 ml-4">
-                  {order.status === 'pending' && (
-                    <Button
-                      onClick={() => convertToFullJob(order.id)}
-                      size="sm"
-                      className="gap-2"
-                    >
-                      <UserPlus className="w-4 h-4" />
-                      Convert to Job
-                    </Button>
-                  )}
-                  
-                  {order.status === 'converted' && (
-                    <Badge variant="success">Converted to Job</Badge>
-                  )}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+              );
+            }}
+            empty={
+              filtered || view !== "all" ? (
+                <EmptyState
+                  compact
+                  icon={Zap}
+                  title={view === "open" && !filtered ? "No open rush orders" : view === "due" && !filtered ? "Nothing due in the next 24 hours" : "No rush orders in this view"}
+                  description={filtered ? "Try another search or priority." : "Try another view."}
+                  tone={(view === "open" || view === "due") && !filtered ? "success" : "default"}
+                  action={
+                    canEdit && view === "open" && !filtered && (
+                      <Button variant="outline" onClick={() => openEditor(null)}>
+                        <Plus />
+                        New rush order
+                      </Button>
+                    )
+                  }
+                />
+              ) : (
+                <EmptyState
+                  icon={Zap}
+                  title="No rush orders yet"
+                  description="Take down urgent work in seconds — who, what and by when. Convert it to a job when it needs the full workflow."
+                  action={
+                    canEdit && (
+                      <Button onClick={() => openEditor(null)}>
+                        <Plus />
+                        New rush order
+                      </Button>
+                    )
+                  }
+                />
+              )
+            }
+          />
+        </DataCard>
       </div>
 
-      {filteredOrders.length === 0 && (
-        <div className="text-center py-12">
-          <AlertTriangle className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-          <h3 className="text-lg font-semibold mb-2">No emergency orders found</h3>
-          <p className="text-muted-foreground">Create your first quick order for walk-in customers.</p>
-        </div>
-      )}
-
-      {/* Create Order Dialog */}
-      <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Create Quick Order</DialogTitle>
-          </DialogHeader>
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <Label htmlFor="customer_name">Customer Name *</Label>
-              <Input
-                id="customer_name"
-                value={formData.customer_name}
-                onChange={(e) => setFormData(prev => ({ ...prev, customer_name: e.target.value }))}
-                placeholder="Walk-in customer"
-                required
-              />
-            </div>
-
-            <div>
-              <Label htmlFor="customer_phone">Phone Number *</Label>
-              <Input
-                id="customer_phone"
-                value={formData.customer_phone}
-                onChange={(e) => setFormData(prev => ({ ...prev, customer_phone: e.target.value }))}
-                placeholder="+91 9876543210"
-                required
-              />
-            </div>
-
-            <div>
-              <Label htmlFor="order_details">Order Details *</Label>
-              <Textarea
-                id="order_details"
-                value={formData.order_details}
-                onChange={(e) => setFormData(prev => ({ ...prev, order_details: e.target.value }))}
-                placeholder="Quick description of the printing job"
-                rows={3}
-                required
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label htmlFor="estimated_amount">Estimated Amount</Label>
-                <Input
-                  id="estimated_amount"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={formData.estimated_amount}
-                  onChange={(e) => setFormData(prev => ({ ...prev, estimated_amount: e.target.value }))}
-                  placeholder="0"
-                />
-              </div>
-
-              <div>
-                <Label htmlFor="priority">Priority</Label>
-                <Select
-                  value={formData.priority}
-                  onValueChange={(value) => setFormData(prev => ({ ...prev, priority: value }))}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="urgent">Urgent</SelectItem>
-                    <SelectItem value="high">High</SelectItem>
-                    <SelectItem value="medium">Medium</SelectItem>
-                    <SelectItem value="low">Low</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div>
-              <Label htmlFor="notes">Additional Notes</Label>
-              <Textarea
-                id="notes"
-                value={formData.notes}
-                onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
-                placeholder="Any special requirements or notes"
-                rows={2}
-              />
-            </div>
-
-            <div className="flex justify-end gap-2 pt-4">
-              <Button type="button" variant="outline" onClick={() => setShowCreateDialog(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={loading}>
-                {loading ? "Creating..." : "Create Quick Order"}
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
-    </div>
+      <RushOrderEditor open={editorOpen} onOpenChange={setEditorOpen} order={editing} onSaved={() => load()} />
+      <ConvertToJobDialog order={converting} onClose={() => setConverting(null)} onConverted={() => load()} />
+      <ConfirmDialog
+        open={!!cancelling}
+        onOpenChange={(o) => !o && setCancelling(null)}
+        title="Cancel this rush order?"
+        description={cancelling ? `${cancelling.orderId} for ${cancelling.customerName}. It moves to Cancelled and can't be converted to a job.` : undefined}
+        confirmLabel="Cancel order"
+        cancelLabel="Keep"
+        onConfirm={async () => {
+          if (!cancelling) return;
+          await setStatus(cancelling, "cancelled");
+          setCancelling(null);
+        }}
+      />
+      <ConfirmDialog
+        open={!!deleting}
+        onOpenChange={(o) => !o && setDeleting(null)}
+        title="Delete this rush order?"
+        description={deleting ? `${deleting.orderId} for ${deleting.customerName}.${jobOf(deleting) ? " The job it became is kept." : ""} This can't be undone.` : undefined}
+        onConfirm={remove}
+      />
+    </PageShell>
   );
 }

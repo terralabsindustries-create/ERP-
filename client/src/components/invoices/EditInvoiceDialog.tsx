@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,33 +19,33 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Plus, Trash2, Calculator } from "lucide-react";
+import { AlertTriangle, Plus, Trash2, Calculator } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
+import { documentTotals } from "@/lib/billing";
+import { formatINR, localDate } from "@/lib/format";
+import { BillingTotals } from "@/components/billing/BillingTotals";
+import { LinePricingFields } from "@/components/billing/LinePricingFields";
+import { lineAmount, lineDraftFrom, lineInput, lineProblem, newLineDraft, type LineDraft } from "@/components/billing/lineDraft";
 
 interface InvoiceItem {
   itemName: string;
-  description: string;
+  description?: string;
   quantity: number;
+  unit?: string;
   unitPrice: number;
-  totalAmount: number;
-  hsnCode: string;
-  gstRate: number;
-  gstAmount: number;
-  itemTotal: number;
+  itemType?: string;
+  length?: number;
+  width?: number;
 }
 
 interface Invoice {
   id: string;
+  _id?: string;
   invoiceNumber: string;
   customerId: {
     _id: string;
     name: string;
-    email?: string;
-    phone?: string;
-    address?: string;
-    gstNumber?: string;
   };
   jobId?: {
     _id: string;
@@ -54,16 +54,11 @@ interface Invoice {
   invoiceDate: string;
   dueDate: string;
   items: InvoiceItem[];
-  subtotal: number;
+  designCharge?: number;
   discountAmount: number;
-  taxableAmount: number;
-  totalGstAmount: number;
+  totalGstAmount?: number;
   totalAmount: number;
-  amountPaid: number;
-  balanceDue: number;
-  status: string;
-  paymentStatus: string;
-  isInterState: boolean;
+  noGst?: boolean;
   notes: string;
   termsAndConditions: string;
 }
@@ -75,29 +70,31 @@ interface EditInvoiceDialogProps {
   onInvoiceUpdated: () => void;
 }
 
+const asText = (n?: number) => (n ? String(n) : "");
+
 export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdated }: EditInvoiceDialogProps) {
   const [loading, setLoading] = useState(false);
   const [customers, setCustomers] = useState<any[]>([]);
   const [jobs, setJobs] = useState<any[]>([]);
-  const [hsnCodes, setHsnCodes] = useState<any[]>([]);
   const [formData, setFormData] = useState({
     customerId: "",
     jobId: "",
     invoiceDate: "",
     dueDate: "",
-    items: [] as InvoiceItem[],
-    discountAmount: 0,
-    isInterState: false,
+    items: [] as LineDraft[],
+    designCharge: "",
+    discountAmount: "",
     notes: "",
     termsAndConditions: ""
   });
+  const nextKey = useRef(1);
   const { toast } = useToast();
 
   const toDateInput = (val: any) => {
     if (!val) return "";
     const d = new Date(val);
     if (isNaN(d.getTime())) return "";
-    return d.toISOString().split('T')[0];
+    return localDate(d);
   };
 
   useEffect(() => {
@@ -107,15 +104,9 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
         jobId: invoice.jobId?._id || "",
         invoiceDate: toDateInput(invoice.invoiceDate),
         dueDate: toDateInput(invoice.dueDate),
-        items: invoice.items.map(item => {
-          const base = (item as any).itemType === 'Square Feet'
-            ? ((item as any).totalSquareFeet || 0) * item.unitPrice
-            : item.quantity * item.unitPrice;
-          const gstAmount = base * (item.gstRate / 100);
-          return { ...item, totalAmount: base, gstAmount, itemTotal: base + gstAmount };
-        }),
-        discountAmount: invoice.discountAmount || 0,
-        isInterState: invoice.isInterState || false,
+        items: invoice.items.map((item) => lineDraftFrom(nextKey.current++, item)),
+        designCharge: asText(invoice.designCharge),
+        discountAmount: asText(invoice.discountAmount),
         notes: invoice.notes || "",
         termsAndConditions: invoice.termsAndConditions || ""
       });
@@ -126,14 +117,12 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
     if (open) {
       fetchCustomers();
       fetchJobs();
-      fetchHsnCodes();
     }
   }, [open]);
 
   const fetchCustomers = async () => {
     try {
-      const response = await apiClient.getCustomer();
-      const data = Array.isArray(response) ? response : (response?.customers || []);
+      const data = await apiClient.listAll('/customers', 'customers');
       setCustomers(data);
     } catch (error) {
       console.error('Error fetching customers:', error);
@@ -142,39 +131,15 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
 
   const fetchJobs = async () => {
     try {
-      const response = await apiClient.getJobs();
-      const data = Array.isArray(response) ? response : (response?.jobs || []);
+      const data = await apiClient.listAll('/jobs', 'jobs');
       setJobs(data);
     } catch (error) {
       console.error('Error fetching jobs:', error);
     }
   };
 
-  const fetchHsnCodes = async () => {
-    try {
-      const response = await apiClient.getHsnCodes();
-      const data = Array.isArray(response) ? response : (response?.hsnCodes || []);
-      setHsnCodes(data);
-    } catch (error) {
-      console.error('Error fetching HSN codes:', error);
-    }
-  };
-
   const addItem = () => {
-    setFormData(prev => ({
-      ...prev,
-      items: [...prev.items, {
-        itemName: "",
-        description: "",
-        quantity: 1,
-        unitPrice: 0,
-        totalAmount: 0,
-        hsnCode: "",
-        gstRate: 18,
-        gstAmount: 0,
-        itemTotal: 0
-      }]
-    }));
+    setFormData(prev => ({ ...prev, items: [...prev.items, newLineDraft(nextKey.current++)] }));
   };
 
   const removeItem = (index: number) => {
@@ -184,65 +149,54 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
     }));
   };
 
-  const updateItem = (index: number, field: keyof InvoiceItem, value: any) => {
-    setFormData(prev => {
-      const newItems = [...prev.items];
-      newItems[index] = { ...newItems[index], [field]: value };
-      
-      // Recalculate totals
-      if (field === 'quantity' || field === 'unitPrice' || field === 'gstRate') {
-        const quantity = field === 'quantity' ? value : newItems[index].quantity;
-        const unitPrice = field === 'unitPrice' ? value : newItems[index].unitPrice;
-        const gstRate = field === 'gstRate' ? value : newItems[index].gstRate;
-        
-        const totalAmount = quantity * unitPrice;
-        const gstAmount = totalAmount * (gstRate / 100);
-        const itemTotal = totalAmount + gstAmount;
-        
-        newItems[index] = {
-          ...newItems[index],
-          quantity,
-          unitPrice,
-          gstRate,
-          totalAmount,
-          gstAmount,
-          itemTotal
-        };
-      }
-      
-      return { ...prev, items: newItems };
-    });
+  const updateItem = (index: number, patch: Partial<LineDraft>) => {
+    setFormData(prev => ({
+      ...prev,
+      items: prev.items.map((item, i) => (i === index ? { ...item, ...patch } : item))
+    }));
   };
 
-  const calculateTotals = () => {
-    const subtotal = formData.items.reduce((sum, item) => sum + item.totalAmount, 0);
-    const taxableAmount = subtotal - formData.discountAmount;
-    const totalGstAmount = formData.items.reduce((sum, item) => sum + item.gstAmount, 0);
-    const totalAmount = taxableAmount + totalGstAmount;
-    
-    return { subtotal, taxableAmount, totalGstAmount, totalAmount };
-  };
+  // The same arithmetic the server applies when this is saved; it recomputes
+  // every figure itself and ignores totals sent from here.
+  const totals = documentTotals(formData.items.map(lineAmount), Number(formData.designCharge) || 0, Number(formData.discountAmount) || 0);
+
+  // Invoices issued before GST was removed still carry it. Saving the lines
+  // here re-prices the invoice without GST.
+  const legacyGst = invoice && !invoice.noGst ? invoice.totalGstAmount || 0 : 0;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!invoice) return;
-    
+
+    const problem = formData.items.length === 0
+      ? "Add at least one item."
+      : formData.items.map((l, i) => lineProblem(l, i + 1)).find(Boolean) ||
+        (totals.discount > totals.gross ? "The discount is more than the invoice." : "");
+    if (problem) {
+      toast({ title: "Check the invoice", description: problem, variant: "destructive" });
+      return;
+    }
+
     setLoading(true);
-    
+
     try {
-      const totals = calculateTotals();
-      
-      await apiClient.updateInvoice(invoice.id, {
-        ...formData,
+      await apiClient.updateInvoice(invoice.id || (invoice._id as string), {
+        customerId: formData.customerId,
         jobId: formData.jobId === 'no-job' ? null : formData.jobId,
-        ...totals
+        invoiceDate: formData.invoiceDate,
+        dueDate: formData.dueDate,
+        items: formData.items.map((l) => ({ itemName: l.itemName.trim(), description: l.description.trim(), ...lineInput(l) })),
+        designCharge: Number(formData.designCharge) || 0,
+        discountAmount: Number(formData.discountAmount) || 0,
+        notes: formData.notes,
+        termsAndConditions: formData.termsAndConditions
       });
-      
+
       toast({
         title: "Success",
         description: "Invoice updated successfully",
       });
-      
+
       onInvoiceUpdated();
       onOpenChange(false);
     } catch (error: any) {
@@ -257,8 +211,6 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
     }
   };
 
-  const totals = calculateTotals();
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
@@ -268,7 +220,17 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
             Update invoice details and items
           </DialogDescription>
         </DialogHeader>
-        
+
+        {legacyGst > 0 && (
+          <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning-soft px-3 py-2 text-sm text-warning-strong">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              This invoice was issued with GST of {formatINR(legacyGst)} (total {formatINR(invoice?.totalAmount || 0)}). Saving it here re-prices it
+              without GST, at the total shown below.
+            </span>
+          </div>
+        )}
+
         <form onSubmit={handleSubmit} className="space-y-6">
           {/* Customer and Job Selection */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -290,7 +252,7 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
                 </SelectContent>
               </Select>
             </div>
-            
+
             <div className="space-y-2">
               <Label htmlFor="jobId">Job (Optional)</Label>
               <Select
@@ -324,7 +286,7 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
                 required
               />
             </div>
-            
+
             <div className="space-y-2">
               <Label htmlFor="dueDate">Due Date</Label>
               <Input
@@ -342,13 +304,13 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
             <div className="flex items-center justify-between">
               <Label>Invoice Items</Label>
               <Button type="button" onClick={addItem} size="sm">
-                <Plus className="h-4 w-4 mr-2" />
+                <Plus className="h-4 w-4" />
                 Add Item
               </Button>
             </div>
-            
+
             {formData.items.map((item, index) => (
-              <Card key={index}>
+              <Card key={item.key}>
                 <CardHeader className="pb-3">
                   <div className="flex items-center justify-between">
                     <CardTitle className="text-sm">Item {index + 1}</CardTitle>
@@ -357,6 +319,7 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
                       variant="ghost"
                       size="sm"
                       onClick={() => removeItem(index)}
+                      aria-label={`Remove item ${index + 1}`}
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -365,124 +328,30 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
                 <CardContent className="space-y-4">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label>Item Name</Label>
+                      <Label htmlFor={`edit-item-${item.key}`}>Item Name</Label>
                       <Input
+                        id={`edit-item-${item.key}`}
                         value={item.itemName}
-                        onChange={(e) => updateItem(index, 'itemName', e.target.value)}
+                        onChange={(e) => updateItem(index, { itemName: e.target.value })}
                         placeholder="Enter item name"
                         required
                       />
                     </div>
-                    
+
                     <div className="space-y-2">
-                      <Label>Description</Label>
+                      <Label htmlFor={`edit-desc-${item.key}`}>Description</Label>
                       <Input
+                        id={`edit-desc-${item.key}`}
                         value={item.description}
-                        onChange={(e) => updateItem(index, 'description', e.target.value)}
+                        onChange={(e) => updateItem(index, { description: e.target.value })}
                         placeholder="Enter description"
                       />
                     </div>
                   </div>
-                  
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div className="space-y-2">
-                      <Label>Quantity</Label>
-                      <Input
-                        type="number"
-                        min="0.01"
-                        step="0.01"
-                        value={item.quantity}
-                        onChange={(e) => updateItem(index, 'quantity', parseFloat(e.target.value) || 0)}
-                        required
-                      />
-                    </div>
-                    
-                    <div className="space-y-2">
-                      <Label>Unit Price</Label>
-                      <Input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={item.unitPrice}
-                        onChange={(e) => updateItem(index, 'unitPrice', parseFloat(e.target.value) || 0)}
-                        required
-                      />
-                    </div>
-                    
-                    <div className="space-y-2">
-                      <Label>HSN Code</Label>
-                      <Select
-                        value={item.hsnCode}
-                        onValueChange={(value) => updateItem(index, 'hsnCode', value)}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select HSN" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {hsnCodes.map((hsn) => (
-                            <SelectItem key={hsn._id} value={hsn.hsnCode}>
-                              {hsn.hsnCode} - {hsn.description}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    
-                    <div className="space-y-2">
-                      <Label>GST Rate (%)</Label>
-                      <Input
-                        type="number"
-                        min="0"
-                        max="100"
-                        step="0.01"
-                        value={item.gstRate}
-                        onChange={(e) => updateItem(index, 'gstRate', parseFloat(e.target.value) || 0)}
-                        required
-                      />
-                    </div>
-                  </div>
-                  
-                  <div className="grid grid-cols-3 gap-4 text-sm">
-                    <div className="text-center p-2 bg-muted rounded">
-                      <div className="font-medium">Total Amount</div>
-                      <div>₹{item.totalAmount.toFixed(2)}</div>
-                    </div>
-                    <div className="text-center p-2 bg-muted rounded">
-                      <div className="font-medium">GST Amount</div>
-                      <div>₹{item.gstAmount.toFixed(2)}</div>
-                    </div>
-                    <div className="text-center p-2 bg-muted rounded">
-                      <div className="font-medium">Item Total</div>
-                      <div>₹{item.itemTotal.toFixed(2)}</div>
-                    </div>
-                  </div>
+                  <LinePricingFields line={item} idPrefix={`edit-${item.key}`} onChange={(patch) => updateItem(index, patch)} />
                 </CardContent>
               </Card>
             ))}
-          </div>
-
-          {/* Discount */}
-          <div className="space-y-2">
-            <Label htmlFor="discountAmount">Discount Amount</Label>
-            <Input
-              id="discountAmount"
-              type="number"
-              min="0"
-              step="0.01"
-              value={formData.discountAmount}
-              onChange={(e) => setFormData(prev => ({ ...prev, discountAmount: parseFloat(e.target.value) || 0 }))}
-            />
-          </div>
-
-          {/* Inter-state */}
-          <div className="flex items-center space-x-2">
-            <input
-              type="checkbox"
-              id="isInterState"
-              checked={formData.isInterState}
-              onChange={(e) => setFormData(prev => ({ ...prev, isInterState: e.target.checked }))}
-            />
-            <Label htmlFor="isInterState">Inter-state transaction</Label>
           </div>
 
           {/* Notes */}
@@ -515,27 +384,16 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
                 Invoice Totals
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-2">
-              <div className="flex justify-between">
-                <span>Subtotal:</span>
-                <span>₹{totals.subtotal.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Discount:</span>
-                <span>-₹{formData.discountAmount.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Taxable Amount:</span>
-                <span>₹{totals.taxableAmount.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Total GST:</span>
-                <span>₹{totals.totalGstAmount.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between font-bold text-lg border-t pt-2">
-                <span>Total Amount:</span>
-                <span>₹{totals.totalAmount.toFixed(2)}</span>
-              </div>
+            <CardContent>
+              <BillingTotals
+                totals={totals}
+                idPrefix="edit-invoice"
+                designCharge={formData.designCharge}
+                onDesignChargeChange={(v) => setFormData((prev) => ({ ...prev, designCharge: v }))}
+                discount={formData.discountAmount}
+                onDiscountChange={(v) => setFormData((prev) => ({ ...prev, discountAmount: v }))}
+                totalLabel="Invoice total"
+              />
             </CardContent>
           </Card>
 

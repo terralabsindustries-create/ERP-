@@ -1,21 +1,14 @@
 import { useState, useEffect } from "react";
-import { format, isBefore, addDays, differenceInDays } from "date-fns";
-import { 
-  DollarSign, 
-  AlertTriangle, 
-  Clock, 
-  User,
-  Phone,
-  Banknote,
-  TrendingUp,
-  Calendar
-} from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { format, isBefore, addDays, differenceInCalendarDays } from "date-fns";
+import { Banknote, Check, IndianRupee, Phone, RotateCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
+import { Panel } from "@/components/common/Panel";
+import { EmptyState } from "@/components/common/EmptyState";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
+import { formatINR } from "@/lib/printWorkflow";
+import { cn } from "@/lib/utils";
 
 interface PaymentDue {
   _id: string;
@@ -96,18 +89,18 @@ export function PaymentDuesWidget({ onRefresh }: PaymentDuesWidgetProps) {
   };
 
   const getDueStatus = (dueDate: string) => {
-    if (!dueDate) return { urgency: 'no-date', label: 'No due date', color: 'bg-gray-500' };
+    if (!dueDate) return { urgency: 'no-date', label: 'No due date', rank: 3 };
     
     const due = new Date(dueDate);
     const now = new Date();
     const soon = addDays(now, 3); // Next 3 days
 
     if (isBefore(due, now)) {
-      return { urgency: 'overdue', label: 'Overdue', color: 'bg-red-500' };
+      return { urgency: 'overdue', label: 'Overdue', rank: 0 };
     } else if (isBefore(due, soon)) {
-      return { urgency: 'due-soon', label: 'Due soon', color: 'bg-yellow-500' };
+      return { urgency: 'due-soon', label: 'Due soon', rank: 1 };
     } else {
-      return { urgency: 'normal', label: 'Upcoming', color: 'bg-green-500' };
+      return { urgency: 'normal', label: 'Upcoming', rank: 2 };
     }
   };
 
@@ -123,7 +116,7 @@ export function PaymentDuesWidget({ onRefresh }: PaymentDuesWidgetProps) {
       // Optimistically remove from list immediately
       setDues(prev => {
         const updated = prev.filter(d => d._id !== invoiceId);
-        setTotalDue(updated.reduce((sum, d) => sum + (d.totalAmount || 0), 0));
+        setTotalDue(updated.reduce((sum, d) => sum + (d.balanceAmount ?? d.totalAmount ?? 0), 0));
         return updated;
       });
 
@@ -147,128 +140,96 @@ export function PaymentDuesWidget({ onRefresh }: PaymentDuesWidgetProps) {
     }
   };
 
-  if (loading) {
-    return (
-      <Card className="border-0 shadow-card bg-card">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
-            <DollarSign className="w-4 h-4" />
-            Payment Dues
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="animate-pulse space-y-3">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="h-16 bg-muted rounded-lg"></div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+  const rows = (Array.isArray(dues) ? dues : [])
+    .map((due) => ({ due, status: getDueStatus(due.dueDate) }))
+    // Overdue invoices first, then the ones falling due soonest.
+    .sort(
+      (a, b) =>
+        a.status.rank - b.status.rank ||
+        new Date(a.due.dueDate || 0).getTime() - new Date(b.due.dueDate || 0).getTime()
     );
-  }
+  const overdueCount = rows.filter((r) => r.status.urgency === 'overdue').length;
+
+  const BADGE = { overdue: 'destructive', 'due-soon': 'warning', normal: 'secondary', 'no-date': 'secondary' } as const;
 
   return (
-    <Card className="border-0 shadow-card bg-card">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2">
-            <DollarSign className="w-4 h-4" />
-            Payment Dues
-            <Badge variant="secondary" className="ml-2">
-              {dues.length}
-            </Badge>
-          </CardTitle>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={fetchPaymentDues}
-            className="h-8 w-8 p-0"
-          >
-            <Clock className="w-4 h-4" />
-          </Button>
-        </div>
-        <div className="flex items-center gap-2">
-          <p className="text-xs text-muted-foreground">Total pending:</p>
-          <Badge variant="warning" className="text-xs">
-            ₹{totalDue.toLocaleString()}
-          </Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {dues.length === 0 ? (
-          <div className="text-center py-4">
-            <Banknote className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
-            <p className="text-sm text-muted-foreground">All payments collected!</p>
-          </div>
+    <Panel
+      title="Payment dues"
+      icon={IndianRupee}
+      count={loading ? undefined : rows.length}
+      countTone={overdueCount > 0 ? "danger" : "default"}
+      description={
+        loading ? (
+          "Loading…"
         ) : (
-          Array.isArray(dues) && dues.map((due) => {
-            const status = getDueStatus(due.dueDate);
-            
+          <>
+            <span className="num font-semibold text-foreground">{formatINR(totalDue)}</span> outstanding
+            {overdueCount > 0 && <span className="text-destructive-strong"> · {overdueCount} overdue</span>}
+          </>
+        )
+      }
+      action={
+        <Button variant="ghost" size="icon-xs" onClick={fetchPaymentDues} aria-label="Refresh payment dues" className="text-muted-foreground">
+          <RotateCw />
+        </Button>
+      }
+    >
+      {loading ? (
+        <div className="space-y-2 p-4 sm:p-5">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-12 animate-pulse rounded-md bg-muted" />
+          ))}
+        </div>
+      ) : rows.length === 0 ? (
+        <EmptyState compact tone="success" icon={Banknote} title="All payments collected!" description="No invoices are waiting on payment." />
+      ) : (
+        <ul className="max-h-[22rem] divide-y overflow-y-auto">
+          {rows.map(({ due, status }) => {
+            const balance = due.balanceAmount ?? due.totalAmount ?? 0;
+            const daysLate = due.dueDate ? differenceInCalendarDays(new Date(), new Date(due.dueDate)) : 0;
             return (
-              <div key={due._id} className="border rounded-lg p-3 space-y-2">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <div className={`w-2 h-2 rounded-full ${status.color}`}></div>
-                      <h4 className="font-medium text-sm">{due.invoiceNumber}</h4>
-                      <Badge 
-                        variant={status.urgency === 'overdue' ? 'destructive' : 
-                               status.urgency === 'due-soon' ? 'warning' : 'default'}
-                        className="text-xs"
-                      >
-                        {status.label}
-                      </Badge>
-                    </div>
-                    
-                    <div className="text-lg font-bold text-foreground mb-1">
-                      ₹{due.totalAmount.toLocaleString()}
-                    </div>
-                    
-                    <div className="space-y-1 text-xs text-muted-foreground">
-                      {due.customerName && (
-                        <div className="flex items-center gap-1">
-                          <User className="w-3 h-3" />
-                          {due.customerName}
-                        </div>
-                      )}
-                      
-                      {due.customerPhone && (
-                        <div className="flex items-center gap-1">
-                          <Phone className="w-3 h-3" />
-                          {due.customerPhone}
-                        </div>
-                      )}
-                      
-                      {due.dueDate && (
-                        <div className="flex items-center gap-1">
-                          <Clock className="w-3 h-3" />
-                          Due: {format(new Date(due.dueDate), 'MMM dd, yyyy')}
-                        </div>
-                      )}
-                    </div>
+              <li
+                key={due._id}
+                className={cn("flex items-start gap-3 px-4 py-3 sm:px-5", status.urgency === 'overdue' && "bg-destructive-soft/40")}
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-sm font-medium">{due.customerName || due.invoiceNumber}</span>
+                    <Badge variant={BADGE[status.urgency as keyof typeof BADGE]}>
+                      {status.urgency === 'overdue' && daysLate > 0 ? `${daysLate}d overdue` : status.label}
+                    </Badge>
                   </div>
-                  
-                  <div className="flex flex-col gap-1 ml-2">
-                    {status.urgency === 'overdue' && (
-                      <AlertTriangle className="w-4 h-4 text-red-500" />
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                    <span className="font-mono">{due.invoiceNumber}</span>
+                    {due.dueDate && <span>Due {format(new Date(due.dueDate), 'd MMM yyyy')}</span>}
+                    {due.customerPhone && (
+                      <a href={`tel:${due.customerPhone}`} className="inline-flex items-center gap-1 hover:text-foreground">
+                        <Phone className="h-3 w-3" />
+                        {due.customerPhone}
+                      </a>
                     )}
-                    
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => markAsPaid(due._id)}
-                      disabled={markingPaid === due._id}
-                      className="h-7 text-xs"
-                    >
-                      {markingPaid === due._id ? "Saving..." : "Mark Paid"}
-                    </Button>
                   </div>
                 </div>
-              </div>
+                <div className="flex shrink-0 flex-col items-end gap-1.5">
+                  <div className="num text-sm font-semibold">{formatINR(balance)}</div>
+                  {balance !== due.totalAmount && due.totalAmount > 0 && (
+                    <div className="num -mt-1 text-[11px] text-muted-foreground">of {formatINR(due.totalAmount)}</div>
+                  )}
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => markAsPaid(due._id)}
+                    loading={markingPaid === due._id}
+                  >
+                    {markingPaid !== due._id && <Check />}
+                    {markingPaid === due._id ? "Saving…" : "Mark paid"}
+                  </Button>
+                </div>
+              </li>
             );
-          })
-        )}
-      </CardContent>
-    </Card>
+          })}
+        </ul>
+      )}
+    </Panel>
   );
 }

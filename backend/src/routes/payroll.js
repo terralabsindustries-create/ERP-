@@ -4,8 +4,8 @@ const Payroll = require('../models/Payroll');
 const Employee = require('../models/Employee');
 const Attendance = require('../models/Attendance');
 const Settings = require('../models/Settings');
+const { settingsOwnerId, businessSettings } = require('../utils/businessSettings');
 const AccountTransaction = require('../models/AccountTransaction');
-const AccountBalance = require('../models/AccountBalance');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -231,7 +231,7 @@ router.patch('/:id/pay', async (req, res) => {
         const paymentMethod = pmMap[payslip.paymentMethod] || 'bank_transfer';
         const accountType = paymentMethod === 'cash' ? 'cash' : 'bank';
 
-        await AccountTransaction.create({
+        await AccountTransaction.createWithUniqueNumber({
           transactionType: 'expense',
           category: 'Salaries',
           amount: payslip.netPay,
@@ -244,14 +244,6 @@ router.patch('/:id/pay', async (req, res) => {
           userId: req.user._id
         });
 
-        // Reduce the corresponding balance (money left the account)
-        let balance = await AccountBalance.findOne({ userId: req.user._id });
-        if (!balance) {
-          balance = new AccountBalance({ userId: req.user._id, cashBalance: 0, bankBalance: 0 });
-        }
-        if (accountType === 'cash') balance.cashBalance -= payslip.netPay;
-        else balance.bankBalance -= payslip.netPay;
-        await balance.save();
       } catch (txErr) {
         // Don't fail the payment if the bookkeeping entry has an issue — just log it
         console.warn('⚠️ Payroll expense transaction failed:', txErr.message);
@@ -284,7 +276,7 @@ router.get('/:id/payslip', async (req, res) => {
       .populate('employeeId', 'name employeeCode designation department dateOfJoining bankDetails panNumber aadhaarNumber pfNumber');
     if (!payslip) return res.status(404).json({ status: 'error', message: 'Payslip not found' });
 
-    const settings = await Settings.getOrCreateSettings(req.user._id);
+    const settings = await businessSettings(req.user);
     const pdfBuffer = await buildPayslipPDF(payslip, settings);
 
     res.setHeader('Content-Type', 'application/pdf');

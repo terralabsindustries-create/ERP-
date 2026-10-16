@@ -1,25 +1,12 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Search, Plus, Users, Building2, User, Edit, Tag, DollarSign, AlertTriangle, CheckCircle, Download, FileText, Briefcase, MoreHorizontal } from "lucide-react";
+import { AlertTriangle, BadgeCheck, Briefcase, Download, FileText, Pencil, Plus, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { EmptyState } from "@/components/common/EmptyState";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { PageShell } from "@/components/layout/PageShell";
+import { DataCard, DataTable, EntityCell, FilterSelect, MetricBar, SearchField, Stack, StatusPill, Tag, Toolbar, ViewTabs, type Column, type Metric } from "@/components/data";
 import { CreateCustomerDialog } from "@/components/customers/CreateCustomerDialog";
 import { EditCustomerDialog } from "@/components/customers/EditCustomerDialog";
 import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
@@ -27,9 +14,11 @@ import apiClient from "@/lib/apiClient";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { exportToCSV, formatCustomersForExport } from "@/utils/exportUtils";
+import { formatINR, localDate } from "@/lib/format";
 
 interface Customer {
   id: string;
+  _id?: string;
   name: string;
   email: string | null;
   phone: string | null;
@@ -41,19 +30,33 @@ interface Customer {
   tags: string[];
   status: string;
   createdAt: string;
-  totalSpent: number;
-  totalRevenue: number;
-  totalOrders: number;
-  lastOrderDate: string | null;
-  lastPaymentDate: string | null;
-  lastPaymentAmount: number;
-  paymentStatus: string;
-  isBlacklisted: boolean;
-  blacklistReason: string | null;
-  gstVerified: boolean;
-  outstandingBalance: number;
-  creditLimit: number;
-  preferredJobTypes: string[];
+  isBlacklisted?: boolean;
+  gstVerified?: boolean;
+  /** Issued invoices; null when this login can't see invoices. */
+  billing?: { invoiced: number; outstanding: number; invoices: number; lastInvoiceDate?: string } | null;
+}
+
+type View = "all" | "business" | "individual" | "walkin" | "inactive";
+
+const isBusiness = (c: Customer) => c.customerType === "Business" || c.customerType === "Corporate";
+const inView = (c: Customer, v: View) =>
+  v === "all"
+    ? true
+    : v === "inactive"
+      ? c.status !== "active"
+      : c.status === "active" &&
+        (v === "business" ? isBusiness(c) : v === "walkin" ? c.customerType === "Walk-in" : !isBusiness(c) && c.customerType !== "Walk-in");
+
+/** Fetches every customer, a hundred at a time (the API's page limit). */
+async function fetchAllCustomers(): Promise<Customer[]> {
+  const all: Customer[] = [];
+  for (let page = 1; page <= 20; page++) {
+    const res = (await apiClient.getCustomer({ status: "all", limit: 100, page })) as { customers?: Customer[]; pagination?: { total?: number } };
+    const batch = res?.customers || [];
+    all.push(...batch.map((c) => ({ ...c, id: c.id || (c._id as string) })));
+    if (batch.length < 100 || page >= (res?.pagination?.total || 1)) break;
+  }
+  return all;
 }
 
 export default function Customers() {
@@ -63,519 +66,338 @@ export default function Customers() {
   const [searchParams] = useSearchParams();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState(() => searchParams.get("q") || "");
-  const [filterStatus, setFilterStatus] = useState("all");
-  const [filterType, setFilterType] = useState("all");
-  const [filterTag, setFilterTag] = useState("all");
-  const [filterGST, setFilterGST] = useState("all");
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [showCreateJobDialog, setShowCreateJobDialog] = useState(false);
-  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
-  const [selectedCustomerForJob, setSelectedCustomerForJob] = useState<Customer | null>(null);
+  const [search, setSearch] = useState(() => searchParams.get("q") || "");
+  // A search from the header while already on this page arrives as a new ?q.
+  const qParam = searchParams.get("q");
+  useEffect(() => {
+    if (qParam !== null) setSearch(qParam);
+  }, [qParam]);
+  const [view, setView] = useState<View>("all");
+  const [gst, setGst] = useState("all");
+  const [tag, setTag] = useState("all");
+  const [showCreate, setShowCreate] = useState(false);
+  const [editing, setEditing] = useState<Customer | null>(null);
+  const [jobFor, setJobFor] = useState<Customer | null>(null);
 
-  const fetchCustomers = async () => {
+  const canEdit = hasPermission("Customers: Create & Edit");
+  const canCreateJob = hasPermission("Jobs: Create & Edit");
+  const canExport = hasPermission("Customers: Export");
+
+  const load = useCallback(async () => {
     if (!user) return;
-
     try {
-      const response = await apiClient.getCustomer({ status: 'all', limit: 100 });
-      console.log('👥 Customers response:', response);
-      const customersData = (response as any)?.data?.customers || (response as any)?.customers || [];
-      console.log('👥 Processed customers:', customersData);
-      console.log('👥 Customers count:', customersData.length);
-      // Map customers to ensure consistent ID field (handle both id and _id)
-      const mappedCustomers = customersData.map((customer: any) => ({
-        ...customer,
-        id: customer.id || customer._id
-      }));
-      setCustomers(mappedCustomers);
-    } catch (error: any) {
-      console.error('Error fetching customers:', error);
-      toast({
-        title: "Error fetching customers",
-        description: error.message,
-        variant: "destructive",
-      });
+      setCustomers(await fetchAllCustomers());
+    } catch (error) {
+      toast({ title: "Customers could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     } finally {
       setLoading(false);
     }
-  };
+  }, [user, toast]);
 
   useEffect(() => {
-    fetchCustomers();
-  }, [user]);
+    load();
+  }, [load]);
 
-  const filteredCustomers = customers.filter((customer) => {
-    // Enhanced search with partial matching
-    const searchLower = searchTerm.toLowerCase();
-    const matchesSearch = 
-      customer.name.toLowerCase().includes(searchLower) ||
-      (customer.phone && customer.phone.includes(searchTerm)) ||
-      (customer.email && customer.email.toLowerCase().includes(searchLower)) ||
-      (customer.company && customer.company.toLowerCase().includes(searchLower)) ||
-      (customer.gstNumber && customer.gstNumber.toLowerCase().includes(searchLower)) ||
-      // Partial phone number matching
-      (customer.phone && customer.phone.replace(/\D/g, '').includes(searchTerm.replace(/\D/g, ''))) ||
-      // Partial name matching (supports "john doe" finding "John M. Doe")
-      searchTerm.split(' ').every(term => 
-        customer.name.toLowerCase().includes(term.toLowerCase())
-      );
-    
-    const matchesFilter = filterStatus === "all" || customer.status === filterStatus;
-    const matchesType = filterType === "all" || customer.customerType === filterType;
-    const matchesTag = filterTag === "all" || (customer.tags && customer.tags.includes(filterTag));
-    
-    // GST status filtering
-    const matchesGST = filterGST === "all" || (() => {
-      switch (filterGST) {
-        case "verified": return customer.gstVerified;
-        case "unverified": return customer.gstNumber && !customer.gstVerified;
-        case "none": return !customer.gstNumber;
-        default: return true;
-      }
-    })();
-    
-    return matchesSearch && matchesFilter && matchesType && matchesTag && matchesGST;
-  });
+  const showBilling = customers.some((c) => c.billing !== undefined && c.billing !== null) || hasPermission("Invoicing");
+  const allTags = useMemo(() => Array.from(new Set(customers.flatMap((c) => c.tags || []))).sort(), [customers]);
 
-  const handleEditCustomer = (customer: Customer) => {
-    setSelectedCustomer(customer);
-    // EditCustomerDialog manages its own open state
-  };
-
-  const handleCreateJob = (customer: Customer) => {
-    setSelectedCustomerForJob(customer);
-    setShowCreateJobDialog(true);
-  };
-
-  const handleJobCreated = () => {
-    setShowCreateJobDialog(false);
-    setSelectedCustomerForJob(null);
-    toast({
-      title: "Job Created Successfully",
-      description: `Job created for ${selectedCustomerForJob?.name}`,
+  const rows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const digits = q.replace(/\D/g, "");
+    return customers.filter((c) => {
+      const matches =
+        !q ||
+        c.name.toLowerCase().includes(q) ||
+        (c.company || "").toLowerCase().includes(q) ||
+        (c.email || "").toLowerCase().includes(q) ||
+        (c.gstNumber || "").toLowerCase().includes(q) ||
+        (!!digits && (c.phone || "").replace(/\D/g, "").includes(digits));
+      const gstOk =
+        gst === "all" || (gst === "verified" ? !!c.gstVerified : gst === "unverified" ? !!c.gstNumber && !c.gstVerified : !c.gstNumber);
+      return matches && inView(c, view) && gstOk && (tag === "all" || (c.tags || []).includes(tag));
     });
-    // Navigate to jobs section
-    navigate('/jobs');
-  };
+  }, [customers, search, view, gst, tag]);
 
-  const getCustomerType = (customer: Customer) => {
-    return customer.customerType || "Individual";
-  };
+  const count = (v: View) => customers.filter((c) => inView(c, v)).length;
+  const billed = customers.reduce((s, c) => s + (c.billing?.invoiced || 0), 0);
+  const outstanding = customers.reduce((s, c) => s + (c.billing?.outstanding || 0), 0);
+  const owing = customers.filter((c) => (c.billing?.outstanding || 0) > 0.5).length;
+  const active = customers.filter((c) => c.status === "active").length;
 
-  const getTypeConfig = (type: string) => {
-    const configs = {
-      "Individual": { variant: "secondary" as const, icon: User },
-      "Business": { variant: "default" as const, icon: Building2 },
-      "Corporate": { variant: "default" as const, icon: Building2 },
-      "Walk-in": { variant: "secondary" as const, icon: User },
-    };
-    return configs[type as keyof typeof configs] || configs["Individual"];
-  };
+  const metrics: Metric[] = [
+    { label: "Customers", value: customers.length, hint: `${active} active` },
+    { label: "Businesses", value: customers.filter(isBusiness).length, hint: `${customers.filter((c) => c.gstNumber).length} with a GSTIN`, onClick: () => setView("business"), active: view === "business" },
+    ...(showBilling
+      ? [
+          { label: "Billed", value: formatINR(billed, { compact: billed >= 1e5 }), hint: "Issued invoices, all time" },
+          { label: "Outstanding", value: formatINR(outstanding, { compact: outstanding >= 1e5 }), hint: owing ? `${owing} customer${owing === 1 ? " owes" : "s owe"} money` : "Nothing owed", tone: (outstanding > 0 ? "warning" : "success") as Metric["tone"] }
+        ]
+      : [{ label: "Walk-in", value: count("walkin"), hint: "Counter customers" }])
+  ];
 
-  const getPaymentStatusConfig = (status: string) => {
-    const configs = {
-      "current": { variant: "success" as const, label: "Current" },
-      "due": { variant: "warning" as const, label: "Due" },
-      "advance_paid": { variant: "default" as const, label: "Advance Paid" },
-      "overdue": { variant: "destructive" as const, label: "Overdue" },
-    };
-    return configs[status as keyof typeof configs] || configs["current"];
-  };
-
-  const stats = {
-    total: customers.length,
-    business: customers.filter(c => c.customerType === "Business" || c.customerType === "Corporate").length,
-    individual: customers.filter(c => c.customerType === "Individual" || c.customerType === "Walk-in").length,
-    active: customers.filter(c => c.status === "active").length,
-    withGST: customers.filter(c => c.gstNumber).length,
-    blacklisted: customers.filter(c => c.isBlacklisted).length,
-    highValue: customers.filter(c => (c.totalRevenue || 0) >= 50000).length,
-    totalRevenue: customers.reduce((sum, c) => sum + (c.totalRevenue || 0), 0),
-    outstanding: customers.reduce((sum, c) => sum + (c.outstandingBalance || 0), 0),
-  };
-
-  // Get all unique tags for filter
-  const allTags = Array.from(new Set(customers.flatMap(c => c.tags || [])));
-
-  // Export functions
-  const handleExportCSV = () => {
+  const exportRows = (list: Customer[], name: string) => {
     try {
-      const exportData = formatCustomersForExport(filteredCustomers);
-      exportToCSV(exportData, `customers_export_${new Date().toISOString().split('T')[0]}`);
-      toast({
-        title: "Export Successful",
-        description: `Exported ${filteredCustomers.length} customers to CSV`,
-      });
-    } catch (error: any) {
-      toast({
-        title: "Export Failed",
-        description: error.message,
-        variant: "destructive",
-      });
+      exportToCSV(formatCustomersForExport(list), `${name}_${localDate()}`);
+      toast({ title: `Exported ${list.length} customer${list.length === 1 ? "" : "s"}` });
+    } catch (error) {
+      toast({ title: "Export failed", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     }
   };
 
-  const handleExportAll = () => {
-    try {
-      const exportData = formatCustomersForExport(customers);
-      exportToCSV(exportData, `all_customers_export_${new Date().toISOString().split('T')[0]}`);
-      toast({
-        title: "Export Successful",
-        description: `Exported ${customers.length} customers to CSV`,
-      });
-    } catch (error: any) {
-      toast({
-        title: "Export Failed",
-        description: error.message,
-        variant: "destructive",
-      });
+  // A copy each time so the edit dialog (which opens on a new customer) reopens.
+  const edit = (c: Customer) => setEditing({ ...c });
+
+  const columns: Column<Customer>[] = [
+    {
+      id: "name",
+      header: "Customer",
+      cell: (c) => (
+        <div className="flex items-center gap-2">
+          <EntityCell avatar={c.name} title={c.name} subtitle={c.company || c.customerType} />
+          {c.isBlacklisted && (
+            <StatusPill tone="danger" className="shrink-0">
+              Blacklisted
+            </StatusPill>
+          )}
+        </div>
+      ),
+      sortValue: (c) => c.name.toLowerCase(),
+      className: "min-w-[220px]"
+    },
+    {
+      id: "contact",
+      header: "Contact",
+      cell: (c) => <Stack top={c.phone || <span className="text-muted-foreground">—</span>} bottom={c.email} />,
+      hideBelow: "lg"
+    },
+    {
+      id: "type",
+      header: "Type",
+      cell: (c) => (
+        <div className="flex flex-wrap items-center gap-1">
+          <span>{c.customerType || "Individual"}</span>
+          {(c.tags || []).slice(0, 2).map((t) => (
+            <Tag key={t}>{t}</Tag>
+          ))}
+        </div>
+      ),
+      sortValue: (c) => c.customerType,
+      hideBelow: "md"
+    },
+    {
+      id: "gst",
+      header: "GSTIN",
+      cell: (c) =>
+        c.gstNumber ? (
+          <span className="inline-flex items-center gap-1 font-mono text-xs">
+            {c.gstNumber}
+            {c.gstVerified && <BadgeCheck className="h-3.5 w-3.5 text-success-strong" aria-label="Verified" />}
+          </span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
+      hideBelow: "xl"
+    },
+    ...(showBilling
+      ? ([
+          {
+            id: "billed",
+            header: "Billed",
+            align: "right",
+            cell: (c) => (
+              <Stack
+                top={c.billing ? formatINR(c.billing.invoiced) : <span className="text-muted-foreground">—</span>}
+                bottom={c.billing ? `${c.billing.invoices} invoice${c.billing.invoices === 1 ? "" : "s"}` : undefined}
+              />
+            ),
+            sortValue: (c) => c.billing?.invoiced || 0,
+            hideBelow: "lg"
+          },
+          {
+            id: "due",
+            header: "Outstanding",
+            align: "right",
+            cell: (c) =>
+              (c.billing?.outstanding || 0) > 0.5 ? (
+                <span className="font-semibold text-warning-strong">{formatINR(c.billing!.outstanding)}</span>
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              ),
+            sortValue: (c) => c.billing?.outstanding || 0
+          }
+        ] as Column<Customer>[])
+      : []),
+    {
+      id: "status",
+      header: "Status",
+      cell: (c) => (
+        <StatusPill tone={c.status === "active" ? "success" : c.status === "blacklisted" ? "danger" : "neutral"}>
+          {c.status === "active" ? "Active" : c.status === "blacklisted" ? "Blacklisted" : "Inactive"}
+        </StatusPill>
+      ),
+      sortValue: (c) => c.status,
+      className: "w-[110px]"
     }
-  };
+  ];
+
+  const filtered = !!search || gst !== "all" || tag !== "all";
 
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Customer Management</h1>
-          <p className="text-muted-foreground text-sm">
-            Manage your clients and track their information
-          </p>
-        </div>
-        {user ? (
-          <div className="flex items-center gap-2">
-            {hasPermission("Customers: Export") && (
+    <PageShell>
+      <PageHeader
+        eyebrow="Sales & estimating"
+        title="Customers"
+        description="Print buyers, agencies and walk-in customers, with what they've been billed and still owe."
+        actions={
+          <>
+            {canExport && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="gap-2">
-                    <MoreHorizontal className="h-4 w-4" />
-                    More
+                  <Button variant="outline">
+                    <Download />
+                    Export
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuLabel>Export</DropdownMenuLabel>
-                  <DropdownMenuItem onClick={handleExportCSV} disabled={filteredCustomers.length === 0}>
-                    <Download className="h-4 w-4 mr-2" />
-                    Export Filtered ({filteredCustomers.length})
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuLabel>Export to CSV</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={() => exportRows(rows, "customers")} disabled={rows.length === 0}>
+                    <Download />
+                    This view ({rows.length})
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={handleExportAll} disabled={customers.length === 0}>
-                    <FileText className="h-4 w-4 mr-2" />
-                    Export All ({customers.length})
+                  <DropdownMenuItem onClick={() => exportRows(customers, "all_customers")} disabled={customers.length === 0}>
+                    <FileText />
+                    All customers ({customers.length})
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            {hasPermission("Customers: Create & Edit") && (
-              <Button onClick={() => setShowCreateDialog(true)} className="gap-2">
-                <Plus className="w-4 h-4" />
-                Add Customer
+            {canEdit && (
+              <Button onClick={() => setShowCreate(true)}>
+                <Plus />
+                Add customer
               </Button>
             )}
-          </div>
-        ) : (
-          <div className="text-sm text-muted-foreground">Please log in to add customers</div>
-        )}
-      </div>
+          </>
+        }
+      />
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-        <Card>
-          <CardContent className="p-4 flex items-center gap-3">
-            <Users className="w-5 h-5 text-muted-foreground" />
-            <div>
-              <p className="text-xs text-muted-foreground">Total Customers</p>
-              <p className="text-xl font-bold">{stats.total}</p>
-            </div>
-          </CardContent>
-        </Card>
+      <MetricBar metrics={metrics} loading={loading} />
 
-        <Card>
-          <CardContent className="p-4 flex items-center gap-3">
-            <Building2 className="w-5 h-5 text-muted-foreground" />
-            <div>
-              <p className="text-xs text-muted-foreground">Business Clients</p>
-              <p className="text-xl font-bold">{stats.business}</p>
-            </div>
-          </CardContent>
-        </Card>
+      <div className="space-y-4">
+        <ViewTabs<View>
+          value={view}
+          onChange={setView}
+          tabs={[
+            { value: "all", label: "All", count: customers.length },
+            { value: "business", label: "Businesses", count: count("business") },
+            { value: "individual", label: "Individuals", count: count("individual") },
+            { value: "walkin", label: "Walk-in", count: count("walkin") },
+            { value: "inactive", label: "Inactive", count: count("inactive") }
+          ]}
+        />
 
-        <Card>
-          <CardContent className="p-4 flex items-center gap-3">
-            <User className="w-5 h-5 text-muted-foreground" />
-            <div>
-              <p className="text-xs text-muted-foreground">Individual</p>
-              <p className="text-xl font-bold">{stats.individual}</p>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4 flex items-center gap-3">
-            <DollarSign className="w-5 h-5 text-muted-foreground" />
-            <div>
-              <p className="text-xs text-muted-foreground">Total Revenue</p>
-              <p className="text-xl font-bold">₹{stats.totalRevenue.toLocaleString()}</p>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4 flex items-center gap-3">
-            <CheckCircle className="w-5 h-5 text-muted-foreground" />
-            <div>
-              <p className="text-xs text-muted-foreground">High Value (≥₹50K)</p>
-              <p className="text-xl font-bold">{stats.highValue}</p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Enhanced Search and Filters */}
-      <div className="flex items-center space-x-4 flex-wrap gap-2">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search by name, phone, email, company, or GST..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-10"
+        <DataCard
+          toolbar={
+            <Toolbar search={<SearchField value={search} onChange={setSearch} placeholder="Search name, phone, company or GSTIN" />}>
+              <FilterSelect
+                label="GST"
+                value={gst}
+                onChange={setGst}
+                options={[
+                  { value: "verified", label: "Verified GSTIN" },
+                  { value: "unverified", label: "Unverified GSTIN" },
+                  { value: "none", label: "No GSTIN" }
+                ]}
+              />
+              {allTags.length > 0 && <FilterSelect label="Tag" value={tag} onChange={setTag} options={allTags.map((t) => ({ value: t, label: t }))} />}
+            </Toolbar>
+          }
+          footer={!loading && rows.length > 0 && `${rows.length} of ${customers.length} customers`}
+        >
+          <DataTable
+            columns={columns}
+            rows={rows}
+            rowKey={(c) => c.id}
+            loading={loading}
+            onRowClick={canEdit ? edit : undefined}
+            actions={(c) => [
+              { label: "Edit customer", icon: Pencil, onClick: () => edit(c), hidden: !canEdit },
+              { label: "New job ticket", icon: Briefcase, onClick: () => setJobFor(c), hidden: !canCreateJob }
+            ]}
+            actionsLabel={(c) => `Actions for ${c.name}`}
+            defaultSort={{ id: "name", dir: "asc" }}
+            mobile={(c) => (
+              <div className="flex items-start justify-between gap-3">
+                <EntityCell avatar={c.name} title={c.name} subtitle={c.company || c.phone || c.customerType} />
+                <div className="shrink-0 text-right text-sm">
+                  {(c.billing?.outstanding || 0) > 0.5 ? (
+                    <>
+                      <div className="num font-semibold text-warning-strong">{formatINR(c.billing!.outstanding)}</div>
+                      <div className="text-xs text-muted-foreground">due</div>
+                    </>
+                  ) : (
+                    <StatusPill tone={c.status === "active" ? "success" : "neutral"}>{c.status === "active" ? "Active" : "Inactive"}</StatusPill>
+                  )}
+                </div>
+              </div>
+            )}
+            rowClassName={(c) => (c.status !== "active" ? "text-muted-foreground" : undefined)}
+            empty={
+              customers.length === 0 ? (
+                <EmptyState
+                  icon={Users}
+                  title="No customers yet"
+                  description="Add the print buyers you work with to raise quotes, job tickets and invoices for them."
+                  action={
+                    canEdit && (
+                      <Button onClick={() => setShowCreate(true)}>
+                        <Plus />
+                        Add customer
+                      </Button>
+                    )
+                  }
+                />
+              ) : (
+                <EmptyState
+                  compact
+                  icon={filtered ? AlertTriangle : Users}
+                  title="No customers in this view"
+                  description={filtered ? "Try another search or filter." : undefined}
+                  action={
+                    filtered && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setSearch("");
+                          setGst("all");
+                          setTag("all");
+                        }}
+                      >
+                        Clear filters
+                      </Button>
+                    )
+                  }
+                />
+              )
+            }
           />
-        </div>
-        
-        <Select value={filterStatus} onValueChange={setFilterStatus}>
-          <SelectTrigger className="w-[140px]">
-            <SelectValue placeholder="Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Status</SelectItem>
-            <SelectItem value="active">Active</SelectItem>
-            <SelectItem value="inactive">Inactive</SelectItem>
-          </SelectContent>
-        </Select>
-
-        <Select value={filterType} onValueChange={setFilterType}>
-          <SelectTrigger className="w-[140px]">
-            <SelectValue placeholder="Type" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Types</SelectItem>
-            <SelectItem value="Individual">Individual</SelectItem>
-            <SelectItem value="Business">Business</SelectItem>
-            <SelectItem value="Corporate">Corporate</SelectItem>
-            <SelectItem value="Walk-in">Walk-in</SelectItem>
-          </SelectContent>
-        </Select>
-
-        <Select value={filterGST} onValueChange={setFilterGST}>
-          <SelectTrigger className="w-[140px]">
-            <CheckCircle className="h-4 w-4 mr-2" />
-            <SelectValue placeholder="GST Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All GST</SelectItem>
-            <SelectItem value="verified">Verified</SelectItem>
-            <SelectItem value="unverified">Unverified</SelectItem>
-            <SelectItem value="none">No GST</SelectItem>
-          </SelectContent>
-        </Select>
-
-        <Select value={filterTag} onValueChange={setFilterTag}>
-          <SelectTrigger className="w-[140px]">
-            <Tag className="h-4 w-4 mr-2" />
-            <SelectValue placeholder="Tags" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Tags</SelectItem>
-            {allTags.map((tag) => (
-              <SelectItem key={tag} value={tag}>{tag}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        </DataCard>
       </div>
 
-      {/* Customer Table */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">All Customers</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          {loading ? (
-            <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
-              Loading customers...
-            </div>
-          ) : filteredCustomers.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
-              <Users className="h-10 w-10 text-muted-foreground opacity-40" />
-              <h3 className="text-lg font-semibold">
-                {customers.length === 0 ? "No customers yet" : "No customers found"}
-              </h3>
-              <p className="text-muted-foreground text-sm max-w-sm">
-                {customers.length === 0
-                  ? "Add your first customer to get started"
-                  : "Try adjusting your search or filter criteria"
-                }
-              </p>
-              {customers.length === 0 && hasPermission("Customers: Create & Edit") && (
-                <Button onClick={() => setShowCreateDialog(true)} className="gap-2">
-                  <Plus className="h-4 w-4" />
-                  Add Your First Customer
-                </Button>
-              )}
-              {customers.length > 0 && (
-                <Button variant="outline" onClick={() => {
-                  setSearchTerm("");
-                  setFilterStatus("all");
-                }}>
-                  Clear filters
-                </Button>
-              )}
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b bg-muted/50">
-                    <th className="text-left px-4 py-3 font-medium">Customer</th>
-                    <th className="text-left px-4 py-3 font-medium">Contact</th>
-                    <th className="text-left px-4 py-3 font-medium">Type</th>
-                    <th className="text-left px-4 py-3 font-medium">GST</th>
-                    <th className="text-left px-4 py-3 font-medium">Activity</th>
-                    <th className="text-left px-4 py-3 font-medium">Status</th>
-                    <th className="px-4 py-3 font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredCustomers.map((customer) => {
-                    const customerType = getCustomerType(customer);
-                    const typeConfig = getTypeConfig(customerType);
-                    const paymentConfig = getPaymentStatusConfig(customer.paymentStatus);
-
-                    return (
-                      <tr key={customer.id} className="border-b hover:bg-muted/30 transition-colors">
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium">{customer.name}</span>
-                            {customer.isBlacklisted && (
-                              <Badge variant="destructive" className="gap-1 text-[10px] px-1.5 py-0">
-                                <AlertTriangle className="h-3 w-3" />
-                                Blacklisted
-                              </Badge>
-                            )}
-                          </div>
-                          {customer.company && (
-                            <div className="text-xs text-muted-foreground">{customer.company}</div>
-                          )}
-                          {customer.tags && customer.tags.length > 0 && (
-                            <div className="flex flex-wrap gap-1 mt-1">
-                              {customer.tags.map((tag) => (
-                                <Badge
-                                  key={tag}
-                                  variant={tag === "Blacklisted" ? "destructive" : "outline"}
-                                  className="text-[10px] px-1.5 py-0"
-                                >
-                                  {tag}
-                                </Badge>
-                              ))}
-                            </div>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-muted-foreground">
-                          {customer.phone && <div>{customer.phone}</div>}
-                          {customer.email && <div className="text-xs">{customer.email}</div>}
-                          {!customer.phone && !customer.email && "-"}
-                        </td>
-                        <td className="px-4 py-3">
-                          <Badge variant={typeConfig.variant} className="gap-1">
-                            <typeConfig.icon className="h-3 w-3" />
-                            {customerType}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-3">
-                          {customer.gstNumber ? (
-                            <span className="font-mono text-xs flex items-center gap-1">
-                              {customer.gstNumber}
-                              {customer.gstVerified && <CheckCircle className="h-3 w-3 text-success" />}
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground">-</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          <div>{customer.totalOrders || 0} orders</div>
-                          <div className="text-xs text-muted-foreground">
-                            ₹{(customer.totalRevenue || 0).toLocaleString()} revenue
-                          </div>
-                          {customer.outstandingBalance > 0 && (
-                            <div className="text-xs text-warning">
-                              Outstanding: ₹{customer.outstandingBalance.toLocaleString()}
-                            </div>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          <Badge variant={customer.status === "active" ? "success" : "secondary"}>
-                            {customer.status}
-                          </Badge>
-                          {customer.paymentStatus !== 'current' && (
-                            <Badge variant={paymentConfig.variant} className="mt-1">
-                              {paymentConfig.label}
-                            </Badge>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-8 w-8">
-                                <MoreHorizontal className="h-4 w-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                              {hasPermission("Customers: Create & Edit") && (
-                                <DropdownMenuItem onClick={() => handleEditCustomer(customer)}>
-                                  <Edit className="h-4 w-4 mr-2" />
-                                  Edit
-                                </DropdownMenuItem>
-                              )}
-                              {hasPermission("Jobs: Create & Edit") && (
-                                <DropdownMenuItem onClick={() => handleCreateJob(customer)}>
-                                  <Briefcase className="h-4 w-4 mr-2" />
-                                  Create Job
-                                </DropdownMenuItem>
-                              )}
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-      
-      {/* Create and Edit Customer Dialogs */}
-      <CreateCustomerDialog
-        open={showCreateDialog}
-        onOpenChange={setShowCreateDialog}
-        onCustomerCreated={fetchCustomers}
-      />
-      
-      <EditCustomerDialog
-        customer={selectedCustomer}
-        onCustomerUpdated={fetchCustomers}
-        onCustomerDeleted={fetchCustomers}
-      />
-
-      {/* Create Job Dialog */}
+      <CreateCustomerDialog open={showCreate} onOpenChange={setShowCreate} onCustomerCreated={load} />
+      <EditCustomerDialog customer={editing as never} onCustomerUpdated={load} onCustomerDeleted={load} />
       <CreateJobDialog
-        open={showCreateJobDialog}
-        onOpenChange={setShowCreateJobDialog}
-        onJobCreated={handleJobCreated}
+        open={!!jobFor}
+        onOpenChange={(o) => !o && setJobFor(null)}
+        onJobCreated={() => {
+          toast({ title: "Job ticket created", description: jobFor ? `For ${jobFor.name}` : undefined });
+          setJobFor(null);
+          navigate("/jobs");
+        }}
         customers={customers}
-        preselectedCustomer={selectedCustomerForJob}
+        preselectedCustomer={jobFor}
       />
-    </div>
+    </PageShell>
   );
 }

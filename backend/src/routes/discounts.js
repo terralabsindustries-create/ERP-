@@ -1,686 +1,335 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const { body, query } = require('express-validator');
 const DiscountRule = require('../models/DiscountRule');
 const CustomerPricing = require('../models/CustomerPricing');
 const Customer = require('../models/Customer');
+const Invoice = require('../models/Invoice');
 const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
+const { validate } = require('../middleware/validate');
+const { orgUserFilter, orgScope } = require('../utils/accessScope');
 
 const router = express.Router();
 
-// Validation rules for discount rules
-const discountRuleValidation = [
-  body('name').notEmpty().withMessage('Discount rule name is required').trim(),
-  body('type').isIn(['percentage', 'fixed', 'bulk']).withMessage('Invalid discount type'),
-  body('value').isFloat({ min: 0 }).withMessage('Discount value must be non-negative'),
-  body('minimumAmount').optional().isFloat({ min: 0 }).withMessage('Minimum amount must be non-negative'),
-  body('customerType').optional().isIn(['all', 'specific', 'new', 'returning']),
-  body('jobTypes').optional().isArray(),
-  body('validFrom').optional().isISO8601(),
-  body('validUntil').optional().isISO8601(),
-  body('usageLimit').optional().isInt({ min: 1 }),
-  body('isActive').optional().isBoolean()
+/*
+  Discounts a business gives:
+    • discount rules — "10% off orders over ₹5,000", "₹200 off for new customers",
+      "8% off for these customers" — with dates and an on/off switch;
+    • customer rates — a standing discount % for one customer.
+  POST /calculate works out the best discount for a customer and an order
+  amount; the invoice and quotation forms use it to suggest the discount.
+  Mounted behind "Discounts" in app.js (calculate also for Invoicing/Quotations).
+*/
+
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const oid = (v) => mongoose.isValidObjectId(v);
+
+const log = (req, entityType, record, action, actionType, name) =>
+  ActivityLog.logActivity({
+    action,
+    description: `${action}: ${name}`,
+    entityType,
+    entityId: record._id,
+    entityName: name,
+    performedBy: req.user._id,
+    performedByName: req.user.fullName,
+    actionType,
+    severity: 'low',
+    userId: req.user._id,
+    dataScope: req.user.dataScope
+  }).catch((err) => console.error(`Activity log (${action}) failed:`, err.message));
+
+/** Customers of the caller's business among the given ids. */
+async function businessCustomers(req, ids) {
+  const list = (ids || []).filter(oid);
+  if (!list.length) return [];
+  return Customer.find({ _id: { $in: list }, ...orgScope(req.user) }).select('_id name');
+}
+
+// ---------------------------------------------------------------------------
+// Discount rules
+
+const ruleRules = [
+  body('name').trim().notEmpty().withMessage('Give the rule a name').isLength({ max: 120 }),
+  body('type').isIn(['percentage', 'fixed']).withMessage('Choose % off or ₹ off'),
+  body('value').isFloat({ gt: 0 }).withMessage('Enter the discount'),
+  body('value').if(body('type').equals('percentage')).isFloat({ max: 100 }).withMessage('A percentage can be at most 100'),
+  body('minimumAmount').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Minimum order must be a positive amount'),
+  body('maximumAmount').optional({ values: 'falsy' }).isFloat({ gt: 0 }).withMessage('Maximum discount must be a positive amount'),
+  body('customerType').optional({ values: 'falsy' }).isIn(['all', 'new', 'returning', 'specific']),
+  body('customerIds').optional().isArray({ max: 500 }),
+  body('customerIds.*').optional().isMongoId(),
+  body('validFrom').optional({ values: 'falsy' }).isISO8601().withMessage('Choose a valid start date'),
+  body('validUntil').optional({ values: 'falsy' }).isISO8601().withMessage('Choose a valid end date'),
+  body('isActive').optional().isBoolean(),
+  body('description').optional().trim().isLength({ max: 500 })
 ];
 
-// Validation rules for customer pricing
-const customerPricingValidation = [
-  body('customerId').isMongoId().withMessage('Valid customer ID is required'),
-  body('discountPercentage').isFloat({ min: 0, max: 100 }).withMessage('Discount percentage must be between 0 and 100'),
-  body('specialRates').optional().isArray()
-];
+async function ruleData(req) {
+  const b = req.body;
+  const data = {
+    name: b.name,
+    type: b.type,
+    value: Number(b.value),
+    minimumAmount: b.minimumAmount ? Number(b.minimumAmount) : undefined,
+    maximumAmount: b.maximumAmount ? Number(b.maximumAmount) : undefined,
+    customerType: b.customerType || 'all',
+    validFrom: b.validFrom ? new Date(b.validFrom) : new Date(),
+    validUntil: b.validUntil ? new Date(`${String(b.validUntil).slice(0, 10)}T23:59:59.999`) : undefined,
+    isActive: b.isActive !== undefined ? b.isActive === true || b.isActive === 'true' : true,
+    description: b.description
+  };
+  if (data.validUntil && data.validUntil < data.validFrom) return { error: 'The end date is before the start date' };
+  if (data.customerType === 'specific') {
+    const customers = await businessCustomers(req, b.customerIds);
+    if (!customers.length) return { error: 'Choose at least one customer' };
+    data.customerIds = customers.map((c) => c._id);
+  } else {
+    data.customerIds = [];
+  }
+  return { data };
+}
 
-// @route   GET /api/discounts/rules
-// @desc    Get all discount rules for the authenticated user
-// @access  Private
-router.get('/rules', protect, [
-  query('type').optional().isIn(['percentage', 'fixed', 'bulk']),
-  query('customerType').optional().isIn(['all', 'specific', 'new', 'returning']),
-  query('isActive').optional().isBoolean(),
-  query('search').optional().trim(),
-  query('page').optional().isInt({ min: 1 }),
-  query('limit').optional().isInt({ min: 1, max: 100 })
-], async (req, res) => {
+// GET /api/discounts/rules?search=&status=active|inactive|all
+router.get('/rules', protect, [query('search').optional().trim(), query('status').optional().isIn(['all', 'active', 'inactive'])], validate, async (req, res) => {
   try {
-    const {
-      type,
-      customerType,
-      isActive,
-      search,
-      page = 1,
-      limit = 10,
-      sortBy = 'createdAt',
-      sortOrder = 'desc'
-    } = req.query;
-
-    // Build query
-    const query = {};
-
-    if (type && type !== 'all') {
-      query.type = type;
-    }
-
-    if (customerType && customerType !== 'all') {
-      query.customerType = customerType;
-    }
-
-    if (isActive !== undefined) {
-      query.isActive = isActive === 'true';
-    }
-
-    if (search) {
-      query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } }
-      ];
-    }
-
-    // Calculate pagination
-    const skip = (page - 1) * limit;
-
-    // Build sort object
-    const sort = {};
-    sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
-
-    // Execute query
-    const discountRules = await DiscountRule.find(query)
-      .sort(sort)
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    // Get total count
-    const totalRules = await DiscountRule.countDocuments(query);
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        discountRules,
-        pagination: {
-          current: parseInt(page),
-          total: Math.ceil(totalRules / limit),
-          count: discountRules.length,
-          totalRules
-        }
-      }
-    });
-
+    const filter = { ...(await orgUserFilter(req.user)) };
+    if (req.query.status === 'active') filter.isActive = true;
+    if (req.query.status === 'inactive') filter.isActive = false;
+    if (req.query.search) filter.name = new RegExp(escapeRegex(req.query.search), 'i');
+    const discountRules = await DiscountRule.find(filter).populate('customerIds', 'name').sort({ isActive: -1, createdAt: -1 });
+    res.json({ status: 'success', data: { discountRules } });
   } catch (error) {
     console.error('Get discount rules error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while fetching discount rules'
-    });
+    res.status(500).json({ status: 'error', message: 'Server error while fetching discount rules' });
   }
 });
 
-// @route   GET /api/discounts/rules/:id
-// @desc    Get single discount rule
-// @access  Private
-router.get('/rules/:id', protect, async (req, res) => {
+router.post('/rules', protect, ruleRules, validate, async (req, res) => {
   try {
-    const discountRule = await DiscountRule.findOne({ _id: req.params.id });
-
-    if (!discountRule) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Discount rule not found'
-      });
-    }
-
-    res.status(200).json({
-      status: 'success',
-      data: { discountRule }
-    });
-
-  } catch (error) {
-    console.error('Get discount rule error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while fetching discount rule'
-    });
-  }
-});
-
-// @route   POST /api/discounts/rules
-// @desc    Create new discount rule
-// @access  Private
-router.post('/rules', protect, discountRuleValidation, async (req, res) => {
-  try {
-    const discountRule = await DiscountRule.create({
-      ...req.body,
-      userId: req.user._id
-    });
-
-    ActivityLog.logActivity({
-      action: 'Discount Rule Created',
-      description: `Discount rule ${discountRule.name} was created`,
-      entityType: 'discount_rule',
-      entityId: discountRule._id,
-      entityName: discountRule.name,
-      performedBy: req.user._id,
-      performedByName: req.user.fullName,
-      actionType: 'create',
-      severity: 'low',
-      userId: req.user._id,
-      dataScope: req.user.dataScope
-    }).catch(err => console.error('Activity log (create discount rule) failed:', err.message));
-
-    res.status(201).json({
-      status: 'success',
-      message: 'Discount rule created successfully',
-      data: { discountRule }
-    });
-
+    const { data, error } = await ruleData(req);
+    if (error) return res.status(400).json({ status: 'error', message: error });
+    const rule = await DiscountRule.create({ ...data, userId: req.user._id });
+    log(req, 'discount_rule', rule, 'Discount Rule Created', 'create', rule.name);
+    res.status(201).json({ status: 'success', message: 'Discount rule added', data: { discountRule: await rule.populate('customerIds', 'name') } });
   } catch (error) {
     console.error('Create discount rule error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while creating discount rule'
-    });
+    res.status(500).json({ status: 'error', message: 'Server error while creating discount rule' });
   }
 });
 
-// @route   PUT /api/discounts/rules/:id
-// @desc    Update discount rule
-// @access  Private
-router.put('/rules/:id', protect, discountRuleValidation, async (req, res) => {
+router.put('/rules/:id', protect, ruleRules, validate, async (req, res) => {
   try {
-    const discountRule = await DiscountRule.findOneAndUpdate(
-      { _id: req.params.id },
-      req.body,
-      { new: true, runValidators: true }
-    );
-
-    if (!discountRule) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Discount rule not found'
-      });
-    }
-
-    ActivityLog.logActivity({
-      action: 'Discount Rule Updated',
-      description: `Discount rule ${discountRule.name} was updated`,
-      entityType: 'discount_rule',
-      entityId: discountRule._id,
-      entityName: discountRule.name,
-      performedBy: req.user._id,
-      performedByName: req.user.fullName,
-      actionType: 'update',
-      changes: { fields: Object.keys(req.body) },
-      severity: 'low',
-      userId: req.user._id,
-      dataScope: req.user.dataScope
-    }).catch(err => console.error('Activity log (update discount rule) failed:', err.message));
-
-    res.status(200).json({
-      status: 'success',
-      message: 'Discount rule updated successfully',
-      data: { discountRule }
-    });
-
+    if (!oid(req.params.id)) return res.status(404).json({ status: 'error', message: 'Discount rule not found' });
+    const { data, error } = await ruleData(req);
+    if (error) return res.status(400).json({ status: 'error', message: error });
+    const rule = await DiscountRule.findOneAndUpdate({ _id: req.params.id, ...(await orgUserFilter(req.user)) }, data, { new: true, runValidators: true }).populate('customerIds', 'name');
+    if (!rule) return res.status(404).json({ status: 'error', message: 'Discount rule not found' });
+    log(req, 'discount_rule', rule, 'Discount Rule Updated', 'update', rule.name);
+    res.json({ status: 'success', message: 'Discount rule updated', data: { discountRule: rule } });
   } catch (error) {
     console.error('Update discount rule error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while updating discount rule'
-    });
+    res.status(500).json({ status: 'error', message: 'Server error while updating discount rule' });
   }
 });
 
-// @route   DELETE /api/discounts/rules/:id
-// @desc    Delete discount rule
-// @access  Private
+// PATCH /api/discounts/rules/:id/active  { isActive }
+router.patch('/rules/:id/active', protect, [body('isActive').isBoolean()], validate, async (req, res) => {
+  try {
+    if (!oid(req.params.id)) return res.status(404).json({ status: 'error', message: 'Discount rule not found' });
+    const rule = await DiscountRule.findOneAndUpdate({ _id: req.params.id, ...(await orgUserFilter(req.user)) }, { isActive: req.body.isActive === true || req.body.isActive === 'true' }, { new: true });
+    if (!rule) return res.status(404).json({ status: 'error', message: 'Discount rule not found' });
+    log(req, 'discount_rule', rule, rule.isActive ? 'Discount Rule Turned On' : 'Discount Rule Turned Off', 'update', rule.name);
+    res.json({ status: 'success', data: { discountRule: rule } });
+  } catch (error) {
+    console.error('Toggle discount rule error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error while updating discount rule' });
+  }
+});
+
 router.delete('/rules/:id', protect, async (req, res) => {
   try {
-    const discountRule = await DiscountRule.findOneAndDelete({
-      _id: req.params.id,
-      userId: req.user._id
-    });
-
-    if (!discountRule) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Discount rule not found'
-      });
-    }
-
-    ActivityLog.logActivity({
-      action: 'Discount Rule Deleted',
-      description: `Discount rule ${discountRule.name} was deleted`,
-      entityType: 'discount_rule',
-      entityId: discountRule._id,
-      entityName: discountRule.name,
-      performedBy: req.user._id,
-      performedByName: req.user.fullName,
-      actionType: 'delete',
-      severity: 'high',
-      userId: req.user._id,
-      dataScope: req.user.dataScope
-    }).catch(err => console.error('Activity log (delete discount rule) failed:', err.message));
-
-    res.status(200).json({
-      status: 'success',
-      message: 'Discount rule deleted successfully'
-    });
-
+    if (!oid(req.params.id)) return res.status(404).json({ status: 'error', message: 'Discount rule not found' });
+    const rule = await DiscountRule.findOneAndDelete({ _id: req.params.id, ...(await orgUserFilter(req.user)) });
+    if (!rule) return res.status(404).json({ status: 'error', message: 'Discount rule not found' });
+    log(req, 'discount_rule', rule, 'Discount Rule Deleted', 'delete', rule.name);
+    res.json({ status: 'success', message: 'Discount rule deleted' });
   } catch (error) {
     console.error('Delete discount rule error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while deleting discount rule'
-    });
+    res.status(500).json({ status: 'error', message: 'Server error while deleting discount rule' });
   }
 });
 
-// @route   GET /api/discounts/customer-pricing
-// @desc    Get all customer pricing rules
-// @access  Private
-router.get('/customer-pricing', protect, [
-  query('customerId').optional().isMongoId(),
-  query('search').optional().trim(),
-  query('page').optional().isInt({ min: 1 }),
-  query('limit').optional().isInt({ min: 1, max: 100 })
-], async (req, res) => {
+// ---------------------------------------------------------------------------
+// Customer rates (one standing discount per customer)
+
+const rateRules = (creating) => [
+  ...(creating ? [body('customerId').isMongoId().withMessage('Choose a customer')] : []),
+  body('discountPercentage').isFloat({ gt: 0, max: 100 }).withMessage('Discount must be between 0 and 100%'),
+  body('validFrom').optional({ values: 'falsy' }).isISO8601(),
+  body('validUntil').optional({ values: 'falsy' }).isISO8601(),
+  body('isActive').optional().isBoolean(),
+  body('notes').optional().trim().isLength({ max: 500 })
+];
+
+const rateData = (b) => {
+  const data = {
+    discountPercentage: Number(b.discountPercentage),
+    validFrom: b.validFrom ? new Date(b.validFrom) : new Date(),
+    validUntil: b.validUntil ? new Date(`${String(b.validUntil).slice(0, 10)}T23:59:59.999`) : undefined,
+    isActive: b.isActive !== undefined ? b.isActive === true || b.isActive === 'true' : true,
+    notes: b.notes
+  };
+  if (data.validUntil && data.validUntil < data.validFrom) return { error: 'The end date is before the start date' };
+  return { data };
+};
+
+router.get('/customer-pricing', protect, [query('search').optional().trim()], validate, async (req, res) => {
   try {
-    const {
-      customerId,
-      search,
-      page = 1,
-      limit = 10,
-      sortBy = 'createdAt',
-      sortOrder = 'desc'
-    } = req.query;
-
-    // Build query
-    const query = {};
-
-    if (customerId) {
-      query.customerId = customerId;
-    }
-
-    if (search) {
-      query.$or = [
-        { customerName: { $regex: search, $options: 'i' } }
-      ];
-    }
-
-    // Calculate pagination
-    const skip = (page - 1) * limit;
-
-    // Build sort object
-    const sort = {};
-    sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
-
-    // Execute query
-    const customerPricing = await CustomerPricing.find(query)
-      .populate('customerId', 'name email phone')
-      .sort(sort)
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    // Get total count
-    const totalPricing = await CustomerPricing.countDocuments(query);
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        customerPricing,
-        pagination: {
-          current: parseInt(page),
-          total: Math.ceil(totalPricing / limit),
-          count: customerPricing.length,
-          totalPricing
-        }
-      }
-    });
-
+    const filter = { ...(await orgUserFilter(req.user)) };
+    if (req.query.search) filter.customerName = new RegExp(escapeRegex(req.query.search), 'i');
+    const customerPricing = await CustomerPricing.find(filter).populate('customerId', 'name phone email').sort({ customerName: 1 });
+    res.json({ status: 'success', data: { customerPricing } });
   } catch (error) {
     console.error('Get customer pricing error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while fetching customer pricing'
-    });
+    res.status(500).json({ status: 'error', message: 'Server error while fetching customer rates' });
   }
 });
 
-// @route   GET /api/discounts/customer-pricing/:id
-// @desc    Get single customer pricing rule
-// @access  Private
-router.get('/customer-pricing/:id', protect, async (req, res) => {
+router.post('/customer-pricing', protect, rateRules(true), validate, async (req, res) => {
   try {
-    const customerPricing = await CustomerPricing.findOne({ _id: req.params.id })
-      .populate('customerId', 'name email phone');
-
-    if (!customerPricing) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Customer pricing rule not found'
-      });
+    const [customer] = await businessCustomers(req, [req.body.customerId]);
+    if (!customer) return res.status(404).json({ status: 'error', message: 'Customer not found' });
+    const scope = await orgUserFilter(req.user);
+    if (await CustomerPricing.exists({ ...scope, customerId: customer._id })) {
+      return res.status(409).json({ status: 'error', message: `${customer.name} already has a rate — edit it instead` });
     }
-
-    res.status(200).json({
-      status: 'success',
-      data: { customerPricing }
-    });
-
-  } catch (error) {
-    console.error('Get customer pricing error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while fetching customer pricing'
-    });
-  }
-});
-
-// @route   POST /api/discounts/customer-pricing
-// @desc    Create new customer pricing rule
-// @access  Private
-router.post('/customer-pricing', protect, customerPricingValidation, async (req, res) => {
-  try {
-    const { customerId, ...pricingData } = req.body;
-
-    // Validate customer exists
-    const customer = await Customer.findOne({ _id: customerId });
-    if (!customer) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Customer not found'
-      });
-    }
-
-    // Check if pricing rule already exists for this customer
-    const existingPricing = await CustomerPricing.findOne({ customerId });
-    if (existingPricing) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Pricing rule already exists for this customer'
-      });
-    }
-
-    const customerPricing = await CustomerPricing.create({
-      ...pricingData,
-      customerId,
-      customerName: customer.name,
-      userId: req.user._id
-    });
-
-    const populatedPricing = await CustomerPricing.findById(customerPricing._id)
-      .populate('customerId', 'name email phone');
-
-    ActivityLog.logActivity({
-      action: 'Customer Pricing Created',
-      description: `Custom pricing rule created for ${customer.name}`,
-      entityType: 'customer_pricing',
-      entityId: customerPricing._id,
-      entityName: customer.name,
-      performedBy: req.user._id,
-      performedByName: req.user.fullName,
-      actionType: 'create',
-      severity: 'low',
-      userId: req.user._id,
-      dataScope: req.user.dataScope
-    }).catch(err => console.error('Activity log (create customer pricing) failed:', err.message));
-
-    res.status(201).json({
-      status: 'success',
-      message: 'Customer pricing rule created successfully',
-      data: { customerPricing: populatedPricing }
-    });
-
+    const { data, error } = rateData(req.body);
+    if (error) return res.status(400).json({ status: 'error', message: error });
+    const rate = await CustomerPricing.create({ ...data, customerId: customer._id, customerName: customer.name, userId: req.user._id });
+    log(req, 'customer_pricing', rate, 'Customer Rate Added', 'create', customer.name);
+    res.status(201).json({ status: 'success', message: 'Customer rate added', data: { customerPricing: await rate.populate('customerId', 'name phone email') } });
   } catch (error) {
     console.error('Create customer pricing error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while creating customer pricing rule'
-    });
+    res.status(500).json({ status: 'error', message: 'Server error while adding customer rate' });
   }
 });
 
-// @route   PUT /api/discounts/customer-pricing/:id
-// @desc    Update customer pricing rule
-// @access  Private
-router.put('/customer-pricing/:id', protect, customerPricingValidation, async (req, res) => {
+router.put('/customer-pricing/:id', protect, rateRules(false), validate, async (req, res) => {
   try {
-    const customerPricing = await CustomerPricing.findOneAndUpdate(
-      { _id: req.params.id },
-      req.body,
-      { new: true, runValidators: true }
-    )
-      .populate('customerId', 'name email phone');
-
-    if (!customerPricing) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Customer pricing rule not found'
-      });
-    }
-
-    ActivityLog.logActivity({
-      action: 'Customer Pricing Updated',
-      description: `Custom pricing rule updated for ${customerPricing.customerName}`,
-      entityType: 'customer_pricing',
-      entityId: customerPricing._id,
-      entityName: customerPricing.customerName,
-      performedBy: req.user._id,
-      performedByName: req.user.fullName,
-      actionType: 'update',
-      changes: { fields: Object.keys(req.body) },
-      severity: 'low',
-      userId: req.user._id,
-      dataScope: req.user.dataScope
-    }).catch(err => console.error('Activity log (update customer pricing) failed:', err.message));
-
-    res.status(200).json({
-      status: 'success',
-      message: 'Customer pricing rule updated successfully',
-      data: { customerPricing }
-    });
-
+    if (!oid(req.params.id)) return res.status(404).json({ status: 'error', message: 'Customer rate not found' });
+    const { data, error } = rateData(req.body);
+    if (error) return res.status(400).json({ status: 'error', message: error });
+    const rate = await CustomerPricing.findOneAndUpdate({ _id: req.params.id, ...(await orgUserFilter(req.user)) }, data, { new: true, runValidators: true }).populate('customerId', 'name phone email');
+    if (!rate) return res.status(404).json({ status: 'error', message: 'Customer rate not found' });
+    log(req, 'customer_pricing', rate, 'Customer Rate Updated', 'update', rate.customerName);
+    res.json({ status: 'success', message: 'Customer rate updated', data: { customerPricing: rate } });
   } catch (error) {
     console.error('Update customer pricing error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while updating customer pricing rule'
-    });
+    res.status(500).json({ status: 'error', message: 'Server error while updating customer rate' });
   }
 });
 
-// @route   DELETE /api/discounts/customer-pricing/:id
-// @desc    Delete customer pricing rule
-// @access  Private
 router.delete('/customer-pricing/:id', protect, async (req, res) => {
   try {
-    const customerPricing = await CustomerPricing.findOneAndDelete({
-      _id: req.params.id,
-      userId: req.user._id
-    });
-
-    if (!customerPricing) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Customer pricing rule not found'
-      });
-    }
-
-    ActivityLog.logActivity({
-      action: 'Customer Pricing Deleted',
-      description: `Custom pricing rule deleted for ${customerPricing.customerName}`,
-      entityType: 'customer_pricing',
-      entityId: customerPricing._id,
-      entityName: customerPricing.customerName,
-      performedBy: req.user._id,
-      performedByName: req.user.fullName,
-      actionType: 'delete',
-      severity: 'medium',
-      userId: req.user._id,
-      dataScope: req.user.dataScope
-    }).catch(err => console.error('Activity log (delete customer pricing) failed:', err.message));
-
-    res.status(200).json({
-      status: 'success',
-      message: 'Customer pricing rule deleted successfully'
-    });
-
+    if (!oid(req.params.id)) return res.status(404).json({ status: 'error', message: 'Customer rate not found' });
+    const rate = await CustomerPricing.findOneAndDelete({ _id: req.params.id, ...(await orgUserFilter(req.user)) });
+    if (!rate) return res.status(404).json({ status: 'error', message: 'Customer rate not found' });
+    log(req, 'customer_pricing', rate, 'Customer Rate Removed', 'delete', rate.customerName);
+    res.json({ status: 'success', message: 'Customer rate removed' });
   } catch (error) {
     console.error('Delete customer pricing error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while deleting customer pricing rule'
-    });
+    res.status(500).json({ status: 'error', message: 'Server error while removing customer rate' });
   }
 });
 
-// @route   POST /api/discounts/calculate
-// @desc    Calculate discount for a customer and amount
-// @access  Private
-router.post('/calculate', protect, [
-  body('customerId').isMongoId().withMessage('Valid customer ID is required'),
-  body('amount').isFloat({ min: 0 }).withMessage('Amount must be non-negative'),
-  body('jobType').optional().trim(),
-  body('isNewCustomer').optional().isBoolean()
-], async (req, res) => {
-  try {
-    const { customerId, amount, jobType, isNewCustomer } = req.body;
+// ---------------------------------------------------------------------------
+// Best discount for a customer and an order amount
 
-    // Get customer pricing rule
-    const customerPricing = await CustomerPricing.findOne({ customerId });
+const inForce = (now) => ({
+  isActive: true,
+  $and: [{ $or: [{ validFrom: { $lte: now } }, { validFrom: null }] }, { $or: [{ validUntil: { $gte: now } }, { validUntil: null }] }]
+});
 
-    // Get applicable discount rules
-    const discountRules = await DiscountRule.find({
-      
-      isActive: true,
-      $or: [
-        { validFrom: { $lte: new Date() } },
-        { validFrom: { $exists: false } }
-      ],
-      $or: [
-        { validUntil: { $gte: new Date() } },
-        { validUntil: { $exists: false } }
-      ],
-      $or: [
-        { minimumAmount: { $lte: amount } },
-        { minimumAmount: { $exists: false } }
-      ]
-    });
+router.post(
+  '/calculate',
+  protect,
+  [body('customerId').isMongoId().withMessage('Valid customer ID is required'), body('amount').isFloat({ min: 0 }).withMessage('Amount must be non-negative')],
+  validate,
+  async (req, res) => {
+    try {
+      const amount = Number(req.body.amount) || 0;
+      const [customer] = await businessCustomers(req, [req.body.customerId]);
+      if (!customer) return res.status(404).json({ status: 'error', message: 'Customer not found' });
+      const scope = await orgUserFilter(req.user);
+      const now = new Date();
 
-    let applicableDiscount = 0;
-    let appliedRule = null;
-
-    // Check customer-specific pricing first
-    if (customerPricing) {
-      applicableDiscount = (amount * customerPricing.discountPercentage) / 100;
-      appliedRule = {
-        type: 'customer_pricing',
-        name: `Customer-specific discount (${customerPricing.discountPercentage}%)`,
-        value: customerPricing.discountPercentage,
-        discountAmount: applicableDiscount
-      };
-    } else {
-      // Check general discount rules
-      for (const rule of discountRules) {
-        let isApplicable = false;
-
-        // Check customer type
-        if (rule.customerType === 'all') {
-          isApplicable = true;
-        } else if (rule.customerType === 'new' && isNewCustomer) {
-          isApplicable = true;
-        } else if (rule.customerType === 'returning' && !isNewCustomer) {
-          isApplicable = true;
-        }
-
-        // Check job type
-        if (isApplicable && rule.jobTypes && rule.jobTypes.length > 0) {
-          isApplicable = rule.jobTypes.includes(jobType);
-        }
-
-        if (isApplicable) {
-          let discountAmount = 0;
-          if (rule.type === 'percentage') {
-            discountAmount = (amount * rule.value) / 100;
-          } else if (rule.type === 'fixed') {
-            discountAmount = rule.value;
-          }
-
-          if (discountAmount > applicableDiscount) {
-            applicableDiscount = discountAmount;
-            appliedRule = {
-              type: 'discount_rule',
-              name: rule.name,
-              value: rule.value,
-              discountAmount: applicableDiscount
-            };
-          }
-        }
+      const candidates = [];
+      const rate = await CustomerPricing.findOne({ ...scope, customerId: customer._id, ...inForce(now) });
+      if (rate && rate.discountPercentage > 0) {
+        candidates.push({
+          type: 'customer_pricing',
+          id: rate._id,
+          name: `${customer.name}'s rate`,
+          label: `${rate.discountPercentage}% off`,
+          discountAmount: (amount * rate.discountPercentage) / 100
+        });
       }
+
+      // New = no issued invoice yet for this customer.
+      const isNewCustomer = !(await Invoice.exists({ ...orgScope(req.user), customerId: customer._id, status: { $nin: ['draft', 'cancelled'] } }));
+      const rules = await DiscountRule.find({ ...scope, ...inForce(now) });
+      for (const rule of rules) {
+        if (rule.minimumAmount && amount < rule.minimumAmount) continue;
+        const who = rule.customerType || 'all';
+        if (who === 'new' && !isNewCustomer) continue;
+        if (who === 'returning' && isNewCustomer) continue;
+        if (who === 'specific' && !(rule.customerIds || []).some((id) => String(id) === String(customer._id))) continue;
+        let discountAmount = rule.type === 'fixed' ? rule.value : (amount * rule.value) / 100;
+        if (rule.maximumAmount) discountAmount = Math.min(discountAmount, rule.maximumAmount);
+        candidates.push({
+          type: 'discount_rule',
+          id: rule._id,
+          name: rule.name,
+          label: rule.type === 'fixed' ? `₹${rule.value} off` : `${rule.value}% off`,
+          discountAmount
+        });
+      }
+
+      const best = candidates.map((c) => ({ ...c, discountAmount: Math.round(Math.min(c.discountAmount, amount) * 100) / 100 })).sort((a, b) => b.discountAmount - a.discountAmount)[0] || null;
+      res.json({
+        status: 'success',
+        data: {
+          originalAmount: amount,
+          discountAmount: best?.discountAmount || 0,
+          finalAmount: amount - (best?.discountAmount || 0),
+          appliedRule: best,
+          isNewCustomer
+        }
+      });
+    } catch (error) {
+      console.error('Calculate discount error:', error);
+      res.status(500).json({ status: 'error', message: 'Server error while calculating discount' });
     }
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        originalAmount: amount,
-        discountAmount: applicableDiscount,
-        finalAmount: amount - applicableDiscount,
-        appliedRule
-      }
-    });
-
-  } catch (error) {
-    console.error('Calculate discount error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while calculating discount'
-    });
   }
-});
+);
 
-// @route   GET /api/discounts/stats/summary
-// @desc    Get discount statistics
-// @access  Private
+// GET /api/discounts/stats/summary
 router.get('/stats/summary', protect, async (req, res) => {
   try {
-    const userId = req.user._id;
-
-    const [
-      totalRules,
-      activeRules,
-      totalCustomerPricing,
-      ruleTypeStats,
-      usageStats
-    ] = await Promise.all([
-      DiscountRule.countDocuments({ userId }),
-      DiscountRule.countDocuments({ userId, isActive: true }),
-      CustomerPricing.countDocuments({ userId }),
-      DiscountRule.aggregate([
-        { $match: { userId: userId } },
-        { $group: { _id: '$type', count: { $sum: 1 } } },
-        { $sort: { count: -1 } }
-      ]),
-      DiscountRule.aggregate([
-        { $match: { userId: userId } },
-        { $group: { _id: null, totalUsage: { $sum: '$usageCount' } } }
-      ])
+    const scope = await orgUserFilter(req.user);
+    const now = new Date();
+    const [rules, activeRules, rates, activeRates] = await Promise.all([
+      DiscountRule.countDocuments(scope),
+      DiscountRule.countDocuments({ ...scope, ...inForce(now) }),
+      CustomerPricing.countDocuments(scope),
+      CustomerPricing.countDocuments({ ...scope, ...inForce(now) })
     ]);
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        stats: {
-          totalRules,
-          activeRules,
-          totalCustomerPricing,
-          ruleTypeStats,
-          totalUsage: usageStats[0]?.totalUsage || 0
-        }
-      }
-    });
-
+    res.json({ status: 'success', data: { stats: { rules, activeRules, rates, activeRates } } });
   } catch (error) {
     console.error('Get discount stats error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while fetching discount statistics'
-    });
+    res.status(500).json({ status: 'error', message: 'Server error while fetching discount statistics' });
   }
 });
 

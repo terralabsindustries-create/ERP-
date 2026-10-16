@@ -1,15 +1,18 @@
 const express = require('express');
 const { body } = require('express-validator');
+const { validate } = require('../middleware/validate');
 const { validationResult } = require('express-validator');
 const Quotation = require('../models/Quotation');
 const Customer = require('../models/Customer');
 const Settings = require('../models/Settings');
+const { settingsOwnerId, businessSettings } = require('../utils/businessSettings');
 const PDFService = require('../services/PDFService');
+const { AREA_UNITS, round2, parseDesignCharge, documentTotals, toQuotationLine, quotationLineToInvoiceLine, sizeLabel, areaLabel } = require('../utils/billing');
 const { protect } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/requirePermission');
 
-async function getCompanyInfo(userId) {
-  const settings = await Settings.getOrCreateSettings(userId);
+async function getCompanyInfo(user) {
+  const settings = await businessSettings(user);
   const addressParts = [];
   if (settings.companyAddress) {
     if (settings.companyAddress.street) addressParts.push(settings.companyAddress.street);
@@ -59,7 +62,10 @@ const quotationValidation = [
   body('items.*.item_name').notEmpty().withMessage('Item name is required'),
   body('items.*.quantity').isFloat({ min: 0.01 }).withMessage('Quantity must be greater than 0'),
   body('items.*.unit_price').isFloat({ min: 0 }).withMessage('Unit price cannot be negative'),
-  body('items.*.unit').optional().isIn(Quotation.schema.path('items').schema.path('unit').enumValues).withMessage('Invalid unit')
+  body('items.*.unit').optional({ values: 'falsy' }).isIn(Quotation.schema.path('items').schema.path('unit').enumValues).withMessage('Invalid unit'),
+  body('items.*.length').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Length cannot be negative'),
+  body('items.*.width').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Width cannot be negative'),
+  body('design_charge').optional({ values: 'falsy' }).custom((v) => parseDesignCharge(v) !== null).withMessage('Design charge must be an amount of 0 or more')
 ];
 
 // GET /api/quotations
@@ -121,7 +127,7 @@ router.post('/', protect, requirePermission('Quotations: Create & Edit'), quotat
   }
 
   try {
-    const { customer_id, gst_type, is_interstate, valid_until, items, payment_link, terms_conditions, notes } = req.body;
+    const { customer_id, valid_until, items, payment_link, terms_conditions, notes } = req.body;
 
     // Verify customer belongs to this user/scope
     const customerFilter = req.user.dataScope
@@ -130,38 +136,24 @@ router.post('/', protect, requirePermission('Quotations: Create & Edit'), quotat
     const customer = await Customer.findOne(customerFilter);
     if (!customer) return res.status(404).json({ status: 'error', message: 'Customer not found' });
 
-    // Calculate item totals
-    const processedItems = items.map(item => {
-      const subtotal = item.quantity * item.unit_price;
-      const taxAmount = gst_type === 'gst' ? (subtotal * (item.tax_rate || 0)) / 100 : 0;
-      return {
-        item_name: item.item_name,
-        description: item.description || '',
-        quantity: item.quantity,
-        unit: item.unit || 'pieces',
-        unit_price: item.unit_price,
-        tax_rate: item.tax_rate || 0,
-        tax_amount: taxAmount,
-        total_amount: subtotal + taxAmount
-      };
-    });
-
-    const subtotal = processedItems.reduce((sum, i) => sum + i.quantity * i.unit_price, 0);
-    const taxTotal = processedItems.reduce((sum, i) => sum + i.tax_amount, 0);
-    const totalAmount = subtotal + taxTotal;
+    // Priced on the server with the same arithmetic as invoices (no GST;
+    // area lines are length × width × quantity × rate). Client totals are ignored.
+    const processedItems = items.map(toQuotationLine);
+    const totals = documentTotals(processedItems.map((i) => i.total_amount), parseDesignCharge(req.body.design_charge) || 0);
 
     const quotationNumber = await Quotation.generateQuotationNumber(req.user._id, req.user.dataScope);
 
     const quotation = await Quotation.create({
       quotationNumber,
       customer_id,
-      gst_type: gst_type || 'non_gst',
-      is_interstate: is_interstate || false,
+      gst_type: 'non_gst',
+      is_interstate: false,
       valid_until: valid_until || null,
       items: processedItems,
-      subtotal,
-      tax_amount: taxTotal,
-      total_amount: totalAmount,
+      subtotal: totals.subtotal,
+      design_charge: totals.designCharge,
+      tax_amount: 0,
+      total_amount: totals.total,
       payment_link: payment_link || null,
       terms_conditions,
       notes,
@@ -258,35 +250,15 @@ router.post('/:id/convert-to-invoice', protect, requirePermission('Quotations: C
     }
 
     const customer = quotation.customer_id;
-    const isGst = quotation.gst_type === 'gst';
-    const isInterstate = !!quotation.is_interstate;
-    const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+    if (!customer) {
+      return res.status(400).json({ status: 'error', message: 'The customer on this quotation no longer exists' });
+    }
 
-    // Map quotation line items onto the invoice item shape. A quotation carries
-    // a single tax_amount per line; an invoice needs it split across IGST (for
-    // interstate) or CGST+SGST (intrastate).
-    const items = quotation.items.map((qi) => {
-      const lineTotal = round2(qi.quantity * qi.unit_price);
-      const gstAmount = isGst ? round2(qi.tax_amount || 0) : 0;
-      const half = round2(gstAmount / 2);
-
-      return {
-        itemName: qi.item_name,
-        description: qi.description || '',
-        quantity: qi.quantity,
-        unit: qi.unit || 'pieces',
-        unitPrice: qi.unit_price,
-        totalAmount: lineTotal,
-        gstRate: isGst ? (qi.tax_rate || 0) : 0,
-        cgstAmount: isGst && !isInterstate ? half : 0,
-        sgstAmount: isGst && !isInterstate ? half : 0,
-        igstAmount: isGst && isInterstate ? gstAmount : 0,
-        gstAmount,
-        itemTotal: round2(lineTotal + gstAmount)
-      };
-    });
-
-    const subtotal = round2(items.reduce((s, i) => s + i.totalAmount, 0));
+    // The lines and the design charge carry over as they were quoted. Invoices
+    // carry no GST, so a quotation written with GST is invoiced at its prices
+    // before tax.
+    const items = quotation.items.map(quotationLineToInvoiceLine);
+    const totals = documentTotals(items.map((i) => i.totalAmount), quotation.design_charge || 0);
     const invoiceDate = new Date();
     const dueDate = new Date(invoiceDate);
     dueDate.setDate(dueDate.getDate() + 30);
@@ -302,14 +274,15 @@ router.post('/:id/convert-to-invoice', protect, requirePermission('Quotations: C
       invoiceDate,
       dueDate,
       items,
-      subtotal,
-      // The pre-save hook recomputes the tax roll-up and grand total from items.
-      taxableAmount: subtotal,
+      subtotal: totals.subtotal,
+      designCharge: totals.designCharge,
+      // The pre-save hook recomputes these from the lines and design charge.
+      taxableAmount: totals.total,
       totalGstAmount: 0,
-      totalAmount: subtotal,
+      totalAmount: totals.total,
       status: 'draft',
-      isInterState: isInterstate,
-      noGst: !isGst,
+      isInterState: false,
+      noGst: false,
       notes: quotation.notes || '',
       termsAndConditions: quotation.terms_conditions || '',
       userId: req.user._id
@@ -355,7 +328,7 @@ router.post('/:id/send-email', protect, requirePermission('Quotations: Send Emai
     if (!toEmail) return res.status(400).json({ status: 'error', message: 'Recipient email is required' });
 
     // Generate the exact same PDF as the download endpoint, to attach to the email
-    const companyInfo = await getCompanyInfo(req.user._id);
+    const companyInfo = await getCompanyInfo(req.user);
     let pdfBuffer = null;
     try {
       pdfBuffer = await PDFService.generateQuotationPDFFromHTML(quotation, companyInfo);
@@ -363,22 +336,27 @@ router.post('/:id/send-email', protect, requirePermission('Quotations: Send Emai
       console.warn('⚠️ Quotation PDF generation for email failed:', pdfErr.message);
     }
 
-    const companyName = process.env.COMPANY_NAME || 'SerpY ERP';
+    const companyName = process.env.COMPANY_NAME || 'Terralabs ERP';
     const validUntil = quotation.valid_until
       ? new Date(quotation.valid_until).toLocaleDateString('en-IN') : 'N/A';
 
-    const gstColHeader = quotation.gst_type === 'gst'
-      ? '<th style="padding:8px;background:#f5f5f5;text-align:center;">Tax Rate</th>' : '';
+    // A quotation written with GST before it was removed still shows the tax it carries.
+    const legacyTax = quotation.gst_type === 'gst' ? round2(quotation.tax_amount || 0) : 0;
 
-    const itemsRows = quotation.items.map(item => `
+    const itemsRows = quotation.items.map(item => {
+      const size = sizeLabel(item);
+      const sizeText = size ? `${size} (${areaLabel(item.area_per_piece, item.unit)} each, ${areaLabel(item.total_area, item.unit)} in all)` : '';
+      // An older line kept its tax inside total_amount; show the line before tax.
+      const lineAmount = round2((item.total_amount || 0) - (item.tax_amount || 0));
+      return `
       <tr>
-        <td style="padding:8px;border-bottom:1px solid #eee;">${item.item_name}</td>
+        <td style="padding:8px;border-bottom:1px solid #eee;">${item.item_name}${sizeText ? `<div style="color:#666;font-size:12px;">${sizeText}</div>` : ''}</td>
         <td style="padding:8px;border-bottom:1px solid #eee;">${item.description || '-'}</td>
-        <td style="padding:8px;border-bottom:1px solid #eee;text-align:center;">${PDFService.formatQtyWithUnit(item.quantity, item.unit)}</td>
-        <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">&#8377;${item.unit_price.toFixed(2)}</td>
-        ${quotation.gst_type === 'gst' ? `<td style="padding:8px;border-bottom:1px solid #eee;text-align:center;">${item.tax_rate}%</td>` : ''}
-        <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">&#8377;${item.total_amount.toFixed(2)}</td>
-      </tr>`).join('');
+        <td style="padding:8px;border-bottom:1px solid #eee;text-align:center;">${size ? PDFService.fmtQty(item.quantity) : PDFService.formatQtyWithUnit(item.quantity, item.unit)}</td>
+        <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">&#8377;${item.unit_price.toFixed(2)}${size ? ` / ${AREA_UNITS[item.unit].label}` : ''}</td>
+        <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">&#8377;${lineAmount.toFixed(2)}</td>
+      </tr>`;
+    }).join('');
 
     const paymentSection = quotation.payment_link ? `
       <div style="margin:20px 0;padding:16px;background:#f0f7ff;border-radius:8px;border-left:4px solid #3399cc;">
@@ -411,15 +389,15 @@ router.post('/:id/send-email', protect, requirePermission('Quotations: Send Emai
         <th style="padding:10px 8px;background:#f5f5f5;text-align:left;">Item</th>
         <th style="padding:10px 8px;background:#f5f5f5;text-align:left;">Description</th>
         <th style="padding:10px 8px;background:#f5f5f5;text-align:center;">Qty</th>
-        <th style="padding:10px 8px;background:#f5f5f5;text-align:right;">Unit Price</th>
-        ${gstColHeader}
-        <th style="padding:10px 8px;background:#f5f5f5;text-align:right;">Total</th>
+        <th style="padding:10px 8px;background:#f5f5f5;text-align:right;">Rate</th>
+        <th style="padding:10px 8px;background:#f5f5f5;text-align:right;">Amount</th>
       </tr></thead>
       <tbody>${itemsRows}</tbody>
     </table>
     <div style="margin-top:16px;text-align:right;">
-      <p style="margin:4px 0;">Subtotal: <strong>&#8377;${quotation.subtotal.toFixed(2)}</strong></p>
-      ${quotation.gst_type === 'gst' ? `<p style="margin:4px 0;">Tax: <strong>&#8377;${quotation.tax_amount.toFixed(2)}</strong></p>` : ''}
+      <p style="margin:4px 0;">Subtotal: <strong>&#8377;${(quotation.subtotal || 0).toFixed(2)}</strong></p>
+      ${quotation.design_charge > 0 ? `<p style="margin:4px 0;">Design Charge: <strong>&#8377;${quotation.design_charge.toFixed(2)}</strong></p>` : ''}
+      ${legacyTax > 0 ? `<p style="margin:4px 0;">GST: <strong>&#8377;${legacyTax.toFixed(2)}</strong></p>` : ''}
       <p style="margin:8px 0;font-size:18px;">Total: <strong style="color:#667eea;">&#8377;${quotation.total_amount.toFixed(2)}</strong></p>
     </div>
     ${paymentSection}
@@ -458,7 +436,7 @@ router.post('/:id/send-whatsapp', protect, requirePermission('WhatsApp: Send Mes
   body('metaTemplateName').notEmpty().withMessage('A WhatsApp template is required'),
   body('metaTemplateLanguage').optional({ nullable: true }).isString(),
   body('templateVariableMapping').optional({ nullable: true }).isObject()
-], async (req, res) => {
+], validate, async (req, res) => {
   try {
     const { phone, metaTemplateName, metaTemplateLanguage, templateVariableMapping } = req.body;
 
@@ -469,7 +447,7 @@ router.post('/:id/send-whatsapp', protect, requirePermission('WhatsApp: Send Mes
     const quotation = await Quotation.findOne(filter).populate('customer_id', 'name email phone address gstNumber');
     if (!quotation) return res.status(404).json({ status: 'error', message: 'Quotation not found' });
 
-    const settings = await Settings.getOrCreateSettings(req.user._id);
+    const settings = await businessSettings(req.user);
     const waIntegration = settings.whatsappIntegration;
     if (!waIntegration?.enabled || !waIntegration?.phoneNumberId || !waIntegration?.accessToken) {
       return res.status(400).json({
@@ -480,7 +458,7 @@ router.post('/:id/send-whatsapp', protect, requirePermission('WhatsApp: Send Mes
     }
 
     // Generate the PDF and save it to a temporary public URL so it can be offered as a linked variable
-    const companyInfo = await getCompanyInfo(req.user._id);
+    const companyInfo = await getCompanyInfo(req.user);
     let quotationLink = '';
     try {
       const pdfBuffer = await PDFService.generateQuotationPDFFromHTML(quotation, companyInfo);
@@ -559,7 +537,7 @@ router.get('/:id/pdf', protect, async (req, res) => {
       .populate('customer_id', 'name email phone address gstNumber');
     if (!quotation) return res.status(404).json({ status: 'error', message: 'Quotation not found' });
 
-    const companyInfo = await getCompanyInfo(req.user._id);
+    const companyInfo = await getCompanyInfo(req.user);
     if (!companyInfo.name || companyInfo.name === 'My Company') {
       return res.status(400).json({
         status: 'error',

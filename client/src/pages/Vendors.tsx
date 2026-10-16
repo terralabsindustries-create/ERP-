@@ -1,270 +1,277 @@
-import { useState, useEffect } from "react";
-import { Plus, Search, Building, Building2, Phone, Mail, DollarSign, Users, BarChart3, Edit } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Factory, FileText, Pencil, Plus, ReceiptText } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { EmptyState } from "@/components/common/EmptyState";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { PageShell } from "@/components/layout/PageShell";
+import { DataCard, DataTable, EntityCell, FilterSelect, MetricBar, SearchField, Stack, StatusPill, Toolbar, ViewTabs, type Column } from "@/components/data";
 import { CreateVendorDialog } from "@/components/vendors/CreateVendorDialog";
-import { VendorBillDialog } from "@/components/vendors/VendorBillDialog";
-import { VendorLedgerDialog } from "@/components/vendors/VendorLedgerDialog";
-import { VendorPaymentDialog } from "@/components/vendors/VendorPaymentDialog";
 import { VendorDialog as EditVendorDialog } from "@/components/vendors/EditVendorDialog";
-import { VendorAnalytics } from "@/components/vendors/VendorAnalytics";
-import apiClient from "@/lib/apiClient";
+import { NewPurchaseBillDialog } from "@/components/purchase-bills/NewPurchaseBillDialog";
+import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import apiClient from "@/lib/apiClient";
+import { fmtDate, formatINR } from "@/lib/format";
+
+interface Vendor {
+  _id: string;
+  name: string;
+  contactPerson?: string;
+  email?: string;
+  phone?: string;
+  gstNumber?: string;
+  vendorType?: string;
+  paymentTerms?: string;
+  status: "active" | "inactive" | "blacklisted";
+  address?: { city?: string; state?: string };
+  /** From purchase bills; null when this login can't see bills. */
+  purchases?: { billed: number; outstanding: number; bills: number; lastBillDate?: string } | null;
+}
+
+type View = "all" | "owed" | "active" | "inactive";
 
 export default function Vendors() {
-  const [vendors, setVendors] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [editingVendor, setEditingVendor] = useState<any>(null);
+  const { hasPermission } = useAuth();
   const { toast } = useToast();
+  const navigate = useNavigate();
+  const [vendors, setVendors] = useState<Vendor[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [view, setView] = useState<View>("all");
+  const [type, setType] = useState("all");
+  const [showCreate, setShowCreate] = useState(false);
+  const [editing, setEditing] = useState<Vendor | null>(null);
+  const [billFor, setBillFor] = useState<Vendor | null>(null);
 
-  useEffect(() => {
-    fetchVendors();
-  }, []);
+  const canEdit = hasPermission("Vendors: Create & Edit");
+  const canBill = hasPermission("Purchase Bills: Create & Edit");
+  const seesBills = hasPermission("Purchase Bills");
 
-  const fetchVendors = async () => {
-    setLoading(true);
+  const load = useCallback(async () => {
     try {
-      const response = await apiClient.getVendors();
-      setVendors(response.vendors || []);
+      const res = (await apiClient.getVendors({ limit: 100 })) as { vendors?: Vendor[] };
+      setVendors(res?.vendors || []);
     } catch (error) {
-      console.error('Error fetching vendors:', error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch vendors",
-        variant: "destructive",
-      });
+      toast({ title: "Suppliers could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     } finally {
       setLoading(false);
     }
-  };
+  }, [toast]);
 
-  const filteredVendors = vendors.filter(vendor => 
-    vendor.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (vendor.contactPerson || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (vendor.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (vendor.vendorType || '').toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  useEffect(() => {
+    load();
+  }, [load]);
 
-  const totalVendors = vendors.length;
-  const activeVendors = vendors.filter(vendor => vendor.status === "active").length;
-  const totalPendingAmount = vendors.reduce((sum, vendor) => sum + (vendor.pendingAmount || 0), 0);
+  const owes = (v: Vendor) => (v.purchases?.outstanding || 0) > 0.5;
+  const inView = (v: Vendor, w: View) => (w === "all" ? true : w === "owed" ? owes(v) : w === "active" ? v.status === "active" : v.status !== "active");
+
+  const rows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return vendors.filter(
+      (v) =>
+        inView(v, view) &&
+        (type === "all" || v.vendorType === type) &&
+        (!q || [v.name, v.contactPerson, v.email, v.phone, v.gstNumber].some((f) => (f || "").toLowerCase().includes(q)))
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vendors, search, view, type]);
+
+  const purchased = vendors.reduce((s, v) => s + (v.purchases?.billed || 0), 0);
+  const outstanding = vendors.reduce((s, v) => s + (v.purchases?.outstanding || 0), 0);
+  const bills = vendors.reduce((s, v) => s + (v.purchases?.bills || 0), 0);
+  const types = Array.from(new Set(vendors.map((v) => v.vendorType).filter(Boolean))) as string[];
+
+  const columns: Column<Vendor>[] = [
+    {
+      id: "name",
+      header: "Supplier",
+      cell: (v) => <EntityCell avatar={v.name} title={v.name} subtitle={[v.vendorType, v.address?.city].filter(Boolean).join(" · ") || undefined} />,
+      sortValue: (v) => v.name.toLowerCase(),
+      className: "min-w-[220px]"
+    },
+    {
+      id: "contact",
+      header: "Contact",
+      cell: (v) => <Stack top={v.contactPerson || v.phone || <span className="text-muted-foreground">—</span>} bottom={v.contactPerson ? v.phone : v.email} />,
+      hideBelow: "md"
+    },
+    {
+      id: "gst",
+      header: "GSTIN",
+      cell: (v) => (v.gstNumber ? <span className="font-mono text-xs">{v.gstNumber}</span> : <span className="text-muted-foreground">—</span>),
+      hideBelow: "xl"
+    },
+    {
+      id: "terms",
+      header: "Terms",
+      cell: (v) => <span className="whitespace-nowrap">{v.paymentTerms || "—"}</span>,
+      sortValue: (v) => v.paymentTerms || "",
+      hideBelow: "lg"
+    },
+    ...(seesBills
+      ? ([
+          {
+            id: "purchased",
+            header: "Purchased",
+            align: "right",
+            cell: (v) => (
+              <Stack
+                top={v.purchases ? formatINR(v.purchases.billed) : <span className="text-muted-foreground">—</span>}
+                bottom={v.purchases ? `${v.purchases.bills} bill${v.purchases.bills === 1 ? "" : "s"} · last ${fmtDate(v.purchases.lastBillDate)}` : undefined}
+              />
+            ),
+            sortValue: (v) => v.purchases?.billed || 0,
+            hideBelow: "lg"
+          },
+          {
+            id: "owed",
+            header: "You owe",
+            align: "right",
+            cell: (v) => (owes(v) ? <span className="font-semibold text-warning-strong">{formatINR(v.purchases!.outstanding)}</span> : <span className="text-muted-foreground">—</span>),
+            sortValue: (v) => v.purchases?.outstanding || 0
+          }
+        ] as Column<Vendor>[])
+      : []),
+    {
+      id: "status",
+      header: "Status",
+      cell: (v) => (
+        <StatusPill tone={v.status === "active" ? "success" : v.status === "blacklisted" ? "danger" : "neutral"}>
+          {v.status === "active" ? "Active" : v.status === "blacklisted" ? "Blacklisted" : "Inactive"}
+        </StatusPill>
+      ),
+      sortValue: (v) => v.status,
+      className: "w-[110px]"
+    }
+  ];
 
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Vendor Management</h1>
-          <p className="text-muted-foreground text-sm">Manage suppliers and service providers</p>
-        </div>
-        <Button onClick={() => setShowCreateDialog(true)} className="gap-2">
-          <Plus className="w-4 h-4" />
-          Add Vendor
-        </Button>
+    <PageShell>
+      <PageHeader
+        eyebrow="Materials & purchase"
+        title="Suppliers"
+        description="Paper merchants, ink and plate suppliers and finishing partners, with what you've bought and still owe."
+        actions={
+          canEdit && (
+            <Button onClick={() => setShowCreate(true)}>
+              <Plus />
+              Add supplier
+            </Button>
+          )
+        }
+      />
+
+      <MetricBar
+        loading={loading}
+        metrics={[
+          { label: "Suppliers", value: vendors.length, hint: `${vendors.filter((v) => v.status === "active").length} active` },
+          ...(seesBills
+            ? [
+                { label: "Purchased", value: formatINR(purchased, { compact: purchased >= 1e5 }), hint: `${bills} purchase bill${bills === 1 ? "" : "s"}` },
+                {
+                  label: "You owe",
+                  value: formatINR(outstanding, { compact: outstanding >= 1e5 }),
+                  hint: `${vendors.filter(owes).length} supplier${vendors.filter(owes).length === 1 ? "" : "s"}`,
+                  tone: (outstanding > 0 ? "warning" : "success") as "warning" | "success",
+                  onClick: () => setView(view === "owed" ? "all" : "owed"),
+                  active: view === "owed"
+                }
+              ]
+            : []),
+          { label: "With GSTIN", value: vendors.filter((v) => v.gstNumber).length, hint: "Input tax credit possible" }
+        ]}
+      />
+
+      <div className="space-y-4">
+        <ViewTabs<View>
+          value={view}
+          onChange={setView}
+          tabs={[
+            { value: "all", label: "All", count: vendors.length },
+            ...(seesBills ? [{ value: "owed" as View, label: "You owe", count: vendors.filter(owes).length, tone: "warning" as const }] : []),
+            { value: "active", label: "Active", count: vendors.filter((v) => v.status === "active").length },
+            { value: "inactive", label: "Inactive", count: vendors.filter((v) => v.status !== "active").length }
+          ]}
+        />
+
+        <DataCard
+          toolbar={
+            <Toolbar search={<SearchField value={search} onChange={setSearch} placeholder="Search supplier, contact or GSTIN" />}>
+              {types.length > 1 && <FilterSelect label="Type" value={type} onChange={setType} options={types.map((t) => ({ value: t, label: t }))} />}
+            </Toolbar>
+          }
+          footer={!loading && rows.length > 0 && `${rows.length} of ${vendors.length} suppliers`}
+        >
+          <DataTable
+            columns={columns}
+            rows={rows}
+            rowKey={(v) => v._id}
+            loading={loading}
+            onRowClick={canEdit ? (v) => setEditing(v) : undefined}
+            actions={(v) => [
+              { label: "Edit supplier", icon: Pencil, onClick: () => setEditing(v), hidden: !canEdit },
+              { label: "Record a bill", icon: ReceiptText, onClick: () => setBillFor(v), hidden: !canBill },
+              { label: "View bills", icon: FileText, onClick: () => navigate(`/purchase-bills?vendor=${v._id}`), hidden: !seesBills }
+            ]}
+            actionsLabel={(v) => `Actions for ${v.name}`}
+            defaultSort={{ id: "name", dir: "asc" }}
+            rowClassName={(v) => (v.status !== "active" ? "text-muted-foreground" : undefined)}
+            mobile={(v) => (
+              <div className="flex items-start justify-between gap-3">
+                <EntityCell avatar={v.name} title={v.name} subtitle={v.contactPerson || v.phone || v.vendorType} />
+                {owes(v) ? (
+                  <div className="shrink-0 text-right">
+                    <div className="num text-sm font-semibold text-warning-strong">{formatINR(v.purchases!.outstanding)}</div>
+                    <div className="text-xs text-muted-foreground">you owe</div>
+                  </div>
+                ) : (
+                  <StatusPill tone={v.status === "active" ? "success" : "neutral"}>{v.status === "active" ? "Active" : "Inactive"}</StatusPill>
+                )}
+              </div>
+            )}
+            empty={
+              vendors.length === 0 ? (
+                <EmptyState
+                  icon={Factory}
+                  title="No suppliers yet"
+                  description="Add the paper merchants and partners you buy from to record their bills and track what you owe."
+                  action={
+                    canEdit && (
+                      <Button onClick={() => setShowCreate(true)}>
+                        <Plus />
+                        Add supplier
+                      </Button>
+                    )
+                  }
+                />
+              ) : (
+                <EmptyState compact icon={Factory} title="No suppliers in this view" description="Try another search or view." />
+              )
+            }
+          />
+        </DataCard>
       </div>
 
-      <Tabs defaultValue="vendors" className="space-y-6">
-        <TabsList>
-          <TabsTrigger value="vendors" className="gap-2">
-            <Building className="h-4 w-4" />
-            Vendors
-          </TabsTrigger>
-          <TabsTrigger value="analytics" className="gap-2">
-            <BarChart3 className="h-4 w-4" />
-            Analytics
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="vendors" className="space-y-6">
-          {/* Summary Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-            <Card>
-              <CardContent className="p-4 flex items-center gap-3">
-                <Building className="w-5 h-5 text-muted-foreground" />
-                <div>
-                  <p className="text-xs text-muted-foreground">Total Vendors</p>
-                  <p className="text-xl font-bold">{totalVendors}</p>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="p-4 flex items-center gap-3">
-                <DollarSign className="w-5 h-5 text-muted-foreground" />
-                <div>
-                  <p className="text-xs text-muted-foreground">Pending Amount</p>
-                  <p className="text-xl font-bold">₹{totalPendingAmount.toLocaleString()}</p>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="p-4 flex items-center gap-3">
-                <Users className="w-5 h-5 text-muted-foreground" />
-                <div>
-                  <p className="text-xs text-muted-foreground">Active Vendors</p>
-                  <p className="text-xl font-bold">{activeVendors}</p>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Search */}
-          <div className="relative max-w-sm">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              placeholder="Search vendors..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10"
-            />
-          </div>
-
-          {/* Vendors Table */}
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">All Vendors</CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
-              {loading ? (
-                <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
-                  Loading vendors...
-                </div>
-              ) : filteredVendors.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
-                  <Building className="h-10 w-10 text-muted-foreground opacity-40" />
-                  <h3 className="text-lg font-semibold">No vendors found</h3>
-                  <p className="text-muted-foreground text-sm max-w-sm">
-                    {vendors.length === 0
-                      ? "Add your first vendor to get started"
-                      : "No vendors match your search criteria."}
-                  </p>
-                  {vendors.length === 0 && (
-                    <Button onClick={() => setShowCreateDialog(true)} className="gap-2">
-                      <Plus className="h-4 w-4" />
-                      Add Vendor
-                    </Button>
-                  )}
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b bg-muted/50">
-                        <th className="text-left px-4 py-3 font-medium">Vendor</th>
-                        <th className="text-left px-4 py-3 font-medium">Contact</th>
-                        <th className="text-left px-4 py-3 font-medium">GST Number</th>
-                        <th className="text-left px-4 py-3 font-medium">Total Amount</th>
-                        <th className="text-left px-4 py-3 font-medium">Pending</th>
-                        <th className="text-left px-4 py-3 font-medium">Status</th>
-                        <th className="px-4 py-3 font-medium">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredVendors.map((vendor) => (
-                        <tr key={vendor._id} className="border-b hover:bg-muted/30 transition-colors">
-                          <td className="px-4 py-3">
-                            <div className="font-medium">{vendor.name}</div>
-                            <div className="text-xs text-muted-foreground capitalize">{vendor.vendorType}</div>
-                          </td>
-                          <td className="px-4 py-3 text-muted-foreground">
-                            {vendor.contactPerson && (
-                              <div className="flex items-center gap-1">
-                                <Building2 className="h-3 w-3" />
-                                {vendor.contactPerson}
-                              </div>
-                            )}
-                            {vendor.phone && (
-                              <div className="flex items-center gap-1 text-xs">
-                                <Phone className="h-3 w-3" />
-                                {vendor.phone}
-                              </div>
-                            )}
-                            {vendor.email && (
-                              <div className="flex items-center gap-1 text-xs">
-                                <Mail className="h-3 w-3" />
-                                {vendor.email}
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 font-mono text-xs">
-                            {vendor.gstNumber || <span className="text-muted-foreground font-sans">Not provided</span>}
-                          </td>
-                          <td className="px-4 py-3 font-medium">₹{(vendor.totalAmount || 0).toLocaleString()}</td>
-                          <td className="px-4 py-3">
-                            <span className={(vendor.pendingAmount || 0) > 0 ? "text-warning font-medium" : "text-success"}>
-                              ₹{(vendor.pendingAmount || 0).toLocaleString()}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3">
-                            <Badge variant={vendor.status === "active" ? "success" : "secondary"}>
-                              {vendor.status}
-                            </Badge>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-1">
-                              <VendorBillDialog
-                                vendor={{ id: vendor._id || vendor.id, name: vendor.name }}
-                                onBillCreated={fetchVendors}
-                              />
-                              <VendorLedgerDialog
-                                vendor={{
-                                  id: vendor._id || vendor.id,
-                                  name: vendor.name,
-                                  total_purchases: vendor.totalAmount || 0,
-                                  pending_amount: vendor.pendingAmount || 0
-                                }}
-                              />
-                              {(vendor.pendingAmount || 0) > 0 && (
-                                <VendorPaymentDialog
-                                  vendor={{
-                                    id: vendor._id || vendor.id,
-                                    name: vendor.name,
-                                    pending_amount: vendor.pendingAmount || 0
-                                  }}
-                                  onPaymentMade={fetchVendors}
-                                />
-                              )}
-                              <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => setEditingVendor(vendor)}>
-                                <Edit className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="analytics">
-          <VendorAnalytics />
-        </TabsContent>
-      </Tabs>
-
+      <CreateVendorDialog open={showCreate} onOpenChange={setShowCreate} onVendorCreated={load} />
       <EditVendorDialog
-        open={!!editingVendor}
-        onOpenChange={(open) => !open && setEditingVendor(null)}
+        open={!!editing}
+        onOpenChange={(o) => !o && setEditing(null)}
         onSuccess={() => {
-          setEditingVendor(null);
-          fetchVendors();
+          setEditing(null);
+          load();
         }}
-        vendor={editingVendor}
+        vendor={editing}
       />
-
-      <CreateVendorDialog
-        open={showCreateDialog}
-        onOpenChange={setShowCreateDialog}
-        onVendorCreated={fetchVendors}
+      <NewPurchaseBillDialog
+        open={!!billFor}
+        onOpenChange={(o) => !o && setBillFor(null)}
+        onSaved={() => {
+          setBillFor(null);
+          load();
+        }}
+        defaultVendorId={billFor?._id}
       />
-    </div>
+    </PageShell>
   );
 }

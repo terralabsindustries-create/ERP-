@@ -1,20 +1,28 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
+/*
+  The key every session token is signed with. In production it must come from
+  the environment — with a built-in default anyone could forge a login — so the
+  server refuses to run without it. Development and tests may use a local key.
+*/
+const DEV_SECRET = 'dev_only_jwt_secret_not_for_production';
+if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') {
+  throw new Error('JWT_SECRET is not set. Add a long random JWT_SECRET to the server environment before starting in production.');
+}
+const jwtSecret = () => process.env.JWT_SECRET || DEV_SECRET;
+
 // Protect routes - ensure user is authenticated
 const protect = async (req, res, next) => {
+  // Already authenticated earlier in this request (the module guards in app.js
+  // run protect before the router's own protect).
+  if (req.user) return next();
+
   try {
     let token;
     
-    // Get token from header
-    console.log('🔐 Auth middleware called for:', req.method, req.path);
-    console.log('🔐 Authorization header:', req.headers.authorization);
-    
     if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
       token = req.headers.authorization.split(' ')[1];
-      console.log('🔐 Token extracted:', token ? 'YES' : 'NO');
-    } else {
-      console.log('🔐 No Authorization header or not Bearer token');
     }
     
     if (!token) {
@@ -25,8 +33,7 @@ const protect = async (req, res, next) => {
     }
     
     // Verify token
-    const jwtSecret = process.env.JWT_SECRET || 'fallback_jwt_secret_change_in_production_12345';
-    const decoded = jwt.verify(token, jwtSecret);
+    const decoded = jwt.verify(token, jwtSecret());
     
     // Get user from token
     const user = await User.findById(decoded.userId).select('-password');
@@ -99,7 +106,7 @@ const optionalAuth = async (req, res, next) => {
     }
     
     if (token) {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const decoded = jwt.verify(token, jwtSecret());
       const user = await User.findById(decoded.userId).select('-password');
       
       if (user && user.isActive) {
@@ -116,8 +123,7 @@ const optionalAuth = async (req, res, next) => {
 
 // Generate JWT token
 const generateToken = (userId) => {
-  const jwtSecret = process.env.JWT_SECRET || 'fallback_jwt_secret_change_in_production_12345';
-  return jwt.sign({ userId }, jwtSecret, {
+  return jwt.sign({ userId }, jwtSecret(), {
     expiresIn: process.env.JWT_EXPIRE || '24h'
   });
 };

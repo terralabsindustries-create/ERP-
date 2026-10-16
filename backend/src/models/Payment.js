@@ -99,16 +99,23 @@ const paymentSchema = new mongoose.Schema({
   },
   collectedBy: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Staff'
+    ref: 'User' // logins are the staff
   },
   collectedByName: {
     type: String,
     trim: true
   },
+  // Who recorded the payment.
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
+  },
+  // The business the payment belongs to. Older payments lack it and are
+  // matched through the login that recorded them.
+  dataScope: {
+    type: String,
+    index: true
   }
 }, {
   timestamps: true

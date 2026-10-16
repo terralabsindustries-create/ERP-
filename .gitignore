@@ -36,3 +36,7 @@ backend/node_modules/
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Private keys and generated customer PDFs never go to git
+*.pem
+backend/public/temp/

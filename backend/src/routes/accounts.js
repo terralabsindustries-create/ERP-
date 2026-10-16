@@ -1,13 +1,27 @@
 const express = require('express');
 const { body, query } = require('express-validator');
 const AccountTransaction = require('../models/AccountTransaction');
-const AccountBalance = require('../models/AccountBalance');
 const Cheque = require('../models/Cheque');
 const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/requirePermission');
+const { orgUserFilter } = require('../utils/accessScope');
 
 const router = express.Router();
+router.use('/reconciliation', require('./bankReconciliation'));
+
+// The ledger belongs to the business. Deriving the displayed balance from
+// completed entries also repairs balances that older per-login snapshots missed.
+const accountScope = (user) => orgUserFilter(user);
+async function currentBalances(scope) {
+  const rows = await AccountTransaction.getAccountBalances(scope);
+  const balanceOf = (type) => rows.find((row) => row.accountType === type)?.balance || 0;
+  return { balances: rows, currentBalances: {
+    cashBalance: balanceOf('cash'), bankBalance: balanceOf('bank'),
+    creditCardBalance: balanceOf('credit_card'), loanBalance: balanceOf('loan'),
+    investmentBalance: balanceOf('investment')
+  } };
+}
 
 // Validation rules
 const transactionValidation = [
@@ -20,7 +34,8 @@ const transactionValidation = [
     .withMessage('Invalid payment method'),
   body('accountType').isIn(['cash', 'bank', 'credit_card', 'loan', 'investment'])
     .withMessage('Account type is required (cash, bank, credit_card, loan or investment)'),
-  body('accountName').notEmpty().withMessage('Account name is required').trim()
+  body('accountName').notEmpty().withMessage('Account name is required').trim(),
+  body('postedAt').optional().isISO8601().withMessage('Invalid transaction date')
 ];
 
 // @route   GET /api/accounts/transactions
@@ -49,7 +64,7 @@ router.get('/transactions', protect, [
     } = req.query;
     
     // Build query (always scoped to authenticated user)
-    const query = { userId: req.user._id };
+    const query = await accountScope(req.user);
     
     if (transactionType && transactionType !== 'all') {
       query.transactionType = transactionType;
@@ -124,23 +139,11 @@ router.get('/transactions', protect, [
 // @access  Private
 router.get('/balances', protect, async (req, res) => {
   try {
-    const balances = await AccountTransaction.getAccountBalances(req.user._id);
-    
-    // Get current account balances from AccountBalance model
-    const currentBalances = await AccountBalance.findOne({ userId: req.user._id });
+    const data = await currentBalances(await accountScope(req.user));
     
     res.status(200).json({
       status: 'success',
-      data: {
-        balances,
-        currentBalances: currentBalances || {
-          cashBalance: 0,
-          bankBalance: 0,
-          creditCardBalance: 0,
-          loanBalance: 0,
-          investmentBalance: 0
-        }
-      }
+      data
     });
     
   } catch (error) {
@@ -257,12 +260,9 @@ router.post('/transactions', protect, requirePermission('Accounts: Create & Edit
 
     console.log('💾 Transaction data to save:', transactionData);
 
-    const transaction = await AccountTransaction.create(transactionData);
+    const transaction = await AccountTransaction.createWithUniqueNumber(transactionData);
     console.log('✅ Transaction created:', transaction._id);
 
-    // Update account balances
-    await updateAccountBalances(req.user._id, transaction);
-    console.log('✅ Account balances updated');
 
     // Populate the created transaction
     const populatedTransaction = await AccountTransaction.findById(transaction._id)
@@ -334,9 +334,13 @@ router.post('/transactions', protect, requirePermission('Accounts: Create & Edit
 // @access  Private
 router.put('/transactions/:id', protect, requirePermission('Accounts: Create & Edit'), transactionValidation, async (req, res) => {
   try {
+    const scope = await accountScope(req.user);
+    const existing = await AccountTransaction.findOne({ _id: req.params.id, ...scope }).select('reconciled');
+    if (existing?.reconciled) return res.status(409).json({ status: 'error', message: 'A reconciled entry cannot be edited.' });
+    const { reconciled, reconciledAt, reconciledBy, reconciliationId, userId, ...changes } = req.body;
     const transaction = await AccountTransaction.findOneAndUpdate(
-      { _id: req.params.id, userId: req.user._id },
-      req.body,
+      { _id: req.params.id, ...scope, reconciled: { $ne: true } },
+      changes,
       { new: true, runValidators: true }
     )
       .populate('customerId', 'name email phone')
@@ -351,8 +355,6 @@ router.put('/transactions/:id', protect, requirePermission('Accounts: Create & E
       });
     }
     
-    // Update account balances
-    await updateAccountBalances(req.user._id, transaction);
 
     ActivityLog.logActivity({
       action: 'Account Transaction Updated',
@@ -391,9 +393,13 @@ router.put('/transactions/:id', protect, requirePermission('Accounts: Create & E
 // @access  Private
 router.delete('/transactions/:id', protect, requirePermission('Accounts: Delete'), async (req, res) => {
   try {
+    const scope = await accountScope(req.user);
+    const existing = await AccountTransaction.findOne({ _id: req.params.id, ...scope }).select('reconciled');
+    if (existing?.reconciled) return res.status(409).json({ status: 'error', message: 'A reconciled entry cannot be deleted.' });
     const transaction = await AccountTransaction.findOneAndDelete({
       _id: req.params.id,
-      userId: req.user._id
+      ...scope,
+      reconciled: { $ne: true }
     });
     
     if (!transaction) {
@@ -403,8 +409,6 @@ router.delete('/transactions/:id', protect, requirePermission('Accounts: Delete'
       });
     }
     
-    // Update account balances (reverse the transaction)
-    await reverseAccountBalances(req.user._id, transaction);
 
     ActivityLog.logActivity({
       action: 'Account Transaction Deleted',
@@ -439,7 +443,7 @@ router.delete('/transactions/:id', protect, requirePermission('Accounts: Delete'
 // @access  Private
 router.get('/stats/summary', protect, async (req, res) => {
   try {
-    const stats = await AccountTransaction.getTransactionStats(req.user._id);
+    const stats = await AccountTransaction.getTransactionStats(await accountScope(req.user));
     
     res.status(200).json({
       status: 'success',
@@ -490,7 +494,7 @@ router.get('/reports/summary', protect, async (req, res) => {
 
     // Sum income/expense for the period (completed transactions only)
     const agg = await AccountTransaction.aggregate([
-      { $match: { userId: req.user._id, status: 'completed', createdAt: { $gte: start } } },
+      { $match: { ...(await accountScope(req.user)), status: 'completed', createdAt: { $gte: start } } },
       { $group: { _id: '$transactionType', total: { $sum: '$amount' } } }
     ]);
 
@@ -503,9 +507,9 @@ router.get('/reports/summary', protect, async (req, res) => {
     const netProfit = totalIncome - totalExpenses;
 
     // Current balances (point-in-time, not period-bound)
-    const currentBalances = await AccountBalance.findOne({ userId: req.user._id });
-    const cashBalance = currentBalances?.cashBalance || 0;
-    const bankBalance = currentBalances?.bankBalance || 0;
+    const { currentBalances: balance } = await currentBalances(await accountScope(req.user));
+    const cashBalance = balance.cashBalance;
+    const bankBalance = balance.bankBalance;
 
     res.status(200).json({
       status: 'success',
@@ -551,7 +555,7 @@ router.get('/ledger', protect, [
     } = req.query;
     
     // Build query - scoped per admin
-    const query = { status: 'completed', userId: req.user._id };
+    const query = { status: 'completed', ...(await accountScope(req.user)) };
     
     if (accountType && accountType !== 'all') {
       query.accountType = accountType;
@@ -602,86 +606,6 @@ router.get('/ledger', protect, [
 });
 
 // Helper function to update account balances
-async function updateAccountBalances(userId, transaction) {
-  try {
-    let accountBalance = await AccountBalance.findOne({ userId });
-    
-    if (!accountBalance) {
-      accountBalance = new AccountBalance({
-        userId,
-        cashBalance: 0,
-        bankBalance: 0,
-        creditCardBalance: 0,
-        loanBalance: 0,
-        investmentBalance: 0
-      });
-    }
-    
-    const amount = transaction.amount;
-    const isIncome = ['income', 'opening_balance'].includes(transaction.transactionType);
-    const isExpense = ['expense', 'transfer'].includes(transaction.transactionType);
-    
-    // Update balances based on account type and transaction type
-    switch (transaction.accountType) {
-      case 'cash':
-        accountBalance.cashBalance += isIncome ? amount : -amount;
-        break;
-      case 'bank':
-        accountBalance.bankBalance += isIncome ? amount : -amount;
-        break;
-      case 'credit_card':
-        accountBalance.creditCardBalance += isIncome ? -amount : amount;
-        break;
-      case 'loan':
-        accountBalance.loanBalance += isIncome ? -amount : amount;
-        break;
-      case 'investment':
-        accountBalance.investmentBalance += isIncome ? amount : -amount;
-        break;
-    }
-    
-    await accountBalance.save();
-  } catch (error) {
-    console.error('Error updating account balances:', error);
-  }
-}
-
-// Helper function to reverse account balances
-async function reverseAccountBalances(userId, transaction) {
-  try {
-    let accountBalance = await AccountBalance.findOne({ userId });
-    
-    if (!accountBalance) return;
-    
-    const amount = transaction.amount;
-    const isIncome = ['income', 'opening_balance'].includes(transaction.transactionType);
-    const isExpense = ['expense', 'transfer'].includes(transaction.transactionType);
-    
-    // Reverse balances based on account type and transaction type
-    switch (transaction.accountType) {
-      case 'cash':
-        accountBalance.cashBalance += isIncome ? -amount : amount;
-        break;
-      case 'bank':
-        accountBalance.bankBalance += isIncome ? -amount : amount;
-        break;
-      case 'credit_card':
-        accountBalance.creditCardBalance += isIncome ? amount : -amount;
-        break;
-      case 'loan':
-        accountBalance.loanBalance += isIncome ? amount : -amount;
-        break;
-      case 'investment':
-        accountBalance.investmentBalance += isIncome ? -amount : amount;
-        break;
-    }
-    
-    await accountBalance.save();
-  } catch (error) {
-    console.error('Error reversing account balances:', error);
-  }
-}
-
 // @route   GET /api/accounts/reports/export
 // @desc    Export account report to Excel with invoice data
 // @access  Private
@@ -734,7 +658,7 @@ router.get('/reports/export', protect, [
     const transactionQuery = {
       createdAt: { $gte: start, $lte: end },
       status: 'completed',
-      userId: req.user._id
+      ...(await accountScope(req.user))
     };
 
     const transactions = await AccountTransaction.find(transactionQuery)

@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const mongoose = require('mongoose');
 
 const portalSessionSchema = new mongoose.Schema({
@@ -16,12 +17,18 @@ const portalSessionSchema = new mongoose.Schema({
     required: true
   },
   customerEmail: {
-    type: String,
-    required: true
+    type: String
   },
   customerPhone: {
-    type: String,
-    required: true
+    type: String
+  },
+  // The portal link this session was opened with; revoking it ends the session.
+  accessId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PortalAccess'
+  },
+  expiresAt: {
+    type: Date
   },
   loginTime: {
     type: Date,
@@ -57,33 +64,49 @@ portalSessionSchema.index({ customerId: 1 });
 portalSessionSchema.index({ userId: 1 });
 portalSessionSchema.index({ isActive: 1 });
 
-// Static method to create session
-portalSessionSchema.statics.createSession = async function (customerId, customerData, userId, ipAddress, userAgent) {
-  const sessionId = `portal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+// Sessions are identified by a random token held by the customer's browser;
+// only its SHA-256 hash is stored in `sessionId`.
+const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
+const SESSION_HOURS = 12;
 
-  return this.create({
-    sessionId,
-    customerId,
-    customerName: customerData.name,
-    customerEmail: customerData.email,
-    customerPhone: customerData.phone,
+/** Open a session for a customer from a validated portal link. Returns { session, token }. */
+portalSessionSchema.statics.openSession = async function ({ access, customer, ipAddress, userAgent }) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  const linkEnds = access.expiresAt.getTime();
+  const session = await this.create({
+    sessionId: hashToken(token),
+    customerId: customer._id,
+    customerName: customer.name,
+    customerEmail: customer.email,
+    customerPhone: customer.phone,
+    accessId: access._id,
+    expiresAt: new Date(Math.min(Date.now() + SESSION_HOURS * 3600 * 1000, linkEnds)),
     ipAddress,
     userAgent,
-    userId
+    userId: access.userId
   });
+  return { session, token };
 };
 
-// Static method to validate session
-portalSessionSchema.statics.validateSession = async function (sessionId) {
-  const session = await this.findOne({ sessionId, isActive: true });
+/**
+ * The active session for a token, or null. A session is only valid while it is
+ * active, unexpired, and its portal link has not been revoked or expired.
+ * Sessions from the old phone-number login have no link and are refused.
+ */
+portalSessionSchema.statics.validateSession = async function (token) {
+  if (!token) return null;
+  const session = await this.findOne({ sessionId: hashToken(token), isActive: true });
+  if (!session || !session.accessId || !session.expiresAt || session.expiresAt < new Date()) return null;
 
-  if (session) {
-    // Update last activity
-    session.lastActivity = new Date();
-    await session.save();
-  }
+  const PortalAccess = mongoose.model('PortalAccess');
+  const access = await PortalAccess.findById(session.accessId);
+  if (!access || access.revokedAt || access.expiresAt < new Date()) return null;
 
+  session.lastActivity = new Date();
+  await session.save();
   return session;
 };
+
+portalSessionSchema.statics.hashToken = hashToken;
 
 module.exports = mongoose.model('PortalSession', portalSessionSchema);

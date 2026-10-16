@@ -4,7 +4,7 @@ const Employee = require('../models/Employee');
 const User = require('../models/User');
 const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
-const { requirePermission } = require('../middleware/requirePermission');
+const { requirePermission, userCan } = require('../middleware/requirePermission');
 
 const router = express.Router();
 router.use(protect);
@@ -16,6 +16,17 @@ function scopeFilter(req, extra = {}) {
     : { userId: req.user._id };
   return { ...base, ...extra };
 }
+
+// Salary figures are only for logins with Human Resources: View Salary or
+// Payroll; everyone else with HR access sees the employee without them.
+const canSeeSalary = (user) => userCan(user, 'Human Resources: View Salary') || userCan(user, 'Payroll');
+const SALARY_FIELDS = ['salary', 'deductions', 'grossSalary', 'netSalary', 'totalDeductions', 'bankDetails'];
+const present = (req, employee) => {
+  if (!employee || canSeeSalary(req.user)) return employee;
+  const obj = typeof employee.toJSON === 'function' ? employee.toJSON() : { ...employee };
+  for (const f of SALARY_FIELDS) delete obj[f];
+  return obj;
+};
 
 // GET /api/hr/employees - list with optional search/status/department filters
 router.get('/', async (req, res) => {
@@ -36,7 +47,7 @@ router.get('/', async (req, res) => {
 
     const employees = await Employee.find(filter).sort({ createdAt: -1 });
 
-    res.json({ status: 'success', data: { employees } });
+    res.json({ status: 'success', data: { employees: employees.map((e) => present(req, e)) } });
   } catch (error) {
     console.error('List employees error:', error);
     res.status(500).json({ status: 'error', message: 'Server error while fetching employees' });
@@ -58,7 +69,7 @@ router.get('/stats/summary', async (req, res) => {
         active: active.length,
         inactive: employees.length - active.length,
         departments: departments.length,
-        monthlyPayroll
+        monthlyPayroll: canSeeSalary(req.user) ? monthlyPayroll : null
       }
     });
   } catch (error) {
@@ -72,7 +83,7 @@ router.get('/:id', async (req, res) => {
   try {
     const employee = await Employee.findOne(scopeFilter(req, { _id: req.params.id }));
     if (!employee) return res.status(404).json({ status: 'error', message: 'Employee not found' });
-    res.json({ status: 'success', data: { employee } });
+    res.json({ status: 'success', data: { employee: present(req, employee) } });
   } catch (error) {
     console.error('Get employee error:', error);
     res.status(500).json({ status: 'error', message: 'Server error while fetching employee' });

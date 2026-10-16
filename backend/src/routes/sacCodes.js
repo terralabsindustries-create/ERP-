@@ -1,5 +1,6 @@
 const express = require('express');
 const { body, query } = require('express-validator');
+const { validate } = require('../middleware/validate');
 const SacCode = require('../models/SacCode');
 const { protect } = require('../middleware/auth');
 
@@ -17,15 +18,17 @@ const sacValidation = [
 // @desc    Get all SAC codes for the authenticated user
 // @access  Private
 router.get('/', protect, [
-  query('search').optional().trim(),
-  query('category').optional().trim(),
-  query('page').optional().isInt({ min: 1 }),
-  query('limit').optional().isInt({ min: 1, max: 100 })
-], async (req, res) => {
+  query('search').optional({ values: 'falsy' }).trim(),
+  query('category').optional({ values: 'falsy' }).trim(),
+  query('gstRate').optional({ values: 'falsy' }).isFloat({ min: 0, max: 100 }),
+  query('page').optional({ values: 'falsy' }).isInt({ min: 1 }),
+  query('limit').optional({ values: 'falsy' }).isInt({ min: 1, max: 100 })
+], validate, async (req, res) => {
   try {
     const {
       search,
       category,
+      gstRate,
       page = 1,
       limit = 20,
       sortBy = 'sacCode',
@@ -39,6 +42,11 @@ router.get('/', protect, [
 
     if (category && category !== 'all') {
       query.category = category;
+    }
+
+    // One GST rate, e.g. the 18% codes.
+    if (gstRate !== undefined && gstRate !== '') {
+      query.gstRate = Number(gstRate);
     }
 
     if (search) {
@@ -126,7 +134,7 @@ router.get('/:id', protect, async (req, res) => {
 // @route   POST /api/sac-codes
 // @desc    Create new SAC code
 // @access  Private
-router.post('/', protect, sacValidation, async (req, res) => {
+router.post('/', protect, sacValidation, validate, async (req, res) => {
   try {
     // Check if SAC code already exists in user's dataScope
     const existingQuery = req.user.dataScope
@@ -193,7 +201,7 @@ router.post('/', protect, sacValidation, async (req, res) => {
 // @route   PUT /api/sac-codes/:id
 // @desc    Update SAC code
 // @access  Private
-router.put('/:id', protect, sacValidation, async (req, res) => {
+router.put('/:id', protect, sacValidation, validate, async (req, res) => {
   try {
     // Build query - filter by dataScope or userId for data isolation
     const findQuery = req.user.dataScope

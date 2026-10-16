@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { STAGES } from "@/lib/printWorkflow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,6 +13,7 @@ import { Search, User, Mail, Phone, Plus, Trash2 } from "lucide-react";
 import { JobInvoiceDialog } from "./JobInvoiceDialog";
 import { ViewInvoiceDialog } from "../invoices/ViewInvoiceDialog";
 import { UNITS_OF_MEASUREMENT } from "../inventory/CreateItemDialog";
+import { localDate } from "@/lib/format";
 
 const AREA_UNITS = ['sqft', 'sqm'];
 
@@ -38,6 +40,33 @@ interface InvoiceItem {
   totalSquareFeet?: number;
 }
 
+// Saved on the job as `printSpecs` (backend/src/models/Job.js)
+const EMPTY_PRINT_SPECS = {
+  quantity: "",
+  printSize: "",
+  paperType: "",
+  colorType: "color",
+  lamination: "",
+  binding: "",
+};
+
+const PAPER_SUGGESTIONS = [
+  "Maplitho 70 GSM",
+  "Maplitho 90 GSM",
+  "Art Paper 130 GSM",
+  "Art Paper 170 GSM",
+  "Art Card 250 GSM",
+  "Art Card 300 GSM",
+  "Art Card 350 GSM",
+  "Chromo Paper (sticker)",
+  "NCR 2-ply",
+  "NCR 3-ply",
+  "Kraft 120 GSM",
+  "Duplex Board 300 GSM",
+  "Flex 10 oz",
+  "Vinyl (self-adhesive)",
+];
+
 interface DesignCharge {
   amount: number;
   sacCode?: string;
@@ -63,7 +92,8 @@ export function CreateJobDialog({
     dueDate: "",
     notes: "",
     items: [] as InvoiceItem[],
-    designCharge: null as DesignCharge | null
+    designCharge: null as DesignCharge | null,
+    printSpecs: { ...EMPTY_PRINT_SPECS }
   });
 
   const [loading, setLoading] = useState(false);
@@ -121,9 +151,7 @@ export function CreateJobDialog({
   const fetchCustomers = async () => {
     try {
       console.log('fetchCustomers is working')
-      const response = await apiClient.getCustomer();
-      console.log('response', response)
-      setSafeCustomers(response.customers || []);
+      setSafeCustomers(await apiClient.listAll('/customers', 'customers'));
     } catch (error) {
       console.error('Error fetching customers:', error);
     }
@@ -132,7 +160,7 @@ export function CreateJobDialog({
   const fetchInventoryItems = async () => {
     try {
       const response = await apiClient.getInventory();
-      const inventoryData = Array.isArray(response) ? response : (response?.inventory || []);
+      const inventoryData = Array.isArray(response) ? response : ((response as { inventory?: unknown[] })?.inventory || []);
       setInventoryItems(inventoryData);
       console.log('🔍 Inventory items loaded:', inventoryData.length);
     } catch (error) {
@@ -142,9 +170,7 @@ export function CreateJobDialog({
 
   const fetchHsnCodes = async () => {
     try {
-      const response = await apiClient.getHsnCodes();
-      console.log('response', response)
-      const hsnData = Array.isArray(response) ? response : (response?.hsnCodes || []);
+      const hsnData = await apiClient.listAll('/hsn-codes', 'hsnCodes');
       setHsnCodes(hsnData);
       console.log('🔍 HSN codes loaded:', hsnData.length);
     } catch (error) {
@@ -154,9 +180,7 @@ export function CreateJobDialog({
 
   const fetchSacCodes = async () => {
     try {
-      const response = await apiClient.getSacCodes();
-      console.log('SAC codes response:', response);
-      const sacData = Array.isArray(response) ? response : (response?.sacCodes || []);
+      const sacData = await apiClient.listAll('/sac-codes', 'sacCodes');
       setSacCodes(sacData);
       console.log('🔍 SAC codes loaded:', sacData.length);
     } catch (error) {
@@ -323,7 +347,7 @@ export function CreateJobDialog({
         description: "Customer has been created successfully",
       });
 
-      const newCustomer = response?.customer || response;
+      const newCustomer = (response as { customer?: unknown })?.customer || response;
       console.log('newCustomer', newCustomer)
       setSafeCustomers(prev => [...prev, newCustomer]);
 
@@ -360,73 +384,32 @@ export function CreateJobDialog({
     try {
       console.log('📄 Generating invoice directly for job:', createdJob._id);
 
-      // Calculate totals from job items and design charge
-      let itemsSubtotal = 0;
-      let itemsTax = 0;
-
-      if (createdJob.items && Array.isArray(createdJob.items)) {
-        createdJob.items.forEach((item: any) => {
-          // Calculate subtotal based on itemType (Square Feet vs Numbers)
-          const itemSubtotal = item.itemType === 'Square Feet'
-            ? (item.totalSquareFeet || 0) * item.unitPrice
-            : (item.quantity || 0) * item.unitPrice;
-
-          itemsSubtotal += itemSubtotal;
-
-          // Calculate tax from subtotal
-          const itemTax = itemSubtotal * (item.gstRate / 100);
-          itemsTax += itemTax;
-        });
-      }
-
-      let designChargeSubtotal = 0;
-      let designChargeTax = 0;
-
-      if (createdJob.designCharge) {
-        designChargeSubtotal = createdJob.designCharge.amount || 0;
-        designChargeTax = createdJob.designCharge.totalAmount - createdJob.designCharge.amount || 0;
-      }
-
-      const grandSubtotal = itemsSubtotal + designChargeSubtotal;
-      const grandTax = itemsTax + designChargeTax;
-      const grandTotal = grandSubtotal + grandTax;
-
-      // Build invoice items - preserve all necessary fields for backend
+      // The server prices every line (area lines: length × width × pieces ×
+      // rate) and adds the design charge before tax. Invoices carry no GST.
       const items = (createdJob.items || []).map((item: any) => ({
         itemName: item.itemName,
-        itemType: item.itemType || 'Numbers',  // Pass itemType to backend
+        description: item.description || '',
+        itemType: item.itemType || 'Numbers',
         unit: item.unit || 'pieces',
-        quantity: item.quantity || 0,  // Send actual quantity field
-        totalSquareFeet: item.totalSquareFeet || 0,  // Send actual totalSquareFeet field
-        length: item.length || 0,  // Send length for square feet items
-        width: item.width || 0,    // Send width for square feet items
-        unitPrice: item.unitPrice,
-        hsnCode: item.hsnCode,
-        gstRate: item.gstRate,
-        itemTotal: item.itemTotal || 0
+        quantity: item.quantity || 0,
+        length: item.length || 0,
+        width: item.width || 0,
+        unitPrice: item.unitPrice
       }));
 
       // Set invoice date to today and due date to 30 days from today
-      const invoiceDate = new Date().toISOString().split('T')[0];
-      const dueDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const invoiceDate = localDate();
+      const dueDate = localDate(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
       const invoiceData = {
         jobId: createdJob._id,
         customerId: createdJob.customerId,
-        billingType: 'b2c',
         invoiceDate: invoiceDate,
         dueDate: dueDate,
         items: items,
-        designCharge: createdJob.designCharge || null,
-        subtotal: grandSubtotal,
-        taxAmount: grandTax,
-        totalAmount: grandTotal,
+        designCharge: createdJob.designCharge?.amount || 0,
         paymentTerms: 'Immediate',
-        notes: createdJob.notes || '',
-        po_reference: '',
-        terms_conditions: '',
-        isInterstate: false,
-        customerGSTIN: ''
+        notes: createdJob.notes || ''
       };
 
       console.log('📄 Creating invoice with data:', invoiceData);
@@ -434,13 +417,14 @@ export function CreateJobDialog({
       const response = await apiClient.createInvoice(invoiceData);
       console.log('📄 Invoice created:', response);
 
-      const invoiceId = response?.invoice?._id || response?._id || response?.id;
+      const created = response as { invoice?: { _id?: string; id?: string }; _id?: string; id?: string };
+      const invoiceId = created?.invoice?._id || created?._id || created?.id;
 
       if (!invoiceId) {
         throw new Error('Invoice ID not received from server');
       }
 
-      setCreatedInvoice(response?.invoice || response);
+      setCreatedInvoice(created?.invoice || created);
 
       toast({
         title: "Success",
@@ -601,7 +585,11 @@ export function CreateJobDialog({
         dueDate: formData.dueDate || null,
         notes: formData.notes.trim(),
         items: formData.items,
-        designCharge: formData.designCharge
+        designCharge: formData.designCharge,
+        printSpecs: {
+          ...formData.printSpecs,
+          quantity: Number(formData.printSpecs.quantity) || 1,
+        }
       };
 
       console.log('📋 Creating job with data:', jobData);
@@ -615,7 +603,7 @@ export function CreateJobDialog({
       });
 
       // Store the created job and show invoice question dialog
-      const createdJobData = response?.job || response;
+      const createdJobData = (response as { job?: { _id?: string; id?: string } })?.job || (response as { _id?: string; id?: string });
       setCreatedJob(createdJobData);
       setCreatedJobId(createdJobData?._id || createdJobData?.id);
       setShowInvoiceQuestion(true);
@@ -631,7 +619,8 @@ export function CreateJobDialog({
         dueDate: "",
         notes: "",
         items: [],
-        designCharge: null
+        designCharge: null,
+        printSpecs: { ...EMPTY_PRINT_SPECS }
       });
       setSelectedCustomer(null);
       setSearchQuery("");
@@ -655,7 +644,10 @@ export function CreateJobDialog({
     customer.name?.toLowerCase() === searchQuery.trim().toLowerCase()
   );
   const shouldShowAddCustomerButton = searchQuery.trim() !== "" && filteredCustomers.length === 0 && !customerExists;
-  const today = new Date().toISOString().split("T")[0];
+  const today = localDate();
+
+  const setPrintSpec = (field: keyof typeof EMPTY_PRINT_SPECS, value: string) =>
+    setFormData(prev => ({ ...prev, printSpecs: { ...prev.printSpecs, [field]: value } }));
 
   return (
     <>
@@ -663,12 +655,12 @@ export function CreateJobDialog({
         <DialogContent className="w-[95vw] max-w-[1200px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-lg sm:text-xl">
-              {preselectedCustomer ? `Quick Job for ${preselectedCustomer.name}` : 'Quick Job'}
+              {preselectedCustomer ? `New Job Ticket for ${preselectedCustomer.name}` : 'New Job Ticket'}
             </DialogTitle>
             <DialogDescription className="text-sm">
               {preselectedCustomer
                 ? `Create a new job for ${preselectedCustomer.name}. Customer is pre-selected and cannot be changed.`
-                : 'Create a new job for a customer.'
+                : 'Capture the order, its print specification and the delivery date.'
               }
             </DialogDescription>
           </DialogHeader>
@@ -962,16 +954,9 @@ export function CreateJobDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="inquiry">Inquiry</SelectItem>
-                    <SelectItem value="quotation_sent">Quotation Sent</SelectItem>
-                    <SelectItem value="quotation_approved">Quotation Approved</SelectItem>
-                    <SelectItem value="design_in_progress">Design In Progress</SelectItem>
-                    <SelectItem value="design_approved">Design Approved</SelectItem>
-                    <SelectItem value="production_ready">Production Ready</SelectItem>
-                    <SelectItem value="ready_for_print">Ready for Print</SelectItem>
-                    <SelectItem value="quality_check">Quality Check</SelectItem>
-                    <SelectItem value="completed">Completed</SelectItem>
-                    <SelectItem value="delivered">Delivered</SelectItem>
+                    {STAGES.map((stage) => (
+                      <SelectItem key={stage.status} value={stage.status}>{stage.label}</SelectItem>
+                    ))}
                     <SelectItem value="cancelled">Cancelled</SelectItem>
                   </SelectContent>
                 </Select>
@@ -993,7 +978,7 @@ export function CreateJobDialog({
 
               <div className="space-y-2">
                 <Label htmlFor="dueDate">Bill Date</Label>
-                <div className="p-3 bg-gray-50 border rounded-md">
+                <div className="p-3 bg-muted/50 border rounded-md">
                   <div className="text-sm font-medium">
                     {new Date(today).toLocaleDateString('en-IN', {
                       year: 'numeric',
@@ -1004,6 +989,91 @@ export function CreateJobDialog({
                   <div className="text-xs text-muted-foreground mt-1">
                     (Auto-set to today's date)
                   </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Print specification — what the shop floor needs on the job ticket */}
+            <div className="rounded-lg border bg-muted/30 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <div className="text-sm font-semibold">Print specification</div>
+                <div className="text-xs text-muted-foreground">Shown on the production board</div>
+              </div>
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="specQuantity" className="text-xs">Quantity</Label>
+                  <Input
+                    id="specQuantity"
+                    type="number"
+                    min="1"
+                    value={formData.printSpecs.quantity}
+                    onChange={(e) => setPrintSpec("quantity", e.target.value)}
+                    placeholder="e.g. 1000"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="specSize" className="text-xs">Finished size</Label>
+                  <Input
+                    id="specSize"
+                    value={formData.printSpecs.printSize}
+                    onChange={(e) => setPrintSpec("printSize", e.target.value)}
+                    placeholder="e.g. A4, 3.5×2 in"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="specPaper" className="text-xs">Paper / stock</Label>
+                  <Input
+                    id="specPaper"
+                    list="paper-stock-options"
+                    value={formData.printSpecs.paperType}
+                    onChange={(e) => setPrintSpec("paperType", e.target.value)}
+                    placeholder="e.g. Art Card 300 GSM"
+                  />
+                  <datalist id="paper-stock-options">
+                    {PAPER_SUGGESTIONS.map((p) => <option key={p} value={p} />)}
+                  </datalist>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Colours</Label>
+                  <Select value={formData.printSpecs.colorType} onValueChange={(v) => setPrintSpec("colorType", v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="color">Colour (CMYK)</SelectItem>
+                      <SelectItem value="black_white">Black & white</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Lamination</Label>
+                  <Select value={formData.printSpecs.lamination || "none"} onValueChange={(v) => setPrintSpec("lamination", v === "none" ? "" : v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {["none", "Gloss", "Matt", "Velvet", "Gloss + Spot UV", "Matt + Spot UV"].map((v) => (
+                        <SelectItem key={v} value={v}>{v === "none" ? "None" : v}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Binding / finishing</Label>
+                  <Select value={formData.printSpecs.binding || "none"} onValueChange={(v) => setPrintSpec("binding", v === "none" ? "" : v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {["none", "Centre stitch", "Perfect bind", "Wiro", "Spiral", "Pad / gum", "Hard case", "Die-cut", "Fold"].map((v) => (
+                        <SelectItem key={v} value={v}>{v === "none" ? "None" : v}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="col-span-2 space-y-1.5 md:col-span-1">
+                  <Label htmlFor="deliveryDue" className="text-xs">Delivery due</Label>
+                  <Input
+                    id="deliveryDue"
+                    type="date"
+                    min={today}
+                    value={formData.dueDate}
+                    onChange={(e) => setFormData(prev => ({ ...prev, dueDate: e.target.value }))}
+                  />
                 </div>
               </div>
             </div>
@@ -1025,7 +1095,7 @@ export function CreateJobDialog({
                 <CardTitle className="flex items-center justify-between text-base">
                   <span>Inventory Items</span>
                   <Button type="button" onClick={addItem} size="sm">
-                    <Plus className="h-4 w-4 mr-2" />
+                    <Plus className="h-4 w-4" />
                     Add Item
                   </Button>
                 </CardTitle>
@@ -1055,7 +1125,7 @@ export function CreateJobDialog({
                         />
                         {item.itemName && inventoryItems.length > 0 && showSuggestions[index] && (
                           <div
-                            className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto"
+                            className="absolute z-10 w-full mt-1 bg-card border border-border rounded-md shadow-lg max-h-60 overflow-y-auto"
                             onMouseDown={(e) => e.preventDefault()}
                           >
                             {inventoryItems
@@ -1066,7 +1136,7 @@ export function CreateJobDialog({
                               .map((invItem) => (
                                 <div
                                   key={invItem._id || invItem.id}
-                                  className="p-3 hover:bg-gray-50 cursor-pointer border-b last:border-b-0"
+                                  className="p-3 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
                                   onMouseDown={(e) => {
                                     e.preventDefault();
                                     setFormData(prev => {
@@ -1111,12 +1181,12 @@ export function CreateJobDialog({
                                 >
                                   <div className="flex justify-between items-start">
                                     <div>
-                                      <div className="font-medium text-gray-900">{invItem.name}</div>
-                                      <div className="text-sm text-gray-600">{invItem.description || 'No description'}</div>
+                                      <div className="font-medium text-foreground">{invItem.name}</div>
+                                      <div className="text-sm text-muted-foreground">{invItem.description || 'No description'}</div>
                                     </div>
                                     <div className="text-right text-sm">
                                       <div className="font-medium">₹{invItem.unitCost || 0}</div>
-                                      <div className="text-gray-500">Stock: {invItem.quantity || 0}</div>
+                                      <div className="text-muted-foreground">Stock: {invItem.quantity || 0}</div>
                                     </div>
                                   </div>
                                 </div>
@@ -1126,7 +1196,7 @@ export function CreateJobDialog({
                                 inv.name.toLowerCase().includes(item.itemName.toLowerCase())
                               ).length === 0 && (
                               <div className="p-4 text-center border-b">
-                                <div className="text-gray-500 text-sm">
+                                <div className="text-muted-foreground text-sm">
                                   Inventory does not have this item
                                 </div>
                               </div>
@@ -1135,13 +1205,13 @@ export function CreateJobDialog({
                         )}
                         {item.itemName && inventoryItems.length === 0 && showSuggestions[index] && (
                           <div
-                            className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg p-4 text-center"
+                            className="absolute z-10 w-full mt-1 bg-card border border-border rounded-md shadow-lg p-4 text-center"
                             onMouseDown={(e) => e.preventDefault()}
                           >
-                            <div className="text-gray-500 text-sm">
+                            <div className="text-muted-foreground text-sm">
                               No inventory items available
                             </div>
-                            <div className="text-gray-400 text-xs mt-1">
+                            <div className="text-muted-foreground/70 text-xs mt-1">
                               Add items in Inventory section first
                             </div>
                           </div>
@@ -1336,7 +1406,7 @@ export function CreateJobDialog({
                       }}
                       size="sm"
                     >
-                      <Plus className="h-4 w-4 mr-2" />
+                      <Plus className="h-4 w-4" />
                       Add Design Charge
                     </Button>
                   ) : (
@@ -1351,7 +1421,7 @@ export function CreateJobDialog({
                         }));
                       }}
                     >
-                      <Trash2 className="h-4 w-4 mr-2" />
+                      <Trash2 className="h-4 w-4" />
                       Remove
                     </Button>
                   )}
@@ -1465,7 +1535,7 @@ export function CreateJobDialog({
             </Card>
 
             {/* Total Amount Summary */}
-            <Card className="bg-gray-50">
+            <Card className="bg-muted/50">
               <CardContent className="pt-6">
                 <div className="space-y-3">
                   {formData.items.length > 0 && (
@@ -1601,12 +1671,12 @@ export function CreateJobDialog({
           onOpenChange={(open) => {
             setShowInvoiceView(open);
             if (!open) {
-              setCreatedInvoice(null);
               onOpenChange(false);
               onJobCreated();
             }
           }}
           invoice={createdInvoice}
+          onInvoiceUpdated={() => undefined}
         />
       )}
     </>

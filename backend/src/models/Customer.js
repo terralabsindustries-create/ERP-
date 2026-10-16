@@ -136,21 +136,6 @@ customerSchema.index({ name: 'text', company: 'text' });
 customerSchema.index({ userId: 1, status: 1 });
 customerSchema.index({ dataScope: 1, status: 1 });
 
-// Virtual for customer wallet
-customerSchema.virtual('wallet', {
-  ref: 'CustomerWallet',
-  localField: '_id',
-  foreignField: 'customerId',
-  justOne: true
-});
-
-// Virtual for customer activity logs
-customerSchema.virtual('activityLogs', {
-  ref: 'CustomerActivityLog',
-  localField: '_id',
-  foreignField: 'customerId'
-});
-
 // Methods
 customerSchema.methods.updateStats = async function() {
   const Job = mongoose.model('Job');

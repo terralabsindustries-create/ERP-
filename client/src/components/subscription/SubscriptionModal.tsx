@@ -69,7 +69,16 @@ const plans = [
   },
 ];
 
-export function SubscriptionModal({ open, onClose, userPlan = 'free', onPaymentSuccess }) {
+interface SubscriptionModalProps {
+  open: boolean;
+  onClose: () => void;
+  userPlan?: string;
+  onPaymentSuccess?: () => Promise<void> | void;
+  /** The signed-in person, to prefill Razorpay checkout. */
+  payer?: { fullName?: string; email?: string; phone?: string } | null;
+}
+
+export function SubscriptionModal({ open, onClose, userPlan = 'free', onPaymentSuccess, payer }: SubscriptionModalProps) {
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
   const { toast } = useToast();
 
@@ -86,22 +95,8 @@ export function SubscriptionModal({ open, onClose, userPlan = 'free', onPaymentS
     setLoadingPlan(planName);
     
     try {
-      // Get plan pricing
-      const planPrices: Record<string, number> = {
-        'STARTER': 2499,
-        'GROWTH': 4999,
-        'ENTERPRISE': 9999,
-      };
-
-      const amount = planPrices[planName];
-      
-      // Create Razorpay order
-      const order = await createRazorpayOrder({
-        planName,
-        amount,
-        currency: 'INR',
-        userId: 'current-user', // Replace with actual user ID
-      });
+      // The server prices the plan and ties the order to this login.
+      const order = await createRazorpayOrder({ planName, amount: 0 });
 
       // Close this Radix dialog before opening Razorpay. While a modal Radix Dialog
       // is open it traps focus and sets `pointer-events: none` on the page body, which
@@ -159,14 +154,11 @@ export function SubscriptionModal({ open, onClose, userPlan = 'free', onPaymentS
           }
         },
         prefill: {
-          name: 'John Doe', // Replace with actual user name
-          email: 'john@example.com', // Replace with actual user email
-          contact: '9999999999', // Replace with actual user phone
+          name: payer?.fullName || '',
+          email: payer?.email || '',
+          contact: payer?.phone || '',
         },
-        notes: {
-          planName,
-          userId: 'current-user', // Replace with actual user ID
-        },
+        notes: { planName },
         theme: {
           color: '#e8735a',
         },
@@ -515,21 +507,5 @@ export function SubscriptionModal({ open, onClose, userPlan = 'free', onPaymentS
         </div>
       </DialogContent>
     </Dialog>
-  );
-}
-
-// Preview wrapper
-export default function App() {
-  const [open, setOpen] = useState(true);
-  return (
-    <div style={{ background: '#0a0a0a', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <button
-        onClick={() => setOpen(true)}
-        style={{ background: '#e8735a', color: '#fff', border: 'none', padding: '12px 24px', borderRadius: '8px', cursor: 'pointer', fontWeight: 700 }}
-      >
-        Open Pricing Modal
-      </button>
-      <SubscriptionModal open={open} onClose={() => setOpen(false)} userPlan="free" canClose={false} />
-    </div>
   );
 }

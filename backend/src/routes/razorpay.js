@@ -7,6 +7,9 @@ const router = express.Router();
 
 // Map frontend plan names to the User subscription plan enum
 const PLAN_MAP = { STARTER: 'basic', GROWTH: 'premium', ENTERPRISE: 'enterprise' };
+// Monthly price of each plan in rupees. The server sets the amount of every
+// order from this table, so a client cannot pay less for a bigger plan.
+const PLAN_PRICES = { STARTER: 2499, GROWTH: 4999, ENTERPRISE: 9999 };
 
 const RZP_KEY_ID = process.env.RAZORPAY_KEY_ID || '';
 const RZP_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '';
@@ -26,8 +29,8 @@ const razorpay = new Razorpay({
   key_secret: RZP_KEY_SECRET || PLACEHOLDER_SECRET,
 });
 
-// Create order endpoint
-router.post('/create-order', async (req, res) => {
+// Create order endpoint (signed in: the order is tied to the login paying)
+router.post('/create-order', protect, async (req, res) => {
   try {
     if (!razorpayConfigured) {
       return res.status(503).json({
@@ -37,20 +40,16 @@ router.post('/create-order', async (req, res) => {
       });
     }
 
-    const { amount, currency, receipt, notes } = req.body;
-
-    if (!amount || Number(amount) < 100) {
-      return res.status(400).json({
-        success: false,
-        message: 'A valid amount (in paise, minimum 100) is required',
-      });
+    const planName = String(req.body.planName || req.body.notes?.planName || '').toUpperCase();
+    if (!PLAN_PRICES[planName]) {
+      return res.status(400).json({ success: false, message: 'Choose a valid plan' });
     }
 
     const options = {
-      amount: Math.round(Number(amount)), // Amount in paise
-      currency: currency || 'INR',
-      receipt: receipt,
-      notes: notes,
+      amount: PLAN_PRICES[planName] * 100, // paise
+      currency: 'INR',
+      receipt: `sub_${String(req.user._id).slice(-8)}_${Date.now()}`,
+      notes: { planName, userId: String(req.user._id) },
     };
 
     const order = await razorpay.orders.create(options);
@@ -89,7 +88,13 @@ router.post('/create-order', async (req, res) => {
 // Verify payment endpoint (authenticated — activates the user's subscription)
 router.post('/verify-payment', protect, async (req, res) => {
   try {
+    if (!razorpayConfigured) {
+      return res.status(503).json({ success: false, message: 'Payment gateway is not configured', code: 'RAZORPAY_NOT_CONFIGURED' });
+    }
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, planName } = req.body;
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res.status(400).json({ success: false, message: 'Payment details are missing' });
+    }
 
     // Generate signature
     const generated_signature = crypto
@@ -102,8 +107,28 @@ router.post('/verify-payment', protect, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid signature' });
     }
 
+    // The plan comes from the order the server created, never from the
+    // request: it must belong to this login and be paid in full.
+    let order;
+    try {
+      order = await razorpay.orders.fetch(razorpay_order_id);
+    } catch (fetchErr) {
+      console.error('Could not fetch Razorpay order for verification:', fetchErr.message);
+      return res.status(502).json({ success: false, message: 'Could not confirm the payment with Razorpay. Please contact support.' });
+    }
+    const orderPlan = String(order?.notes?.planName || '').toUpperCase();
+    if (String(order?.notes?.userId) !== String(req.user._id) || !PLAN_PRICES[orderPlan] || Number(order.amount) !== PLAN_PRICES[orderPlan] * 100) {
+      return res.status(400).json({ success: false, message: 'This payment does not match your order' });
+    }
+    if (order.status !== 'paid' && Number(order.amount_paid) < Number(order.amount)) {
+      return res.status(400).json({ success: false, message: 'The payment has not been completed yet' });
+    }
+    if (planName && String(planName).toUpperCase() !== orderPlan) {
+      console.warn(`verify-payment: client sent plan ${planName} for an order of ${orderPlan}; using the order`);
+    }
+
     // Activate the subscription for the authenticated user
-    const plan = PLAN_MAP[planName] || 'basic';
+    const plan = PLAN_MAP[orderPlan] || 'basic';
     const startDate = new Date();
     const endDate = new Date(startDate);
     endDate.setDate(endDate.getDate() + 30); // 30-day cycle
@@ -144,10 +169,14 @@ router.post('/verify-payment', protect, async (req, res) => {
 });
 
 // Get order status
-router.get('/order/:orderId', async (req, res) => {
+router.get('/order/:orderId', protect, async (req, res) => {
   try {
     const { orderId } = req.params;
     const order = await razorpay.orders.fetch(orderId);
+    // Only the login that placed the order may look it up.
+    if (String(order?.notes?.userId) !== String(req.user._id)) {
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
 
     res.json({
       success: true,
@@ -164,10 +193,13 @@ router.get('/order/:orderId', async (req, res) => {
 });
 
 // Get payment details
-router.get('/payment/:paymentId', async (req, res) => {
+router.get('/payment/:paymentId', protect, async (req, res) => {
   try {
     const { paymentId } = req.params;
     const payment = await razorpay.payments.fetch(paymentId);
+    if (String(payment?.notes?.userId) !== String(req.user._id)) {
+      return res.status(404).json({ success: false, message: 'Payment not found' });
+    }
 
     res.json({
       success: true,

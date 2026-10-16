@@ -1,39 +1,42 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
-import { Separator } from "@/components/ui/separator";
-import { Plus, Trash2, FileText, Send, Link, UserPlus } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
+import { Plus, Trash2, FileText, Link, UserPlus } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
 import { CreateCustomerDialog } from "@/components/customers/CreateCustomerDialog";
-import { UNITS_OF_MEASUREMENT } from "@/components/inventory/CreateItemDialog";
+import { BillingTotals } from "@/components/billing/BillingTotals";
+import { LinePricingFields } from "@/components/billing/LinePricingFields";
+import { lineAmount, lineDraftFrom, lineInput, lineProblem, newLineDraft, type LineDraft } from "@/components/billing/lineDraft";
+import { documentTotals, isAreaUnit } from "@/lib/billing";
 
-interface QuotationItem {
+/** A line to start a quotation with, in the quotation API's terms (e.g. from the print estimator). */
+export interface QuotationItem {
   item_name: string;
   description: string;
   quantity: number;
-  unit_price: number;
-  tax_rate: number;
-  /** Stock on hand when the item was picked, for the availability hint. */
-  available_stock?: number;
-  /** The unit that stock is counted in, which the quoted unit may differ from. */
-  stock_unit?: string;
   unit: string;
+  unit_price: number;
+  length?: number;
+  width?: number;
 }
 
-interface CreateQuotationDialogProps {
+export interface CreateQuotationDialogProps {
   children: React.ReactNode;
   onQuotationCreated?: () => void;
+  /** Line items to start the quotation with, e.g. from the print estimator. */
+  initialItems?: QuotationItem[];
 }
 
-export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQuotationDialogProps) => {
+/** A line being quoted, with the stock on hand when an inventory item was picked. */
+type QuoteLine = LineDraft & { availableStock?: number; stockUnit?: string };
+
+export const CreateQuotationDialog = ({ children, onQuotationCreated, initialItems }: CreateQuotationDialogProps) => {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [customers, setCustomers] = useState<any[]>([]);
@@ -43,18 +46,17 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
   // non-empty item_name, not an inventory match.
   const [openItemSuggestion, setOpenItemSuggestion] = useState<number | null>(null);
   const [inventoryItems, setInventoryItems] = useState<any[]>([]);
-  const [formData, setFormData] = useState({
+  const emptyForm = {
     customer_id: "",
     valid_until: "",
-    gst_type: "non_gst" as "gst" | "non_gst",
-    is_interstate: false,
     payment_link: "",
     terms_conditions: "",
     notes: "",
-  });
-  const [items, setItems] = useState<QuotationItem[]>([
-    { item_name: "", description: "", quantity: 1, unit: "pieces", unit_price: 0, tax_rate: 18 }
-  ]);
+    design_charge: "",
+  };
+  const [formData, setFormData] = useState(emptyForm);
+  const nextKey = useRef(1);
+  const [items, setItems] = useState<QuoteLine[]>(() => [newLineDraft(nextKey.current++)]);
 
   const { toast } = useToast();
 
@@ -70,9 +72,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
 
   const fetchCustomers = async () => {
     try {
-      const response = await apiClient.getCustomer();
-      const customersData =
-        (response as any)?.data?.customers || (response as any)?.customers || [];
+      const customersData = await apiClient.listAll('/customers', 'customers');
       setCustomers(customersData);
     } catch (error) {
       console.error('Error fetching customers:', error);
@@ -99,23 +99,26 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
     }
   };
 
-  // Picking an inventory item fills in its price, description and GST rate, and
-  // records the stock on hand so the row can warn when the quantity exceeds it.
+  const updateItem = (index: number, patch: Partial<QuoteLine>) => {
+    setItems((list) => list.map((item, i) => (i === index ? { ...item, ...patch } : item)));
+  };
+
+  // Picking an inventory item fills in its price and description, prices it by
+  // size when the stock is counted in sq ft / sq m, and records the stock on
+  // hand so the row can warn when the quantity exceeds it.
   const selectInventoryItem = (index: number, name: string) => {
     const inv = inventoryItems.find((i) => i.name === name);
     if (!inv) return;
-    const updated = [...items];
-    updated[index] = {
-      ...updated[index],
-      item_name: inv.name,
-      description: inv.description || updated[index].description,
-      unit_price: inv.unitCost || 0,
-      tax_rate: inv.gstRate ?? updated[index].tax_rate,
-      available_stock: inv.quantity ?? 0,
-      stock_unit: inv.unit || 'pieces',
-      unit: inv.unit || 'pieces',
-    };
-    setItems(updated);
+    const unit = inv.unit || 'pieces';
+    updateItem(index, {
+      itemName: inv.name,
+      description: inv.description || items[index].description,
+      unitPrice: String(inv.unitCost || 0),
+      unit,
+      pricing: isAreaUnit(unit) ? unit : 'unit',
+      availableStock: inv.quantity ?? 0,
+      stockUnit: unit,
+    });
   };
 
   // The dialog just created a customer inline — add it to the list without a
@@ -129,7 +132,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
   };
 
   const addItem = () => {
-    setItems([...items, { item_name: "", description: "", quantity: 1, unit: "pieces", unit_price: 0, tax_rate: 18 }]);
+    setItems([...items, newLineDraft(nextKey.current++)]);
   };
 
   const removeItem = (index: number) => {
@@ -138,29 +141,50 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
     }
   };
 
-  const updateItem = (index: number, field: keyof QuotationItem, value: any) => {
-    const updatedItems = [...items];
-    updatedItems[index] = { ...updatedItems[index], [field]: value };
-    setItems(updatedItems);
-  };
+  // Same arithmetic as the server: lines (area × pieces × rate for sized
+  // lines) plus the design charge. No GST.
+  const totals = documentTotals(items.map(lineAmount), Number(formData.design_charge) || 0);
 
-  const calculateTotals = () => {
-    const subtotal = items.reduce((sum, item) => sum + (item.quantity * item.unit_price), 0);
-    const taxAmount = formData.gst_type === "gst" ? 
-      items.reduce((sum, item) => sum + (item.quantity * item.unit_price * item.tax_rate) / 100, 0) : 0;
-    const total = subtotal + taxAmount;
-    
-    return { subtotal, taxAmount, total };
+  /** Stock used by a line, in the stock's own unit: its total area for a sized line, else its quantity. */
+  const stockNeeded = (item: QuoteLine) => {
+    const input = lineInput(item);
+    return item.pricing !== 'unit' && item.stockUnit === item.pricing
+      ? input.quantity * input.length * input.width
+      : input.quantity;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
 
+    const problem = !formData.customer_id
+      ? "Select a customer."
+      : items.map((l, i) => lineProblem(l, i + 1)).find(Boolean) || "";
+    if (problem) {
+      toast({ title: "Check the quotation", description: problem, variant: "destructive" });
+      return;
+    }
+
+    setLoading(true);
     try {
       await apiClient.createQuotation({
-        ...formData,
-        items,
+        customer_id: formData.customer_id,
+        valid_until: formData.valid_until,
+        payment_link: formData.payment_link,
+        terms_conditions: formData.terms_conditions,
+        notes: formData.notes,
+        design_charge: Number(formData.design_charge) || 0,
+        items: items.map((l) => {
+          const p = lineInput(l);
+          return {
+            item_name: l.itemName.trim(),
+            description: l.description.trim(),
+            quantity: p.quantity,
+            unit: p.unit,
+            unit_price: p.unitPrice,
+            length: p.length,
+            width: p.width
+          };
+        }),
       });
 
       toast({
@@ -169,22 +193,14 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
       });
 
       setOpen(false);
-      setFormData({
-        customer_id: "",
-        valid_until: "",
-        gst_type: "non_gst",
-        is_interstate: false,
-        payment_link: "",
-        terms_conditions: "",
-        notes: "",
-      });
-      setItems([{ item_name: "", description: "", quantity: 1, unit: "pieces", unit_price: 0, tax_rate: 18 }]);
+      setFormData(emptyForm);
+      setItems([newLineDraft(nextKey.current++)]);
       onQuotationCreated?.();
     } catch (error) {
       console.error('Error creating quotation:', error);
       toast({
         title: "Error",
-        description: "Failed to create quotation",
+        description: error instanceof Error ? error.message : "Failed to create quotation",
         variant: "destructive",
       });
     } finally {
@@ -192,12 +208,23 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
     }
   };
 
-  const { subtotal, taxAmount, total } = calculateTotals();
-
   return (
     <>
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild onClick={() => { fetchCustomers(); fetchInventoryItems(); }}>
+      <DialogTrigger
+        asChild
+        onClick={() => {
+          fetchCustomers();
+          fetchInventoryItems();
+          if (initialItems?.length) {
+            setItems(
+              initialItems.map((i) =>
+                lineDraftFrom(nextKey.current++, { itemName: i.item_name, description: i.description, quantity: i.quantity, unit: i.unit, unitPrice: i.unit_price, length: i.length, width: i.width })
+              )
+            );
+          }
+        }}
+      >
         {children}
       </DialogTrigger>
       <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
@@ -229,7 +256,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
               // simply stays put. No real selection ever needs to be "".
               if (value) setFormData(prev => ({ ...prev, customer_id: value }));
             }}>
-              <SelectTrigger>
+              <SelectTrigger id="customer">
                 {/* Radix only resolves a label from a SelectItem that has been
                     mounted at least once (i.e. the dropdown was opened while
                     it was selected). Selecting a customer programmatically —
@@ -257,65 +284,32 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
             </Select>
           </div>
 
-          {/* GST Settings */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {/* Valid Until */}
             <div className="space-y-2">
-              <Label htmlFor="gst_type">GST Type</Label>
-              <Select value={formData.gst_type} onValueChange={(value: "gst" | "non_gst") => 
-                setFormData(prev => ({ ...prev, gst_type: value }))
-              }>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="non_gst">Non-GST</SelectItem>
-                  <SelectItem value="gst">GST</SelectItem>
-                </SelectContent>
-              </Select>
+              <Label htmlFor="valid_until">Valid Until</Label>
+              <Input
+                id="valid_until"
+                type="date"
+                value={formData.valid_until}
+                onChange={(e) => setFormData(prev => ({ ...prev, valid_until: e.target.value }))}
+              />
             </div>
-            
-            {formData.gst_type === "gst" && (
-              <div className="space-y-2">
-                <Label htmlFor="interstate">Transaction Type</Label>
-                <Select value={formData.is_interstate ? "interstate" : "intrastate"} onValueChange={(value) => 
-                  setFormData(prev => ({ ...prev, is_interstate: value === "interstate" }))
-                }>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="intrastate">Intrastate</SelectItem>
-                    <SelectItem value="interstate">Interstate</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-          </div>
 
-          {/* Valid Until */}
-          <div className="space-y-2">
-            <Label htmlFor="valid_until">Valid Until</Label>
-            <Input
-              id="valid_until"
-              type="date"
-              value={formData.valid_until}
-              onChange={(e) => setFormData(prev => ({ ...prev, valid_until: e.target.value }))}
-            />
-          </div>
-
-          {/* Payment Link */}
-          <div className="space-y-2">
-            <Label htmlFor="payment_link" className="flex items-center gap-2">
-              <Link className="w-4 h-4" />
-              Payment Link
-            </Label>
-            <Input
-              id="payment_link"
-              type="url"
-              value={formData.payment_link}
-              onChange={(e) => setFormData(prev => ({ ...prev, payment_link: e.target.value }))}
-              placeholder="https://razorpay.com/... (optional)"
-            />
+            {/* Payment Link */}
+            <div className="space-y-2">
+              <Label htmlFor="payment_link" className="flex items-center gap-2">
+                <Link className="w-4 h-4" />
+                Payment Link
+              </Label>
+              <Input
+                id="payment_link"
+                type="url"
+                value={formData.payment_link}
+                onChange={(e) => setFormData(prev => ({ ...prev, payment_link: e.target.value }))}
+                placeholder="https://razorpay.com/... (optional)"
+              />
+            </div>
           </div>
 
           {/* Items */}
@@ -328,16 +322,20 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
               </Button>
             </div>
 
-            {items.map((item, index) => (
-              <Card key={index}>
-                <CardContent className="p-4">
-                  <div className="grid grid-cols-7 gap-4 items-end">
-                    <div className="space-y-2 relative item-name-autocomplete">
-                      <Label>Item Name</Label>
+            {items.map((item, index) => {
+              const needed = stockNeeded(item);
+              const sameUnit = item.stockUnit === (item.pricing === 'unit' ? item.unit : item.pricing);
+              return (
+              <Card key={item.key}>
+                <CardContent className="space-y-3 p-4">
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                    <div className="space-y-1 relative item-name-autocomplete">
+                      <Label htmlFor={`quote-item-${item.key}`} className="text-xs">Item Name</Label>
                       <Input
-                        value={item.item_name}
+                        id={`quote-item-${item.key}`}
+                        value={item.itemName}
                         onChange={(e) => {
-                          updateItem(index, 'item_name', e.target.value);
+                          updateItem(index, { itemName: e.target.value });
                           setOpenItemSuggestion(index);
                         }}
                         onFocus={() => setOpenItemSuggestion(index)}
@@ -345,7 +343,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
                         autoComplete="off"
                       />
                       {openItemSuggestion === index && (() => {
-                        const query = item.item_name.trim().toLowerCase();
+                        const query = item.itemName.trim().toLowerCase();
                         const matches = query
                           ? inventoryItems.filter((inv) => inv.name.toLowerCase().includes(query)).slice(0, 8)
                           : inventoryItems.slice(0, 8);
@@ -369,7 +367,6 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
                                   <span className="font-medium">{invItem.name}</span>
                                   <span className="text-xs text-muted-foreground">
                                     Stock: {invItem.quantity ?? 0}{invItem.unit ? ` ${invItem.unit}` : ''} | ₹{invItem.unitCost ?? 0}
-                                    {invItem.gstRate != null ? ` | GST ${invItem.gstRate}%` : ''}
                                   </span>
                                 </button>
                               ))
@@ -379,85 +376,31 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
                       })()}
                     </div>
 
-                    <div className="space-y-2">
-                      <Label>Description</Label>
+                    <div className="space-y-1">
+                      <Label htmlFor={`quote-desc-${item.key}`} className="text-xs">Description</Label>
                       <Input
+                        id={`quote-desc-${item.key}`}
                         value={item.description}
-                        onChange={(e) => updateItem(index, 'description', e.target.value)}
+                        onChange={(e) => updateItem(index, { description: e.target.value })}
                         placeholder="Description"
                       />
                     </div>
-                    
-                    <div className="space-y-2">
-                      <Label>Quantity</Label>
-                      <Input
-                        type="number"
-                        step="any"
-                        value={item.quantity}
-                        onChange={(e) => updateItem(index, 'quantity', parseFloat(e.target.value) || 0)}
-                        placeholder="1"
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label>Unit</Label>
-                      <Select value={item.unit} onValueChange={(value) => updateItem(index, 'unit', value)}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select unit" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {UNITS_OF_MEASUREMENT.map((unit) => (
-                            <SelectItem key={unit.value} value={unit.value}>
-                              {unit.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    
-                    <div className="space-y-2">
-                      <Label>Unit Price</Label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={item.unit_price}
-                        onChange={(e) => updateItem(index, 'unit_price', parseFloat(e.target.value) || 0)}
-                        placeholder="0.00"
-                      />
-                    </div>
-                    
-                    {formData.gst_type === "gst" && (
-                      <div className="space-y-2">
-                        <Label>Tax Rate (%)</Label>
-                        <Input
-                          type="number"
-                          value={item.tax_rate}
-                          onChange={(e) => updateItem(index, 'tax_rate', parseFloat(e.target.value) || 0)}
-                          placeholder="18"
-                        />
-                      </div>
-                    )}
-                    
-                    <div className="space-y-2">
-                      <Label>Total</Label>
-                      <div className="h-10 px-3 py-2 border rounded-md bg-muted flex items-center">
-                        ₹{(item.quantity * item.unit_price + (formData.gst_type === "gst" ? (item.quantity * item.unit_price * item.tax_rate) / 100 : 0)).toFixed(2)}
-                      </div>
-                    </div>
                   </div>
 
-                  {item.available_stock !== undefined && (
-                    <div className="mt-2 text-xs">
-                      {item.unit === item.stock_unit && item.quantity > item.available_stock ? (
+                  <LinePricingFields line={item} idPrefix={`quote-${item.key}`} onChange={(patch) => updateItem(index, patch)} />
+
+                  {item.availableStock !== undefined && (
+                    <div className="text-xs">
+                      {sameUnit && needed > item.availableStock ? (
                         // A quotation does not reserve or deduct stock, so this is a
                         // heads-up for the person quoting, not a blocker.
-                        <span className="text-amber-600 font-medium">
-                          Quoting {item.quantity} but only {item.available_stock}
-                          {item.stock_unit ? ` ${item.stock_unit}` : ''} in stock — you may need to restock before invoicing.
+                        <span className="text-warning-strong font-medium">
+                          Quoting {needed} but only {item.availableStock}
+                          {item.stockUnit ? ` ${item.stockUnit}` : ''} in stock — you may need to restock before invoicing.
                         </span>
                       ) : (
                         <span className="text-muted-foreground">
-                          In stock: {item.available_stock}{item.stock_unit ? ` ${item.stock_unit}` : ''}
+                          In stock: {item.availableStock}{item.stockUnit ? ` ${item.stockUnit}` : ''}
                         </span>
                       )}
                     </div>
@@ -469,7 +412,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
                       variant="outline"
                       size="sm"
                       onClick={() => removeItem(index)}
-                      className="mt-2 gap-2"
+                      className="gap-2"
                     >
                       <Trash2 className="w-4 h-4" />
                       Remove
@@ -477,29 +420,20 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated }: CreateQu
                   )}
                 </CardContent>
               </Card>
-            ))}
+              );
+            })}
           </div>
 
           {/* Totals */}
           <Card>
             <CardContent className="p-4">
-              <div className="space-y-2">
-                <div className="flex justify-between">
-                  <span>Subtotal:</span>
-                  <span>₹{subtotal.toFixed(2)}</span>
-                </div>
-                {formData.gst_type === "gst" && (
-                  <div className="flex justify-between">
-                    <span>Tax:</span>
-                    <span>₹{taxAmount.toFixed(2)}</span>
-                  </div>
-                )}
-                <Separator />
-                <div className="flex justify-between font-semibold">
-                  <span>Total:</span>
-                  <span>₹{total.toFixed(2)}</span>
-                </div>
-              </div>
+              <BillingTotals
+                totals={totals}
+                idPrefix="quotation"
+                designCharge={formData.design_charge}
+                onDesignChargeChange={(v) => setFormData((prev) => ({ ...prev, design_charge: v }))}
+                totalLabel="Quotation total"
+              />
             </CardContent>
           </Card>
 

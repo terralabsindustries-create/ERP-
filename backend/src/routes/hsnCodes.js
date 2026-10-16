@@ -1,5 +1,6 @@
 const express = require('express');
 const { body, query } = require('express-validator');
+const { validate } = require('../middleware/validate');
 const HsnCode = require('../models/HsnCode');
 const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
@@ -11,7 +12,7 @@ const hsnValidation = [
   body('hsnCode').notEmpty().withMessage('HSN Code is required').trim(),
   body('description').notEmpty().withMessage('Description is required').trim(),
   body('gstRate').isFloat({ min: 0, max: 100 }).withMessage('GST Rate must be between 0 and 100'),
-  body('type').optional().isIn(['product', 'service', 'both']),
+  body('type').optional({ values: 'falsy' }).isIn(['product', 'service', 'both']),
   body('category').notEmpty().withMessage('Category is required').trim()
 ];
 
@@ -19,16 +20,18 @@ const hsnValidation = [
 // @desc    Get all HSN codes for the authenticated user
 // @access  Private
 router.get('/', protect, [
-  query('search').optional().trim(),
-  query('category').optional().trim(),
-  query('type').optional().isIn(['product', 'service', 'both']),
-  query('page').optional().isInt({ min: 1 }),
-  query('limit').optional().isInt({ min: 1, max: 100 })
-], async (req, res) => {
+  query('search').optional({ values: 'falsy' }).trim(),
+  query('category').optional({ values: 'falsy' }).trim(),
+  query('type').optional({ values: 'falsy' }).isIn(['all', 'product', 'service', 'both']),
+  query('gstRate').optional({ values: 'falsy' }).isFloat({ min: 0, max: 100 }),
+  query('page').optional({ values: 'falsy' }).isInt({ min: 1 }),
+  query('limit').optional({ values: 'falsy' }).isInt({ min: 1, max: 100 })
+], validate, async (req, res) => {
   try {
     const {
       search,
       category,
+      gstRate,
       type,
       page = 1,
       limit = 20,
@@ -43,6 +46,11 @@ router.get('/', protect, [
 
     if (category && category !== 'all') {
       query.category = category;
+    }
+
+    // One GST rate, e.g. the 18% codes.
+    if (gstRate !== undefined && gstRate !== '') {
+      query.gstRate = Number(gstRate);
     }
 
     if (type && type !== 'all') {
@@ -134,7 +142,7 @@ router.get('/:id', protect, async (req, res) => {
 // @route   POST /api/hsn-codes
 // @desc    Create new HSN code
 // @access  Private
-router.post('/', protect, hsnValidation, async (req, res) => {
+router.post('/', protect, hsnValidation, validate, async (req, res) => {
   try {
     // Check if HSN code already exists in user's dataScope
     const existingQuery = req.user.dataScope
@@ -196,7 +204,7 @@ router.post('/', protect, hsnValidation, async (req, res) => {
 // @route   PUT /api/hsn-codes/:id
 // @desc    Update HSN code
 // @access  Private
-router.put('/:id', protect, hsnValidation, async (req, res) => {
+router.put('/:id', protect, hsnValidation, validate, async (req, res) => {
   try {
     // Build query - filter by dataScope or userId for data isolation
     const findQuery = req.user.dataScope

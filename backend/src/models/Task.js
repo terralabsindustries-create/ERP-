@@ -175,11 +175,38 @@ const taskSchema = new mongoose.Schema({
       enum: ['text', 'number', 'date', 'boolean', 'select']
     }
   }],
+  // Who created (assigned) the task. Kept as `userId` for compatibility.
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
-  }
+  },
+  // The business the task belongs to. Older tasks lack it and are matched
+  // through their creator instead (see routes/tasks.js).
+  dataScope: {
+    type: String,
+    index: true
+  },
+  // What happened to the task and who did it: the hand-off trail between the
+  // person who assigns work and the person doing it.
+  history: [{
+    type: {
+      type: String,
+      enum: ['created', 'reassigned', 'status', 'progress', 'updated', 'comment']
+    },
+    from: String,
+    to: String,
+    note: String,
+    by: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    byName: String,
+    at: {
+      type: Date,
+      default: Date.now
+    }
+  }]
 }, {
   timestamps: true
 });
@@ -192,6 +219,7 @@ taskSchema.index({ userId: 1, dueDate: 1 });
 taskSchema.index({ userId: 1, createdAt: -1 });
 taskSchema.index({ parentTask: 1 });
 taskSchema.index({ jobId: 1 });
+taskSchema.index({ dataScope: 1, assignedTo: 1, status: 1 });
 
 // Virtual for overdue status
 taskSchema.virtual('isOverdue').get(function() {

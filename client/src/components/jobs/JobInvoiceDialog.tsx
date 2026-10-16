@@ -18,14 +18,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
-import { useAuth } from "@/contexts/AuthContext";
-import { Receipt, FileText } from "lucide-react";
+import { Receipt } from "lucide-react";
+import { lineDraftFrom, lineInput } from "@/components/billing/lineDraft";
+import { describeArea, documentTotals, priceLine } from "@/lib/billing";
+import { formatINR } from "@/lib/format";
 
 interface JobInvoiceDialogProps {
   children: React.ReactNode;
@@ -36,77 +35,28 @@ interface JobInvoiceDialogProps {
 export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoiceDialogProps) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [billingType, setBillingType] = useState<"b2b" | "b2c">("b2c");
   const [customers, setCustomers] = useState<any[]>([]);
   const { toast } = useToast();
-  const { user } = useAuth();
 
   const [formData, setFormData] = useState({
     customer_id: job.customerId || "",
-    customer_gstin: "",
-    is_interstate: false,
     payment_terms: "Immediate",
     notes: "",
     po_reference: "",
     terms_conditions: ""
   });
 
-  // Calculate invoice totals from job items and design charge
-  const calculateInvoiceTotals = () => {
-    let itemsSubtotal = 0;
-    let itemsTax = 0;
-    let itemsTotal = 0;
-
-    // Sum all invoice items
-    if (job.items && Array.isArray(job.items) && job.items.length > 0) {
-      job.items.forEach((item: any) => {
-        // Calculate subtotal based on itemType (Square Feet vs Numbers)
-        const itemSubtotal = item.itemType === 'Square Feet'
-          ? (item.totalSquareFeet || 0) * item.unitPrice
-          : (item.quantity || 0) * item.unitPrice;
-
-        itemsSubtotal += itemSubtotal;
-
-        // Calculate tax from subtotal, not from itemTotal (which already includes tax)
-        const itemTax = itemSubtotal * (item.gstRate / 100);
-        itemsTax += itemTax;
-
-        // Total = subtotal + tax
-        itemsTotal += itemSubtotal + itemTax;
-      });
-    }
-
-    // Add design charge if exists
-    let designChargeSubtotal = 0;
-    let designChargeTax = 0;
-    let designChargeTotal = 0;
-
-    if (job.designCharge) {
-      designChargeSubtotal = job.designCharge.amount || 0;
-      designChargeTax = job.designCharge.totalAmount - job.designCharge.amount || 0;
-      designChargeTotal = job.designCharge.totalAmount || 0;
-    }
-
-    return {
-      itemsSubtotal,
-      itemsTax,
-      itemsTotal,
-      designChargeSubtotal,
-      designChargeTax,
-      designChargeTotal,
-      grandSubtotal: itemsSubtotal + designChargeSubtotal,
-      grandTax: itemsTax + designChargeTax,
-      grandTotal: itemsTotal + designChargeTotal
-    };
-  };
+  // The job's lines as the invoice will price them (lib/billing.ts, the same
+  // as the server): area lines are length × width × pieces × rate. The design
+  // charge comes across before tax; invoices carry no GST.
+  const lines = (job.items || []).map((item: any, i: number) => lineInput(lineDraftFrom(i, item)));
+  const designCharge = job.designCharge?.amount || 0;
+  const totals = documentTotals(lines.map((l: ReturnType<typeof lineInput>) => priceLine(l).amount), designCharge);
 
   // Fetch customers when dialog opens
   const fetchCustomers = async () => {
     try {
-      const response = await apiClient.getCustomer();
-      console.log('👥 Customers fetched:', response);
-      // Ensure we always have an array
-      const customersData = Array.isArray(response) ? response : (response?.customers || []);
+      const customersData = await apiClient.listAll('/customers', 'customers');
       console.log('👥 Processed customers:', customersData);
       setCustomers(customersData);
       
@@ -125,45 +75,6 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
     }
   };
 
-  const generateInvoiceNumber = async () => {
-    try {
-      const response = await apiClient.getInvoiceStats();
-      console.log('📄 Invoice number generated:', response);
-      return response.invoiceNumber || "INV-001";
-    } catch (error) {
-      console.error('Error generating invoice number:', error);
-      return "INV-001";
-    }
-  };
-
-  const calculateTaxAmounts = (subtotal: number, taxRate: number, isInterstate: boolean) => {
-    const totalTax = (subtotal * taxRate) / 100;
-    
-    if (isInterstate) {
-      return {
-        cgst_rate: 0,
-        sgst_rate: 0,
-        igst_rate: taxRate,
-        cgst_amount: 0,
-        sgst_amount: 0,
-        igst_amount: totalTax,
-        total_tax: totalTax
-      };
-    } else {
-      const cgst_sgst_rate = taxRate / 2;
-      const cgst_sgst_amount = totalTax / 2;
-      return {
-        cgst_rate: cgst_sgst_rate,
-        sgst_rate: cgst_sgst_rate,
-        igst_rate: 0,
-        cgst_amount: cgst_sgst_amount,
-        sgst_amount: cgst_sgst_amount,
-        igst_amount: 0,
-        total_tax: totalTax
-      };
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -179,38 +90,21 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
     setLoading(true);
 
     try {
-      const totals = calculateInvoiceTotals();
-
-      // Build invoice data from job items - preserve all necessary fields for backend
-      const items = (job.items || []).map((item: any) => ({
+      // The server prices every line again; only quantities, sizes and rates are sent.
+      const items = (job.items || []).map((item: any, i: number) => ({
         itemName: item.itemName,
-        itemType: item.itemType || 'Numbers',  // Pass itemType to backend
-        unit: item.unit || 'pieces',
-        quantity: item.quantity || 0,  // Send actual quantity field
-        totalSquareFeet: item.totalSquareFeet || 0,  // Send actual totalSquareFeet field
-        length: item.length || 0,  // Send length for square feet items
-        width: item.width || 0,    // Send width for square feet items
-        unitPrice: item.unitPrice,
-        hsnCode: item.hsnCode,
-        gstRate: item.gstRate,
-        itemTotal: item.itemTotal || 0
+        description: item.description || '',
+        ...lines[i]
       }));
 
       const invoiceData = {
         jobId: job._id,
         customerId: formData.customer_id,
-        billingType: billingType,
         items: items,
-        designCharge: job.designCharge || null,
-        subtotal: totals.grandSubtotal,
-        taxAmount: totals.grandTax,
-        totalAmount: totals.grandTotal,
+        designCharge,
         paymentTerms: formData.payment_terms,
-        notes: formData.notes,
-        po_reference: formData.po_reference,
-        terms_conditions: formData.terms_conditions,
-        isInterstate: formData.is_interstate,
-        customerGSTIN: formData.customer_gstin
+        notes: [formData.notes, formData.po_reference ? `PO: ${formData.po_reference}` : ''].filter(Boolean).join('\n'),
+        termsAndConditions: formData.terms_conditions
       };
 
       console.log('📄 Creating invoice with data:', invoiceData);
@@ -219,7 +113,8 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
       console.log('📄 Invoice created:', response);
 
       // Get the invoice ID from the response
-      const invoiceId = response?.invoice?._id || response?._id || response?.id;
+      const created = response as { invoice?: { _id?: string; id?: string }; _id?: string; id?: string };
+      const invoiceId = created?.invoice?._id || created?._id || created?.id;
 
       if (!invoiceId) {
         throw new Error('Invoice ID not received from server');
@@ -294,21 +189,6 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Billing Type */}
-          <div className="space-y-3">
-            <Label>Billing Type</Label>
-            <RadioGroup value={billingType} onValueChange={(value: "b2b" | "b2c") => setBillingType(value)}>
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem value="b2c" id="b2c" />
-                <Label htmlFor="b2c">B2C (Business to Consumer)</Label>
-              </div>
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem value="b2b" id="b2b" />
-                <Label htmlFor="b2b">B2B (Business to Business)</Label>
-              </div>
-            </RadioGroup>
-          </div>
-
           {/* Customer Selection */}
           <div className="space-y-2">
             <Label htmlFor="customer">Customer</Label>
@@ -327,35 +207,6 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
               </SelectContent>
             </Select>
           </div>
-
-          {/* B2B Specific Fields */}
-          {billingType === "b2b" && (
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="gstin">Customer GSTIN</Label>
-                <Input
-                  id="gstin"
-                  value={formData.customer_gstin}
-                  onChange={(e) => setFormData(prev => ({ ...prev, customer_gstin: e.target.value }))}
-                  placeholder="Enter GSTIN"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="interstate">Transaction Type</Label>
-                <Select value={formData.is_interstate ? "interstate" : "intrastate"} onValueChange={(value) => 
-                  setFormData(prev => ({ ...prev, is_interstate: value === "interstate" }))
-                }>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="intrastate">Intrastate</SelectItem>
-                    <SelectItem value="interstate">Interstate</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          )}
 
           {/* Additional Fields */}
           <div className="grid grid-cols-2 gap-4">
@@ -420,62 +271,44 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
                 <div className="space-y-3">
                   <div className="font-semibold text-sm mb-2">Invoice Items:</div>
                   <div className="space-y-2">
-                    {job.items.map((item: any, index: number) => (
-                      <div key={index} className="flex justify-between text-sm p-2 border rounded">
-                        <div className="flex-1">
-                          <div className="font-medium">{item.itemName}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {item.itemType === 'Square Feet'
-                              ? `${item.totalSquareFeet} sq ft × ₹${item.unitPrice}/sq ft`
-                              : `Qty: ${item.quantity} × ₹${item.unitPrice}`
-                            } @ {item.gstRate}% GST (HSN: {item.hsnCode})
+                    {job.items.map((item: any, index: number) => {
+                      const line = lines[index];
+                      const area = describeArea(line);
+                      return (
+                        <div key={index} className="flex justify-between text-sm p-2 border rounded">
+                          <div className="flex-1">
+                            <div className="font-medium">{item.itemName}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {area ? `${area} × ${formatINR(line.unitPrice)}` : `Qty: ${line.quantity} × ${formatINR(line.unitPrice)}`}
+                            </div>
                           </div>
+                          <div className="text-right font-medium">{formatINR(priceLine(line).amount)}</div>
                         </div>
-                        <div className="text-right font-medium">₹{item.itemTotal?.toFixed(2) || 0}</div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               ) : (
                 <div className="text-sm text-muted-foreground">No items added to this job</div>
               )}
 
-              {/* Design Charge Section */}
-              {job.designCharge && (
-                <div className="space-y-2 mt-4 pt-4 border-t">
-                  <div className="font-semibold text-sm">Design Charge:</div>
-                  <div className="flex justify-between text-sm p-2 border rounded">
-                    <div className="flex-1">
-                      <div className="font-medium">Design Charge</div>
-                      <div className="text-xs text-muted-foreground">
-                        ₹{job.designCharge.amount?.toFixed(2) || 0} @ {job.designCharge.gstRate}% GST{job.designCharge.sacCode ? ` (SAC: ${job.designCharge.sacCode})` : ''}
-                      </div>
-                    </div>
-                    <div className="text-right font-medium">₹{job.designCharge.totalAmount?.toFixed(2) || 0}</div>
-                  </div>
-                </div>
-              )}
-
               {/* Totals */}
-              {(() => {
-                const totals = calculateInvoiceTotals();
-                return (
-                  <div className="mt-4 pt-4 border-t space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span>Subtotal:</span>
-                      <span>₹{totals.grandSubtotal.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span>Tax:</span>
-                      <span>₹{totals.grandTax.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between font-semibold text-base pt-2 border-t">
-                      <span>Total:</span>
-                      <span className="text-green-600">₹{totals.grandTotal.toFixed(2)}</span>
-                    </div>
+              <div className="mt-4 pt-4 border-t space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span>Items subtotal:</span>
+                  <span>{formatINR(totals.subtotal)}</span>
+                </div>
+                {designCharge > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span>Design charge:</span>
+                    <span>{formatINR(designCharge)}</span>
                   </div>
-                );
-              })()}
+                )}
+                <div className="flex justify-between font-semibold text-base pt-2 border-t">
+                  <span>Total:</span>
+                  <span className="text-success-strong">{formatINR(totals.total)}</span>
+                </div>
+              </div>
             </CardContent>
           </Card>
 

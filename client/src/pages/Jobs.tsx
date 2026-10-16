@@ -1,10 +1,13 @@
 import { useState, useEffect } from "react";
+import { StatCard } from "@/components/common/StatTile";
 import { useSearchParams } from "react-router-dom";
+import { JobStatusBadge, PriorityBadge } from "@/components/jobs/JobStatusBadge";
+import { dueState, STAGES } from "@/lib/printWorkflow";
 import {
   Plus,
   Search,
   Calendar,
-  DollarSign,
+  IndianRupee,
   Clock,
   FileText,
   FileEdit,
@@ -18,7 +21,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -34,44 +36,30 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
-import { AssignTaskDialog } from "@/components/staff/AssignTaskDialog";
+import { CreateTaskDialog } from "@/components/staff/CreateTaskDialog";
 import { UpdateStatusDialog } from "@/components/jobs/UpdateStatusDialog";
 import { AdvancedCreateInvoiceDialog } from "@/components/invoices/AdvancedCreateInvoiceDialog";
 import { EditInvoiceDialog } from "@/components/invoices/EditInvoiceDialog";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-
-const statusConfig: Record<string, { variant: "secondary" | "pending" | "warning" | "success" | "destructive"; label: string }> = {
-  "inquiry": { variant: "secondary", label: "Inquiry" },
-  "quotation_sent": { variant: "pending", label: "Quotation Sent" },
-  "quotation_approved": { variant: "warning", label: "Approved" },
-  "design_in_progress": { variant: "pending", label: "Designing" },
-  "design_approved": { variant: "warning", label: "Design OK" },
-  "production_ready": { variant: "warning", label: "Ready" },
-  "ready_for_print": { variant: "warning", label: "Print Ready" },
-  "quality_check": { variant: "warning", label: "QC" },
-  "completed": { variant: "success", label: "Completed" },
-  "delivered": { variant: "success", label: "Delivered" },
-  "cancelled": { variant: "destructive", label: "Cancelled" }
-};
-
-const priorityConfig: Record<string, { variant: "secondary" | "warning" | "urgent" | "destructive"; label: string }> = {
-  "low": { variant: "secondary", label: "Low" },
-  "medium": { variant: "warning", label: "Medium" },
-  "high": { variant: "urgent", label: "High" },
-  "urgent": { variant: "destructive", label: "Urgent" }
-};
+import { ConfirmDialog } from "@/components/data";
 
 export default function Jobs() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [jobs, setJobs] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState(() => searchParams.get("q") || "");
+  // A search from the header while already on this page arrives as a new ?q.
+  const qParam = searchParams.get("q");
+  useEffect(() => {
+    if (qParam !== null) setSearchTerm(qParam);
+  }, [qParam]);
   const [statusFilter, setStatusFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState("all");
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  // "New Job Ticket" in the header links here with ?new=1
+  const [showCreateDialog, setShowCreateDialog] = useState(() => searchParams.get("new") === "1");
   const [assignTaskDialog, setAssignTaskDialog] = useState({ open: false, jobId: "" });
   const [updateStatusDialog, setUpdateStatusDialog] = useState({ open: false, jobId: "", currentStatus: "" });
   const [showInvoiceDialog, setShowInvoiceDialog] = useState(false);
@@ -86,10 +74,20 @@ export default function Jobs() {
     fetchCustomers();
   }, []);
 
+  useEffect(() => {
+    if (searchParams.get("new") === "1") {
+      setShowCreateDialog(true);
+      const next = new URLSearchParams(searchParams);
+      next.delete("new");
+      setSearchParams(next, { replace: true });
+    }
+  }, [searchParams]);
+
   const fetchJobs = async () => {
     setLoading(true);
     try {
-      const response = await apiClient.getJobs();
+      // The API pages at 10 by default; the list filters client-side, so load them all.
+      const response = await apiClient.getJobs({ limit: 500 });
       const jobsData = (response as any)?.jobs || (response as any) || [];
 
       const processedJobs = jobsData.map((job: any) => ({
@@ -118,21 +116,21 @@ export default function Jobs() {
 
   const fetchCustomers = async () => {
     try {
-      const response = await apiClient.getCustomer();
-      const customersData = (response as any)?.customers || (response as any) || [];
+      const customersData = await apiClient.listAll('/customers', 'customers');
       setCustomers(customersData);
     } catch (error) {
       console.error('Error fetching customers:', error);
     }
   };
 
-  const handleDeleteJob = async (jobId: string) => {
-    if (!confirm("Are you sure you want to delete this job? This action cannot be undone.")) {
-      return;
-    }
-
+  const [deletingJobId, setDeletingJobId] = useState<string | null>(null);
+  const handleDeleteJob = (jobId: string) => setDeletingJobId(jobId);
+  const confirmDeleteJob = async () => {
+    const jobId = deletingJobId;
+    if (!jobId) return;
     try {
       await apiClient.deleteJob(jobId);
+      setDeletingJobId(null);
       toast({
         title: "Job Deleted",
         description: "Job has been successfully deleted.",
@@ -142,9 +140,10 @@ export default function Jobs() {
       console.error('Error deleting job:', error);
       toast({
         title: "Error",
-        description: "Failed to delete job. Please try again.",
+        description: error instanceof Error ? error.message : "Failed to delete job. Please try again.",
         variant: "destructive",
       });
+      throw error;
     }
   };
 
@@ -236,7 +235,10 @@ export default function Jobs() {
   const totalJobs = jobs.length;
   const activeJobs = jobs.filter(job => !["completed", "delivered", "cancelled"].includes(job.status)).length;
   const completedJobs = jobs.filter(job => ["completed", "delivered"].includes(job.status)).length;
-  const totalRevenue = jobs.reduce((sum, job) => sum + (job.estimated_cost || job.estimatedCost || 0), 0);
+  // What a job was billed for (its invoices, incl. GST); the estimate until it is billed.
+  const billedOf = (job: any) => (job.invoices || []).reduce((sum: number, inv: any) => sum + (inv.totalAmount || 0), 0);
+  const estimateOf = (job: any) => job.estimated_cost || job.estimatedCost || 0;
+  const totalRevenue = jobs.reduce((sum, job) => sum + billedOf(job), 0);
 
   const formatCurrency = (amount: number) => {
     return `₹${amount.toLocaleString('en-IN')}`;
@@ -250,66 +252,34 @@ export default function Jobs() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="page-frame">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="page-heading-row">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Job Management</h1>
+          <h1 className="page-title">Job Tickets</h1>
           <p className="text-muted-foreground text-sm">
-            Track and manage all your printing jobs in one place
+            Every print job from enquiry to delivery — specs, status, deadlines and billing
           </p>
         </div>
         <Button onClick={() => setShowCreateDialog(true)} className="gap-2">
           <Plus className="w-4 h-4" />
-          Create New Job
+          New Job Ticket
         </Button>
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-4 flex items-center gap-3">
-            <FileText className="w-5 h-5 text-muted-foreground" />
-            <div>
-              <p className="text-xs text-muted-foreground">Total Jobs</p>
-              <p className="text-xl font-bold">{totalJobs}</p>
-            </div>
-          </CardContent>
-        </Card>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard label="Total Jobs" value={totalJobs} icon={FileText} />
 
-        <Card>
-          <CardContent className="p-4 flex items-center gap-3">
-            <Clock className="w-5 h-5 text-muted-foreground" />
-            <div>
-              <p className="text-xs text-muted-foreground">In Progress</p>
-              <p className="text-xl font-bold">{activeJobs}</p>
-            </div>
-          </CardContent>
-        </Card>
+        <StatCard label="In Progress" value={activeJobs} icon={Clock} />
 
-        <Card>
-          <CardContent className="p-4 flex items-center gap-3">
-            <CheckCircle2 className="w-5 h-5 text-muted-foreground" />
-            <div>
-              <p className="text-xs text-muted-foreground">Completed</p>
-              <p className="text-xl font-bold">{completedJobs}</p>
-            </div>
-          </CardContent>
-        </Card>
+        <StatCard label="Completed" value={completedJobs} icon={CheckCircle2} />
 
-        <Card>
-          <CardContent className="p-4 flex items-center gap-3">
-            <DollarSign className="w-5 h-5 text-muted-foreground" />
-            <div>
-              <p className="text-xs text-muted-foreground">Total Revenue</p>
-              <p className="text-xl font-bold">{formatCurrency(totalRevenue)}</p>
-            </div>
-          </CardContent>
-        </Card>
+        <StatCard label="Billed" value={formatCurrency(Math.round(totalRevenue))} hint="Invoices raised for these jobs" icon={IndianRupee} />
       </div>
 
       {/* Filters */}
-      <div className="flex items-center space-x-4 flex-wrap gap-2">
+      <div className="page-filter-row">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -321,18 +291,15 @@ export default function Jobs() {
         </div>
 
         <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-[180px]">
-            <SelectValue placeholder="Filter by status" />
+          <SelectTrigger className="w-[200px]">
+            <SelectValue placeholder="Filter by stage" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Statuses</SelectItem>
-            <SelectItem value="inquiry">Inquiry</SelectItem>
-            <SelectItem value="quotation_sent">Quotation Sent</SelectItem>
-            <SelectItem value="quotation_approved">Approved</SelectItem>
-            <SelectItem value="design_in_progress">Designing</SelectItem>
-            <SelectItem value="production_ready">Ready</SelectItem>
-            <SelectItem value="completed">Completed</SelectItem>
-            <SelectItem value="delivered">Delivered</SelectItem>
+            <SelectItem value="all">All stages</SelectItem>
+            {STAGES.map((stage) => (
+              <SelectItem key={stage.status} value={stage.status}>{stage.label}</SelectItem>
+            ))}
+            <SelectItem value="cancelled">Cancelled</SelectItem>
           </SelectContent>
         </Select>
 
@@ -353,7 +320,7 @@ export default function Jobs() {
       {/* Jobs Table */}
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-base">All Jobs</CardTitle>
+          <CardTitle className="text-sm">All job tickets{!loading && <span className="ml-2 font-normal text-muted-foreground">{filteredJobs.length}</span>}</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
@@ -391,14 +358,14 @@ export default function Jobs() {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b bg-muted/50">
-                    <th className="text-left px-4 py-3 font-medium">Customer</th>
-                    <th className="text-left px-4 py-3 font-medium">Job Details</th>
-                    <th className="text-left px-4 py-3 font-medium">Status</th>
-                    <th className="text-left px-4 py-3 font-medium">Priority</th>
-                    <th className="text-left px-4 py-3 font-medium">Due Date</th>
-                    <th className="text-left px-4 py-3 font-medium">Amount</th>
-                    <th className="px-4 py-3 font-medium">Actions</th>
+                  <tr className="border-b bg-muted/50 text-[11px] uppercase tracking-wider text-muted-foreground">
+                    <th className="text-left px-4 py-2.5">Customer</th>
+                    <th className="text-left px-4 py-2.5">Job & specs</th>
+                    <th className="text-left px-4 py-2.5">Stage</th>
+                    <th className="text-left px-4 py-2.5">Priority</th>
+                    <th className="text-left px-4 py-2.5">Due</th>
+                    <th className="text-right px-4 py-2.5">Amount</th>
+                    <th className="px-4 py-2.5"><span className="sr-only">Actions</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -412,6 +379,15 @@ export default function Jobs() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="font-medium">{job.title}</div>
+                        {(job.printSpecs?.quantity > 1 || job.printSpecs?.paperType || job.printSpecs?.printSize) && (
+                          <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+                            {[
+                              job.printSpecs?.quantity > 1 ? `${Number(job.printSpecs.quantity).toLocaleString('en-IN')} pcs` : null,
+                              job.printSpecs?.printSize,
+                              job.printSpecs?.paperType,
+                            ].filter(Boolean).join(' · ')}
+                          </div>
+                        )}
                         {job.createdBy?.fullName && (
                           <div className="text-xs text-muted-foreground">
                             Created by: {job.createdBy.fullName}
@@ -419,23 +395,35 @@ export default function Jobs() {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <Badge variant={statusConfig[job.status]?.variant || "secondary"}>
-                          {statusConfig[job.status]?.label || job.status}
-                        </Badge>
+                        <JobStatusBadge status={job.status} />
                       </td>
                       <td className="px-4 py-3">
-                        <Badge variant={priorityConfig[job.priority]?.variant || "secondary"}>
-                          {priorityConfig[job.priority]?.label || job.priority}
-                        </Badge>
+                        <PriorityBadge priority={job.priority} />
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">
-                        <div className="flex items-center gap-2">
+                        <div
+                          className={`flex items-center gap-2 ${
+                            dueState(job.dueDate, job.status) === "overdue"
+                              ? "font-medium text-destructive"
+                              : dueState(job.dueDate, job.status) === "today"
+                              ? "font-medium text-[hsl(30_90%_32%)]"
+                              : ""
+                          }`}
+                        >
                           <Calendar className="h-3.5 w-3.5" />
                           {formatDate(job.dueDate)}
                         </div>
                       </td>
-                      <td className="px-4 py-3 font-medium">
-                        {formatCurrency(job.estimated_cost || job.estimatedCost || 0)}
+                      <td className="px-4 py-3 text-right font-medium tabular-nums">
+                        {billedOf(job) > 0 ? (
+                          formatCurrency(Math.round(billedOf(job)))
+                        ) : estimateOf(job) > 0 ? (
+                          <span className="text-muted-foreground" title="Estimate — not billed yet">
+                            {formatCurrency(estimateOf(job))} <span className="text-xs">est.</span>
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">Not billed</span>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <DropdownMenu>
@@ -446,19 +434,19 @@ export default function Jobs() {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem onClick={() => handleGenerateInvoice(job)}>
-                              <FileText className="h-4 w-4 mr-2" />
+                              <FileText className="h-4 w-4" />
                               Generate Invoice
                             </DropdownMenuItem>
                             <DropdownMenuItem onClick={() => handleEditInvoice(job)}>
-                              <FileEdit className="h-4 w-4 mr-2" />
+                              <FileEdit className="h-4 w-4" />
                               Edit Invoice
                             </DropdownMenuItem>
                             <DropdownMenuItem onClick={() => handleUpdateStatus(job.id)}>
-                              <Edit className="h-4 w-4 mr-2" />
+                              <Edit className="h-4 w-4" />
                               Update Status
                             </DropdownMenuItem>
                             <DropdownMenuItem onClick={() => setAssignTaskDialog({ open: true, jobId: job.id })}>
-                              <UserPlus className="h-4 w-4 mr-2" />
+                              <UserPlus className="h-4 w-4" />
                               Assign Task
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
@@ -466,7 +454,7 @@ export default function Jobs() {
                               onClick={() => handleDeleteJob(job.id)}
                               className="text-destructive focus:text-destructive"
                             >
-                              <Trash2 className="h-4 w-4 mr-2" />
+                              <Trash2 className="h-4 w-4" />
                               Delete Job
                             </DropdownMenuItem>
                           </DropdownMenuContent>
@@ -490,12 +478,19 @@ export default function Jobs() {
         onCustomersUpdate={fetchCustomers}
       />
 
-      <AssignTaskDialog
-        open={assignTaskDialog.open}
-        onOpenChange={(open) => setAssignTaskDialog({ open, jobId: "" })}
-        jobId={assignTaskDialog.jobId}
-        onTaskAssigned={fetchJobs}
-      />
+      {(() => {
+        const job = jobs.find((j) => j.id === assignTaskDialog.jobId || j._id === assignTaskDialog.jobId);
+        return (
+          <CreateTaskDialog
+            open={assignTaskDialog.open}
+            onOpenChange={(open) => setAssignTaskDialog((d) => ({ ...d, open }))}
+            onTaskCreated={() => {
+              toast({ title: "Task assigned", description: job ? `For ${job.title}` : undefined });
+            }}
+            preselectedJob={job ? { _id: job._id || job.id, title: job.title, customer: job.customer, status: job.status, dueDate: job.dueDate, priority: job.priority } : undefined}
+          />
+        );
+      })()}
 
       <UpdateStatusDialog
         open={updateStatusDialog.open}
@@ -533,6 +528,13 @@ export default function Jobs() {
         }}
         invoice={invoiceToEdit}
         onInvoiceUpdated={fetchJobs}
+      />
+      <ConfirmDialog
+        open={!!deletingJobId}
+        onOpenChange={(o) => !o && setDeletingJobId(null)}
+        title="Delete this job?"
+        description={`${jobs.find((j) => j.id === deletingJobId)?.title || "The job"} is removed. Its invoices and payments stay. This can't be undone.`}
+        onConfirm={confirmDeleteJob}
       />
     </div>
   );

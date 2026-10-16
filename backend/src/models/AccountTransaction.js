@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const NumberSequence = require('./NumberSequence');
 
 const accountTransactionSchema = new mongoose.Schema({
   transactionNumber: {
@@ -32,6 +33,8 @@ const accountTransactionSchema = new mongoose.Schema({
     required: [true, 'Description is required'],
     trim: true
   },
+  // Date on the bank statement; older records fall back to their creation date.
+  postedAt: Date,
   paymentMethod: {
     type: String,
     required: [true, 'Payment method is required'],
@@ -152,6 +155,10 @@ const accountTransactionSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   },
+  reconciliationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'BankReconciliation'
+  },
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -170,9 +177,9 @@ accountTransactionSchema.index({ userId: 1, accountType: 1 });
 accountTransactionSchema.index({ userId: 1, category: 1 });
 accountTransactionSchema.index({ userId: 1, status: 1 });
 
-// Virtual for transaction date (using createdAt as transaction date)
+// Older entries use their creation date when no statement date was recorded.
 accountTransactionSchema.virtual('transactionDate').get(function () {
-  return this.createdAt;
+  return this.postedAt || this.createdAt;
 });
 
 // Pre-save middleware to generate transaction number
@@ -186,27 +193,27 @@ accountTransactionSchema.pre('save', async function (next) {
     // Find the last transaction number for today
     const prefix = `TXN${year}${month}${day}`;
     const lastTransaction = await this.constructor.findOne({
-      transactionNumber: new RegExp(`^${prefix}`),
-      userId: this.userId
+      transactionNumber: new RegExp(`^${prefix}`)
     }).sort({ transactionNumber: -1 });
 
-    let counter = 1;
+    let previous = 0;
     if (lastTransaction) {
       const lastNumber = parseInt(lastTransaction.transactionNumber.split(prefix)[1]);
       if (!isNaN(lastNumber)) {
-        counter = lastNumber + 1;
+        previous = lastNumber;
       }
     }
 
+    const counter = await NumberSequence.nextAfter(`account-transaction:${year}${month}${day}`, previous);
     this.transactionNumber = `${prefix}${counter.toString().padStart(4, '0')}`;
   }
   next();
 });
 
 // Static method to get account balances
-accountTransactionSchema.statics.getAccountBalances = async function (userId) {
+accountTransactionSchema.statics.getAccountBalances = async function (scope) {
   const balances = await this.aggregate([
-    { $match: { userId: new mongoose.Types.ObjectId(userId), status: 'completed' } },
+    { $match: { ...scope, status: 'completed' } },
     {
       $group: {
         _id: '$accountType',
@@ -244,7 +251,7 @@ accountTransactionSchema.statics.getAccountBalances = async function (userId) {
 };
 
 // Static method to get transaction statistics
-accountTransactionSchema.statics.getTransactionStats = async function (userId) {
+accountTransactionSchema.statics.getTransactionStats = async function (scope) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -259,25 +266,25 @@ accountTransactionSchema.statics.getTransactionStats = async function (userId) {
     categoryStats,
     paymentMethodStats
   ] = await Promise.all([
-    this.countDocuments({ userId, status: 'completed' }),
-    this.countDocuments({ userId, createdAt: { $gte: today }, status: 'completed' }),
-    this.countDocuments({ userId, createdAt: { $gte: monthStart }, status: 'completed' }),
+    this.countDocuments({ ...scope, status: 'completed' }),
+    this.countDocuments({ ...scope, createdAt: { $gte: today }, status: 'completed' }),
+    this.countDocuments({ ...scope, createdAt: { $gte: monthStart }, status: 'completed' }),
     this.aggregate([
-      { $match: { userId: new mongoose.Types.ObjectId(userId), transactionType: 'income', status: 'completed' } },
+      { $match: { ...scope, transactionType: 'income', status: 'completed' } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]),
     this.aggregate([
-      { $match: { userId: new mongoose.Types.ObjectId(userId), transactionType: 'expense', status: 'completed' } },
+      { $match: { ...scope, transactionType: 'expense', status: 'completed' } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]),
     this.aggregate([
-      { $match: { userId: new mongoose.Types.ObjectId(userId), status: 'completed' } },
+      { $match: { ...scope, status: 'completed' } },
       { $group: { _id: '$category', count: { $sum: 1 }, total: { $sum: '$amount' } } },
       { $sort: { total: -1 } },
       { $limit: 10 }
     ]),
     this.aggregate([
-      { $match: { userId: new mongoose.Types.ObjectId(userId), status: 'completed' } },
+      { $match: { ...scope, status: 'completed' } },
       { $group: { _id: '$paymentMethod', count: { $sum: 1 }, total: { $sum: '$amount' } } },
       { $sort: { total: -1 } }
     ])
@@ -293,6 +300,17 @@ accountTransactionSchema.statics.getTransactionStats = async function (userId) {
     categoryStats,
     paymentMethodStats
   };
+};
+
+// Another login may save the same daily number between the lookup and insert.
+accountTransactionSchema.statics.createWithUniqueNumber = async function (data) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      return await this.create(data);
+    } catch (error) {
+      if (error.code !== 11000 || !error.keyPattern?.transactionNumber || attempt === 4) throw error;
+    }
+  }
 };
 
 module.exports = mongoose.model('AccountTransaction', accountTransactionSchema);

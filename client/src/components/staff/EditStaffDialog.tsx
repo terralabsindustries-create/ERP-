@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
+import { localDate } from "@/lib/format";
 
 interface EditStaffDialogProps {
   open: boolean;
@@ -35,7 +36,7 @@ export function EditStaffDialog({ open, onOpenChange, onStaffUpdated, staff }: E
         email: staff.email || "",
         position: staff.role || "staff",
         department: staff.department || "General",
-        joiningDate: staff.joiningDate || staff.createdAt ? new Date(staff.createdAt).toISOString().split('T')[0] : "",
+        joiningDate: staff.joiningDate || staff.createdAt ? localDate(staff.createdAt) : "",
         status: staff.status || (staff.isActive ? "active" : "inactive")
       });
       console.log('👤 EditStaffDialog - form data set:', {
@@ -43,7 +44,7 @@ export function EditStaffDialog({ open, onOpenChange, onStaffUpdated, staff }: E
         email: staff.email,
         position: staff.role,
         department: staff.department,
-        joiningDate: staff.joiningDate || (staff.createdAt ? new Date(staff.createdAt).toISOString().split('T')[0] : ''),
+        joiningDate: staff.joiningDate || (staff.createdAt ? localDate(staff.createdAt) : ''),
         status: staff.status || (staff.isActive ? "active" : "inactive")
       });
     }

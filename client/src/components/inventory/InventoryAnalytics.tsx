@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from "recharts";
-import { TrendingUp, TrendingDown, Package, AlertTriangle, DollarSign, Activity } from "lucide-react";
+import { TrendingUp, TrendingDown, Package, AlertTriangle, IndianRupee, Activity } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -41,7 +41,8 @@ interface AnalyticsData {
   }>;
 }
 
-export function InventoryAnalytics() {
+/** Stock analytics. Without "Inventory: View Cost" the value figures are left out. */
+export function InventoryAnalytics({ canSeeCost = true }: { canSeeCost?: boolean }) {
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
@@ -54,9 +55,9 @@ export function InventoryAnalytics() {
   const fetchAnalytics = async () => {
     try {
       setLoading(true);
-      const response = await apiClient.getInventoryAnalytics();
-      console.log('📊 Inventory Analytics:', response);
-      setAnalytics(response.data);
+      const response = (await apiClient.getInventoryAnalytics()) as { data?: unknown };
+      // apiClient already unwraps the `data` envelope; older responses nest it once more.
+      setAnalytics((response?.data ?? response) as typeof analytics);
     } catch (error) {
       console.error('Error fetching analytics:', error);
     } finally {
@@ -101,11 +102,11 @@ export function InventoryAnalytics() {
           {[...Array(4)].map((_, i) => (
             <Card key={i}>
               <CardHeader className="pb-2">
-                <div className="h-4 bg-gray-200 rounded animate-pulse"></div>
+                <div className="h-4 bg-muted rounded animate-pulse"></div>
               </CardHeader>
               <CardContent>
-                <div className="h-8 bg-gray-200 rounded animate-pulse mb-2"></div>
-                <div className="h-3 bg-gray-200 rounded animate-pulse"></div>
+                <div className="h-8 bg-muted rounded animate-pulse mb-2"></div>
+                <div className="h-3 bg-muted rounded animate-pulse"></div>
               </CardContent>
             </Card>
           ))}
@@ -147,18 +148,20 @@ export function InventoryAnalytics() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <DollarSign className="h-4 w-4" />
-              Total Value
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{formatCurrency(analytics.analytics.totalValue)}</div>
-            <p className="text-xs text-muted-foreground">inventory value</p>
-          </CardContent>
-        </Card>
+        {canSeeCost && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <IndianRupee className="h-4 w-4" />
+                Total Value
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{formatCurrency(analytics.analytics.totalValue)}</div>
+              <p className="text-xs text-muted-foreground">inventory value</p>
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader className="pb-2">
@@ -205,13 +208,13 @@ export function InventoryAnalytics() {
                     label={({ _id, percent }) => `${_id} ${(percent * 100).toFixed(0)}%`}
                     outerRadius={80}
                     fill="#8884d8"
-                    dataKey="totalValue"
+                    dataKey={canSeeCost ? "totalValue" : "count"}
                   >
                     {analytics.categoryDistribution.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={getCategoryColor(index)} />
                     ))}
                   </Pie>
-                  <Tooltip formatter={(value) => formatCurrency(value as number)} />
+                  <Tooltip formatter={(value) => (canSeeCost ? formatCurrency(value as number) : formatNumber(value as number))} />
                 </PieChart>
               </ResponsiveContainer>
             ) : (
@@ -277,7 +280,7 @@ export function InventoryAnalytics() {
                   <div className="flex items-center gap-4">
                     <div className="text-right">
                       <p className="font-medium">{formatNumber(item.quantity)} units</p>
-                      <p className="text-sm text-muted-foreground">{formatCurrency(item.unitCost)}/unit</p>
+                      {canSeeCost && <p className="text-sm text-muted-foreground">{formatCurrency(item.unitCost)}/unit</p>}
                     </div>
                     <Badge variant={getStockStatusColor(item.quantity, item.minStockLevel)}>
                       {getStockStatusText(item.quantity, item.minStockLevel)}
@@ -298,20 +301,20 @@ export function InventoryAnalytics() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <AlertTriangle className="h-5 w-5 text-orange-500" />
+            <AlertTriangle className="h-5 w-5 text-warning" />
             Stock Alerts
           </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid gap-4 md:grid-cols-2">
             <div className="p-4 border rounded-lg">
-              <h4 className="font-medium text-orange-600 mb-2">Low Stock Items</h4>
-              <p className="text-2xl font-bold text-orange-600">{analytics.analytics.lowStockCount}</p>
+              <h4 className="font-medium text-warning-strong mb-2">Low Stock Items</h4>
+              <p className="text-2xl font-bold text-warning-strong">{analytics.analytics.lowStockCount}</p>
               <p className="text-sm text-muted-foreground">Items below minimum level</p>
             </div>
             <div className="p-4 border rounded-lg">
-              <h4 className="font-medium text-red-600 mb-2">Critical Stock Items</h4>
-              <p className="text-2xl font-bold text-red-600">{analytics.analytics.criticalStockCount}</p>
+              <h4 className="font-medium text-destructive-strong mb-2">Critical Stock Items</h4>
+              <p className="text-2xl font-bold text-destructive-strong">{analytics.analytics.criticalStockCount}</p>
               <p className="text-sm text-muted-foreground">Items requiring immediate attention</p>
             </div>
           </div>

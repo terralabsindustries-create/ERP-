@@ -1,5 +1,6 @@
 const express = require('express');
 const { body, query } = require('express-validator');
+const { validate } = require('../middleware/validate');
 const Event = require('../models/Event');
 const Job = require('../models/Job');
 const Customer = require('../models/Customer');
@@ -8,6 +9,9 @@ const Delivery = require('../models/Delivery');
 const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 
+const { orgUserFilter } = require('../utils/accessScope');
+const mongoose = require('mongoose');
+
 const router = express.Router();
 
 // Validation rules
@@ -15,24 +19,24 @@ const eventValidation = [
   body('title').notEmpty().withMessage('Event title is required').trim(),
   body('startDate').isISO8601().withMessage('Valid start date is required'),
   body('endDate').isISO8601().withMessage('Valid end date is required'),
-  body('eventType').optional().isIn(['meeting', 'deadline', 'delivery', 'reminder', 'task', 'other']),
-  body('priority').optional().isIn(['low', 'medium', 'high', 'urgent']),
-  body('status').optional().isIn(['scheduled', 'in_progress', 'completed', 'cancelled'])
+  body('eventType').optional({ values: 'falsy' }).isIn(['meeting', 'deadline', 'delivery', 'reminder', 'task', 'other']),
+  body('priority').optional({ values: 'falsy' }).isIn(['low', 'medium', 'high', 'urgent']),
+  body('status').optional({ values: 'falsy' }).isIn(['scheduled', 'in_progress', 'completed', 'cancelled'])
 ];
 
 // @route   GET /api/calendar/events
 // @desc    Get all events for the authenticated user
 // @access  Private
 router.get('/events', protect, [
-  query('startDate').optional().isISO8601(),
-  query('endDate').optional().isISO8601(),
-  query('eventType').optional().isIn(['meeting', 'deadline', 'delivery', 'reminder', 'task', 'other']),
-  query('priority').optional().isIn(['low', 'medium', 'high', 'urgent']),
-  query('status').optional().isIn(['scheduled', 'in_progress', 'completed', 'cancelled']),
-  query('search').optional().trim(),
-  query('page').optional().isInt({ min: 1 }),
-  query('limit').optional().isInt({ min: 1, max: 100 })
-], async (req, res) => {
+  query('startDate').optional({ values: 'falsy' }).isISO8601(),
+  query('endDate').optional({ values: 'falsy' }).isISO8601(),
+  query('eventType').optional({ values: 'falsy' }).isIn(['all', 'meeting', 'deadline', 'delivery', 'reminder', 'task', 'other']),
+  query('priority').optional({ values: 'falsy' }).isIn(['all', 'low', 'medium', 'high', 'urgent']),
+  query('status').optional({ values: 'falsy' }).isIn(['all', 'scheduled', 'in_progress', 'completed', 'cancelled']),
+  query('search').optional({ values: 'falsy' }).trim(),
+  query('page').optional({ values: 'falsy' }).isInt({ min: 1 }),
+  query('limit').optional({ values: 'falsy' }).isInt({ min: 1, max: 100 })
+], validate, async (req, res) => {
   try {
     const {
       startDate,
@@ -48,7 +52,7 @@ router.get('/events', protect, [
     } = req.query;
 
     // Build query
-    const query = {};
+    const query = { ...(await orgUserFilter(req.user)) };
 
     if (startDate || endDate) {
       query.startDate = {};
@@ -125,7 +129,7 @@ router.get('/events', protect, [
 // @access  Private
 router.get('/events/:id', protect, async (req, res) => {
   try {
-    const event = await Event.findOne({ _id: req.params.id })
+    const event = await Event.findOne({ _id: req.params.id, ...(await orgUserFilter(req.user)) })
       .populate('jobId', 'title status priority')
       .populate('customerId', 'name email phone')
       .populate('taskId', 'title description status')
@@ -156,7 +160,7 @@ router.get('/events/:id', protect, async (req, res) => {
 // @route   POST /api/calendar/events
 // @desc    Create new event
 // @access  Private
-router.post('/events', protect, eventValidation, async (req, res) => {
+router.post('/events', protect, eventValidation, validate, async (req, res) => {
   try {
     const { jobId, customerId, taskId, deliveryId, ...eventData } = req.body;
 
@@ -249,10 +253,10 @@ router.post('/events', protect, eventValidation, async (req, res) => {
 // @route   PUT /api/calendar/events/:id
 // @desc    Update event
 // @access  Private
-router.put('/events/:id', protect, eventValidation, async (req, res) => {
+router.put('/events/:id', protect, eventValidation, validate, async (req, res) => {
   try {
     const event = await Event.findOneAndUpdate(
-      { _id: req.params.id },
+      { _id: req.params.id, ...(await orgUserFilter(req.user)) },
       req.body,
       { new: true, runValidators: true }
     )
@@ -306,7 +310,7 @@ router.delete('/events/:id', protect, async (req, res) => {
   try {
     const event = await Event.findOneAndDelete({
       _id: req.params.id,
-      userId: req.user._id
+      ...(await orgUserFilter(req.user))
     });
 
     if (!event) {
@@ -375,8 +379,8 @@ router.get('/events/range/:startDate/:endDate', protect, async (req, res) => {
 // @desc    Get upcoming events
 // @access  Private
 router.get('/events/upcoming', protect, [
-  query('limit').optional().isInt({ min: 1, max: 50 })
-], async (req, res) => {
+  query('limit').optional({ values: 'falsy' }).isInt({ min: 1, max: 50 })
+], validate, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
     
@@ -422,12 +426,12 @@ router.get('/events/overdue', protect, async (req, res) => {
 // @access  Private
 router.put('/events/:id/status', protect, [
   body('status').isIn(['scheduled', 'in_progress', 'completed', 'cancelled']).withMessage('Invalid status')
-], async (req, res) => {
+], validate, async (req, res) => {
   try {
     const { status } = req.body;
     
     const event = await Event.findOneAndUpdate(
-      { _id: req.params.id },
+      { _id: req.params.id, ...(await orgUserFilter(req.user)) },
       { status },
       { new: true }
     )
@@ -465,6 +469,7 @@ router.put('/events/:id/status', protect, [
 router.get('/stats/summary', protect, async (req, res) => {
   try {
     const userId = req.user._id;
+    const scope = await orgUserFilter(req.user);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
@@ -487,20 +492,20 @@ router.get('/stats/summary', protect, async (req, res) => {
       eventTypeStats,
       priorityStats
     ] = await Promise.all([
-      Event.countDocuments({ userId }),
-      Event.countDocuments({ userId, startDate: { $gte: today, $lt: tomorrow } }),
-      Event.countDocuments({ userId, startDate: { $gte: tomorrow, $lt: new Date(tomorrow.getTime() + 24 * 60 * 60 * 1000) } }),
-      Event.countDocuments({ userId, startDate: { $gte: weekStart, $lt: new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000) } }),
-      Event.countDocuments({ userId, startDate: { $gte: monthStart } }),
-      Event.countDocuments({ userId, endDate: { $lt: today }, status: { $in: ['scheduled', 'in_progress'] } }),
-      Event.countDocuments({ userId, status: 'completed' }),
+      Event.countDocuments({ ...scope }),
+      Event.countDocuments({ ...scope, startDate: { $gte: today, $lt: tomorrow } }),
+      Event.countDocuments({ ...scope, startDate: { $gte: tomorrow, $lt: new Date(tomorrow.getTime() + 24 * 60 * 60 * 1000) } }),
+      Event.countDocuments({ ...scope, startDate: { $gte: weekStart, $lt: new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000) } }),
+      Event.countDocuments({ ...scope, startDate: { $gte: monthStart } }),
+      Event.countDocuments({ ...scope, endDate: { $lt: today }, status: { $in: ['scheduled', 'in_progress'] } }),
+      Event.countDocuments({ ...scope, status: 'completed' }),
       Event.aggregate([
-        { $match: { userId: userId } },
+        { $match: { ...scope } },
         { $group: { _id: '$eventType', count: { $sum: 1 } } },
         { $sort: { count: -1 } }
       ]),
       Event.aggregate([
-        { $match: { userId: userId } },
+        { $match: { ...scope } },
         { $group: { _id: '$priority', count: { $sum: 1 } } },
         { $sort: { count: -1 } }
       ])

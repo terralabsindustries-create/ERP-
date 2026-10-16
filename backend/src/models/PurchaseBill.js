@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const NumberSequence = require('./NumberSequence');
 
 const purchaseBillItemSchema = new mongoose.Schema({
   description: {
@@ -60,9 +61,7 @@ const purchaseBillItemSchema = new mongoose.Schema({
 });
 
 const purchaseBillSchema = new mongoose.Schema({
-  // Uniqueness is enforced per-tenant below via the userId+billNumber compound
-  // index, not globally — a bare `unique: true` here would make every tenant
-  // fight over the same "BILL-202608-0001" sequence and fail with E11000.
+  // Numbering belongs to the business, including bills created by staff.
   billNumber: {
     type: String,
     required: [true, 'Bill number is required'],
@@ -165,6 +164,10 @@ const purchaseBillSchema = new mongoose.Schema({
     ref: 'User',
     required: true,
     index: true
+  },
+  businessId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
   }
 }, {
   timestamps: true
@@ -172,6 +175,7 @@ const purchaseBillSchema = new mongoose.Schema({
 
 // Indexes
 purchaseBillSchema.index({ userId: 1, billNumber: 1 }, { unique: true });
+purchaseBillSchema.index({ businessId: 1, billNumber: 1 }, { unique: true, partialFilterExpression: { businessId: { $exists: true } } });
 purchaseBillSchema.index({ userId: 1, vendorId: 1 });
 purchaseBillSchema.index({ userId: 1, billDate: -1 });
 purchaseBillSchema.index({ userId: 1, paymentStatus: 1 });
@@ -234,34 +238,24 @@ purchaseBillSchema.pre('save', function (next) {
 });
 
 // Generate next bill number: BILL-YYYYMM-####
-purchaseBillSchema.statics.generateBillNumber = async function (userId) {
+purchaseBillSchema.statics.generateBillNumber = async function (businessFilter, businessId) {
   const today = new Date();
   const year = today.getFullYear();
   const month = String(today.getMonth() + 1).padStart(2, '0');
 
-  const startOfMonth = new Date(year, today.getMonth(), 1);
-  const endOfMonth = new Date(year, today.getMonth() + 1, 0, 23, 59, 59, 999);
-
-  const count = await this.countDocuments({
-    userId,
-    createdAt: { $gte: startOfMonth, $lte: endOfMonth }
-  });
-
-  let sequence = count + 1;
-  let billNumber = `BILL-${year}${month}-${String(sequence).padStart(4, '0')}`;
-
-  while (await this.findOne({ userId, billNumber })) {
-    sequence++;
-    billNumber = `BILL-${year}${month}-${String(sequence).padStart(4, '0')}`;
-  }
-
-  return billNumber;
+  const prefix = `BILL-${year}${month}-`;
+  const last = await this.findOne({ ...businessFilter, billNumber: new RegExp(`^${prefix}\\d+$`) })
+    .sort({ billNumber: -1 }).select('billNumber').lean();
+  const existingMax = last ? Number(last.billNumber.slice(prefix.length)) || 0 : 0;
+  const sequence = await NumberSequence.nextAfter(`purchase-bill:${businessId}:${year}${month}`, existingMax);
+  return `${prefix}${String(sequence).padStart(4, '0')}`;
 };
 
 // Aggregate statistics for the dashboard cards
-purchaseBillSchema.statics.getPurchaseBillStats = function (userId) {
+// `match` is the caller's visibility filter, e.g. { userId: { $in: [...] } }.
+purchaseBillSchema.statics.getPurchaseBillStats = function (match) {
   return this.aggregate([
-    { $match: { userId: new mongoose.Types.ObjectId(userId) } },
+    { $match: match },
     {
       $group: {
         _id: null,
