@@ -7,10 +7,10 @@
 # Windows installers cannot be produced reliably on a Mac, so each platform is
 # built on its own runner.
 #
-# Required repository secrets:
-#   RELEASES_TOKEN — a GitHub personal access token with `contents: write` on
-#                    Akbarhaleel1/serpy-releases. The built-in GITHUB_TOKEN
-#                    cannot write to a different repository.
+# Repository secrets:
+#   RELEASES_TOKEN — required for automatic publishing, with `contents: write`
+#                    on Akbarhaleel1/serpy-releases. Without it the installers
+#                    are still built and uploaded as workflow artifacts.
 #   MONGODB_URI    — the company's own Atlas connection string. Every install
 #                    of the app talks to this one database; it is baked into
 #                    the installer here and never entered by an end user. See
@@ -92,14 +92,23 @@ jobs:
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
         run: node build/embed-config.cjs
 
-      - name: Build and publish installer
+      - name: Build installer and publish when configured
         working-directory: desktop
+        shell: bash
         env:
           # Publishing target lives in package.json → build.publish
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
           # No Apple Developer certificate — produces an unsigned macOS build.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npx electron-builder ${{ matrix.target }} --publish always
+        run: |
+          if [[ -n "$GH_TOKEN" ]]; then
+            publish=always
+          else
+            publish=never
+            echo '::warning::RELEASES_TOKEN is not configured. Building workflow artifacts without publishing a release.'
+            echo 'Installers were built as workflow artifacts. Add RELEASES_TOKEN to publish them to the updater release repository.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          npx electron-builder ${{ matrix.target }} --publish "$publish"
 
       # Also attach the installers to this workflow run, so they can be grabbed
       # without going to the releases repository.

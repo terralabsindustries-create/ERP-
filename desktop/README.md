@@ -110,6 +110,11 @@ npm run dist:mac   # or dist:win
 `npm run dist*` fails fast with a clear message if `MONGODB_URI` or
 `JWT_SECRET` isn't set — it will not silently ship a build with no database.
 
+The CI workflow builds macOS and Windows installers even when `RELEASES_TOKEN`
+is absent, and attaches them to the workflow run. Automatic publishing to
+`Akbarhaleel1/serpy-releases` (and delivery through the desktop updater) requires
+that repository secret to have `contents: write` access to the release repository.
+
 If the bundled `app.env` is somehow missing from a packaged app (a broken
 build, not something a shop can cause), the app shows an error dialog naming
 the problem and reinstalling is the fix — there is no setup form, because
