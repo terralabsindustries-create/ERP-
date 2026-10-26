@@ -32,6 +32,7 @@ export const PERMISSION_TREE: PermissionGroup[] = [
 
   { module: "Staff & Tasks", actions: ["View", "Assign Tasks", "Manage Schedule"] },
   { module: "Human Resources", actions: ["View", "Create & Edit", "Delete", "View Salary", "Manage Leaves"] },
+  { module: "Attendance", actions: ["View", "Mark Attendance"] },
   { module: "Payroll", actions: ["View", "Process Payroll", "Export"] },
 
   { module: "Delivery", actions: ["View", "Create & Edit", "Update Status"] },

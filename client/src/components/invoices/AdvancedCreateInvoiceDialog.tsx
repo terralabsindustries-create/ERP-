@@ -14,6 +14,8 @@ import { QuickCreateJobDialog } from "@/components/jobs/QuickCreateJobDialog";
 import { BillingTotals } from "@/components/billing/BillingTotals";
 import { LinePricingFields } from "@/components/billing/LinePricingFields";
 import { lineAmount, lineDraftFrom, lineInput, lineProblem, newLineDraft, type LineDraft } from "@/components/billing/lineDraft";
+import { StockAvailability } from "@/components/billing/StockAvailability";
+import { stockItemNamed, stockNeeded, unitText, type StockItem } from "@/components/billing/stock";
 import { documentTotals, isAreaUnit } from "@/lib/billing";
 import { localDate } from "@/lib/format";
 
@@ -35,7 +37,7 @@ export function AdvancedCreateInvoiceDialog({
 }: AdvancedCreateInvoiceDialogProps) {
   const [customers, setCustomers] = useState<any[]>([]);
   const [jobs, setJobs] = useState<any[]>([]);
-  const [inventoryItems, setInventoryItems] = useState<any[]>([]);
+  const [inventoryItems, setInventoryItems] = useState<StockItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState<{ [key: number]: boolean }>({});
   const [showCreateCustomer, setShowCreateCustomer] = useState(false);
@@ -177,6 +179,27 @@ export function AdvancedCreateInvoiceDialog({
     setShowCreateJob(false);
   };
 
+  // Picking a job ticket bills it: its customer, and — while the invoice has
+  // no lines of its own yet — its items (with their notes and HSN codes) and
+  // design charge. Everything stays editable.
+  const fillFromJob = (jobId: string) => {
+    const job = jobs.find((j) => (j._id || j.id) === jobId);
+    if (!job) return;
+    const customerId = job.customerId?._id || job.customerId || "";
+    const hasOwnLines = formData.items.some((l) => l.itemName.trim());
+    const jobLines = (job.items || []).map((item: any) => lineDraftFrom(key(), item));
+    setFormData((prev) => ({
+      ...prev,
+      jobId,
+      customerId: customerId || prev.customerId,
+      items: hasOwnLines || !jobLines.length ? prev.items : jobLines,
+      designCharge: prev.designCharge || (job.designCharge?.amount ? String(job.designCharge.amount) : "")
+    }));
+    if (!hasOwnLines && jobLines.length) {
+      toast({ title: "Filled from the job ticket", description: `${jobLines.length} item${jobLines.length === 1 ? "" : "s"} from ${job.title}` });
+    }
+  };
+
   const fetchJobs = async () => {
     try {
       const jobsData = await apiClient.listAll('/jobs', 'jobs');
@@ -220,6 +243,22 @@ export function AdvancedCreateInvoiceDialog({
   const calculateTotals = () =>
     documentTotals(formData.items.map(lineAmount), Number(formData.designCharge) || 0, Number(formData.discountAmount) || 0);
 
+  // The invoice takes its stock items out of stock, and the server refuses a
+  // line there isn't enough of; say so before sending.
+  const neededForStock = (stock: StockItem) => formData.items.reduce(
+    (total, line) => total + (line.itemName === stock.name ? stockNeeded(lineInput(line), stock.unit) : 0),
+    0
+  );
+  const shortOfStock = () => {
+    for (const [i, l] of formData.items.entries()) {
+      const stock = stockItemNamed(inventoryItems, l.itemName);
+      if (!stock) continue;
+      const needed = neededForStock(stock);
+      if (needed > (Number(stock.quantity) || 0)) return `Line ${i + 1}: ${needed} ${unitText(stock.unit)} of ${stock.name} is needed across all lines; only ${stock.quantity || 0} is in stock.`;
+    }
+    return "";
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -228,8 +267,10 @@ export function AdvancedCreateInvoiceDialog({
       : formData.items.length === 0
         ? "Add at least one item."
         : formData.items.map((l, i) => lineProblem(l, i + 1)).find(Boolean) ||
+          shortOfStock() ||
           (Number(formData.designCharge) < 0 ? "The design charge can't be negative." : "") ||
-          (calculateTotals().discount > calculateTotals().gross ? "The discount is more than the invoice." : "");
+          (calculateTotals().discount > calculateTotals().gross ? "The discount is more than the invoice." : "") ||
+          (calculateTotals().total <= 0 ? "The invoice total must be more than 0." : "");
     if (problem) {
       toast({ title: "Check the invoice", description: problem, variant: "destructive" });
       return;
@@ -242,7 +283,7 @@ export function AdvancedCreateInvoiceDialog({
         jobId: formData.jobId,
         invoiceDate: formData.invoiceDate,
         dueDate: formData.dueDate,
-        items: formData.items.map((l) => ({ itemName: l.itemName.trim(), description: l.description.trim(), ...lineInput(l) })),
+        items: formData.items.map((l) => ({ itemName: l.itemName.trim(), description: l.description.trim(), hsnCode: l.hsnCode.trim(), ...lineInput(l) })),
         designCharge: Number(formData.designCharge) || 0,
         discountAmount: Number(formData.discountAmount) || 0,
         notes: formData.notes,
@@ -424,7 +465,7 @@ export function AdvancedCreateInvoiceDialog({
                     // Radix self-corrects an unrecognized controlled value by
                     // calling this with "", which happens for a job just
                     // created inline since its SelectItem was never mounted.
-                    if (value) setFormData(prev => ({ ...prev, jobId: value }));
+                    if (value && value !== formData.jobId) fillFromJob(value);
                   }}
                 >
                   <SelectTrigger>
@@ -487,7 +528,7 @@ export function AdvancedCreateInvoiceDialog({
             <CardContent className="space-y-4">
               {formData.items.map((item, index) => (
                 <div key={item.key} className="space-y-3 p-4 border rounded-lg">
-                  <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-2 md:items-end">
+                  <div className="grid grid-cols-1 md:grid-cols-[1.3fr_1.3fr_7rem_auto] gap-2 md:items-end">
                     <div className="space-y-1 relative autocomplete-container">
                       <Label htmlFor={`inv-item-${item.key}`} className="text-xs">Item name *</Label>
                       <Input
@@ -525,7 +566,8 @@ export function AdvancedCreateInvoiceDialog({
                                     updateItem(index, {
                                       itemName: selectedItem.name,
                                       unitPrice: String(selectedItem.unitCost || 0),
-                                      description: selectedItem.description || item.description,
+                                      description: item.description || selectedItem.description || '',
+                                      hsnCode: selectedItem.hsnCode || item.hsnCode,
                                       unit: invUnit,
                                       pricing: isAreaUnit(invUnit) ? invUnit : 'unit'
                                     });
@@ -534,7 +576,8 @@ export function AdvancedCreateInvoiceDialog({
                                 >
                                   <span className="font-medium">{selectedItem.name}</span>
                                   <span className="text-xs text-muted-foreground">
-                                    Stock: {selectedItem.quantity || 0}{selectedItem.unit ? ` ${selectedItem.unit}` : ''} | ₹{selectedItem.unitCost || 0}
+                                    In stock: {selectedItem.quantity || 0} {unitText(selectedItem.unit)} · ₹{selectedItem.unitCost || 0}
+                                    {selectedItem.hsnCode ? ` · HSN ${selectedItem.hsnCode}` : ''}
                                   </span>
                                 </button>
                               ))
@@ -544,12 +587,22 @@ export function AdvancedCreateInvoiceDialog({
                       })()}
                     </div>
                     <div className="space-y-1">
-                      <Label htmlFor={`inv-desc-${item.key}`} className="text-xs">Description</Label>
+                      <Label htmlFor={`inv-desc-${item.key}`} className="text-xs">Note</Label>
                       <Input
                         id={`inv-desc-${item.key}`}
                         value={item.description}
                         onChange={(e) => updateItem(index, { description: e.target.value })}
                         placeholder="Material, finish… (optional)"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor={`inv-hsn-${item.key}`} className="text-xs">HSN code</Label>
+                      <Input
+                        id={`inv-hsn-${item.key}`}
+                        value={item.hsnCode}
+                        onChange={(e) => updateItem(index, { hsnCode: e.target.value.replace(/\D/g, '').slice(0, 8) })}
+                        inputMode="numeric"
+                        placeholder="Optional"
                       />
                     </div>
                     <Button
@@ -563,6 +616,10 @@ export function AdvancedCreateInvoiceDialog({
                     </Button>
                   </div>
                   <LinePricingFields line={item} idPrefix={`inv-${item.key}`} onChange={(patch) => updateItem(index, patch)} />
+                  {(() => {
+                    const stock = stockItemNamed(inventoryItems, item.itemName);
+                    return stock ? <StockAvailability item={stock} needed={neededForStock(stock)} blocking /> : null;
+                  })()}
                 </div>
               ))}
 

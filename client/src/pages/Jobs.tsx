@@ -67,7 +67,14 @@ export default function Jobs() {
   const [invoiceToEdit, setInvoiceToEdit] = useState<any>(null);
   const [showEditInvoiceDialog, setShowEditInvoiceDialog] = useState(false);
   const { toast } = useToast();
-  const { user } = useAuth();
+  const { hasPermission } = useAuth();
+  // A login may see job tickets without being able to change them (e.g. the
+  // accountant, who bills them); only the actions it holds are offered.
+  const canInvoice = hasPermission("Invoicing: Create & Edit");
+  const canCreateJob = hasPermission("Jobs: Create & Edit");
+  const canChangeStatus = hasPermission("Jobs: Change Status");
+  const canAssign = hasPermission("Staff & Tasks: Assign Tasks");
+  const canDeleteJob = hasPermission("Jobs: Delete");
 
   useEffect(() => {
     fetchJobs();
@@ -261,10 +268,12 @@ export default function Jobs() {
             Every print job from enquiry to delivery — specs, status, deadlines and billing
           </p>
         </div>
-        <Button onClick={() => setShowCreateDialog(true)} className="gap-2">
-          <Plus className="w-4 h-4" />
-          New Job Ticket
-        </Button>
+        {canCreateJob && (
+          <Button onClick={() => setShowCreateDialog(true)} className="gap-2">
+            <Plus className="w-4 h-4" />
+            New Job Ticket
+          </Button>
+        )}
       </div>
 
       {/* Summary Cards */}
@@ -347,12 +356,12 @@ export default function Jobs() {
                 >
                   Clear filters
                 </Button>
-              ) : (
+              ) : canCreateJob ? (
                 <Button onClick={() => setShowCreateDialog(true)} className="gap-2">
                   <Plus className="h-4 w-4" />
                   Create Job
                 </Button>
-              )}
+              ) : null}
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -417,15 +426,27 @@ export default function Jobs() {
                       <td className="px-4 py-3 text-right font-medium tabular-nums">
                         {billedOf(job) > 0 ? (
                           formatCurrency(Math.round(billedOf(job)))
-                        ) : estimateOf(job) > 0 ? (
-                          <span className="text-muted-foreground" title="Estimate — not billed yet">
-                            {formatCurrency(estimateOf(job))} <span className="text-xs">est.</span>
-                          </span>
                         ) : (
-                          <span className="text-muted-foreground">Not billed</span>
+                          <div className="flex flex-col items-end gap-1">
+                            {estimateOf(job) > 0 ? (
+                              <span className="text-muted-foreground" title="Estimate — not billed yet">
+                                {formatCurrency(estimateOf(job))} <span className="text-xs">est.</span>
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">Not billed</span>
+                            )}
+                            {/* The job ticket's items, notes and HSN codes come across to the invoice. */}
+                            {canInvoice && job.status !== "cancelled" && (
+                              <Button variant="outline" size="xs" onClick={() => handleGenerateInvoice(job)}>
+                                <FileText />
+                                Create invoice
+                              </Button>
+                            )}
+                          </div>
                         )}
                       </td>
                       <td className="px-4 py-3">
+                        {(canInvoice || canChangeStatus || canAssign || canDeleteJob) && (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="icon" className="h-8 w-8">
@@ -433,32 +454,45 @@ export default function Jobs() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => handleGenerateInvoice(job)}>
-                              <FileText className="h-4 w-4" />
-                              Generate Invoice
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => handleEditInvoice(job)}>
-                              <FileEdit className="h-4 w-4" />
-                              Edit Invoice
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => handleUpdateStatus(job.id)}>
-                              <Edit className="h-4 w-4" />
-                              Update Status
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => setAssignTaskDialog({ open: true, jobId: job.id })}>
-                              <UserPlus className="h-4 w-4" />
-                              Assign Task
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              onClick={() => handleDeleteJob(job.id)}
-                              className="text-destructive focus:text-destructive"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                              Delete Job
-                            </DropdownMenuItem>
+                            {canInvoice && (
+                              <>
+                                <DropdownMenuItem onClick={() => handleGenerateInvoice(job)}>
+                                  <FileText className="h-4 w-4" />
+                                  {billedOf(job) > 0 ? "Create another invoice" : "Create invoice"}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleEditInvoice(job)}>
+                                  <FileEdit className="h-4 w-4" />
+                                  Edit Invoice
+                                </DropdownMenuItem>
+                              </>
+                            )}
+                            {canChangeStatus && (
+                              <DropdownMenuItem onClick={() => handleUpdateStatus(job.id)}>
+                                <Edit className="h-4 w-4" />
+                                Update Status
+                              </DropdownMenuItem>
+                            )}
+                            {canAssign && (
+                              <DropdownMenuItem onClick={() => setAssignTaskDialog({ open: true, jobId: job.id })}>
+                                <UserPlus className="h-4 w-4" />
+                                Assign Task
+                              </DropdownMenuItem>
+                            )}
+                            {canDeleteJob && (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  onClick={() => handleDeleteJob(job.id)}
+                                  className="text-destructive focus:text-destructive"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                  Delete Job
+                                </DropdownMenuItem>
+                              </>
+                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
+                        )}
                       </td>
                     </tr>
                   ))}

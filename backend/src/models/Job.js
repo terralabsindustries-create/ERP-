@@ -10,6 +10,9 @@ const jobComponentSchema = new mongoose.Schema({
 // Invoice item schema for new invoice items feature
 const invoiceItemSchema = new mongoose.Schema({
   itemName: { type: String, required: true, trim: true },
+  // A note for this item (finish, colour, instructions); it becomes the
+  // line's description on the invoice raised from the job.
+  description: { type: String, trim: true, default: '' },
   quantity: { type: Number, default: 1 },
   unitPrice: { type: Number, default: 0 },
   hsnCode: { type: String, trim: true, uppercase: true },

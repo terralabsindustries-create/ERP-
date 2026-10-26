@@ -24,6 +24,7 @@ export interface QuotationItem {
   unit_price: number;
   length?: number;
   width?: number;
+  hsn_code?: string;
 }
 
 export interface CreateQuotationDialogProps {
@@ -33,8 +34,9 @@ export interface CreateQuotationDialogProps {
   initialItems?: QuotationItem[];
 }
 
-/** A line being quoted, with the stock on hand when an inventory item was picked. */
-type QuoteLine = LineDraft & { availableStock?: number; stockUnit?: string };
+// A quotation does not use stock, so unlike a job ticket or an invoice it
+// does not show what is on hand.
+type QuoteLine = LineDraft;
 
 export const CreateQuotationDialog = ({ children, onQuotationCreated, initialItems }: CreateQuotationDialogProps) => {
   const [open, setOpen] = useState(false);
@@ -103,21 +105,19 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
     setItems((list) => list.map((item, i) => (i === index ? { ...item, ...patch } : item)));
   };
 
-  // Picking an inventory item fills in its price and description, prices it by
-  // size when the stock is counted in sq ft / sq m, and records the stock on
-  // hand so the row can warn when the quantity exceeds it.
+  // Picking an inventory item fills in its price, description and HSN code,
+  // and prices it by size when the stock is counted in sq ft / sq m.
   const selectInventoryItem = (index: number, name: string) => {
     const inv = inventoryItems.find((i) => i.name === name);
     if (!inv) return;
     const unit = inv.unit || 'pieces';
     updateItem(index, {
       itemName: inv.name,
-      description: inv.description || items[index].description,
+      description: items[index].description || inv.description || '',
+      hsnCode: inv.hsnCode || items[index].hsnCode,
       unitPrice: String(inv.unitCost || 0),
       unit,
       pricing: isAreaUnit(unit) ? unit : 'unit',
-      availableStock: inv.quantity ?? 0,
-      stockUnit: unit,
     });
   };
 
@@ -145,14 +145,6 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
   // lines) plus the design charge. No GST.
   const totals = documentTotals(items.map(lineAmount), Number(formData.design_charge) || 0);
 
-  /** Stock used by a line, in the stock's own unit: its total area for a sized line, else its quantity. */
-  const stockNeeded = (item: QuoteLine) => {
-    const input = lineInput(item);
-    return item.pricing !== 'unit' && item.stockUnit === item.pricing
-      ? input.quantity * input.length * input.width
-      : input.quantity;
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -178,6 +170,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
           return {
             item_name: l.itemName.trim(),
             description: l.description.trim(),
+            hsn_code: l.hsnCode.trim(),
             quantity: p.quantity,
             unit: p.unit,
             unit_price: p.unitPrice,
@@ -219,7 +212,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
           if (initialItems?.length) {
             setItems(
               initialItems.map((i) =>
-                lineDraftFrom(nextKey.current++, { itemName: i.item_name, description: i.description, quantity: i.quantity, unit: i.unit, unitPrice: i.unit_price, length: i.length, width: i.width })
+                lineDraftFrom(nextKey.current++, { itemName: i.item_name, description: i.description, hsnCode: i.hsn_code, quantity: i.quantity, unit: i.unit, unitPrice: i.unit_price, length: i.length, width: i.width })
               )
             );
           }
@@ -322,13 +315,10 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
               </Button>
             </div>
 
-            {items.map((item, index) => {
-              const needed = stockNeeded(item);
-              const sameUnit = item.stockUnit === (item.pricing === 'unit' ? item.unit : item.pricing);
-              return (
+            {items.map((item, index) => (
               <Card key={item.key}>
                 <CardContent className="space-y-3 p-4">
-                  <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_1fr_7rem]">
                     <div className="space-y-1 relative item-name-autocomplete">
                       <Label htmlFor={`quote-item-${item.key}`} className="text-xs">Item Name</Label>
                       <Input
@@ -366,7 +356,8 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
                                 >
                                   <span className="font-medium">{invItem.name}</span>
                                   <span className="text-xs text-muted-foreground">
-                                    Stock: {invItem.quantity ?? 0}{invItem.unit ? ` ${invItem.unit}` : ''} | ₹{invItem.unitCost ?? 0}
+                                    ₹{invItem.unitCost ?? 0}{invItem.unit ? ` per ${invItem.unit}` : ''}
+                                    {invItem.hsnCode ? ` · HSN ${invItem.hsnCode}` : ''}
                                   </span>
                                 </button>
                               ))
@@ -385,26 +376,20 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
                         placeholder="Description"
                       />
                     </div>
+
+                    <div className="space-y-1">
+                      <Label htmlFor={`quote-hsn-${item.key}`} className="text-xs">HSN code</Label>
+                      <Input
+                        id={`quote-hsn-${item.key}`}
+                        value={item.hsnCode}
+                        onChange={(e) => updateItem(index, { hsnCode: e.target.value.replace(/\D/g, '').slice(0, 8) })}
+                        inputMode="numeric"
+                        placeholder="Optional"
+                      />
+                    </div>
                   </div>
 
                   <LinePricingFields line={item} idPrefix={`quote-${item.key}`} onChange={(patch) => updateItem(index, patch)} />
-
-                  {item.availableStock !== undefined && (
-                    <div className="text-xs">
-                      {sameUnit && needed > item.availableStock ? (
-                        // A quotation does not reserve or deduct stock, so this is a
-                        // heads-up for the person quoting, not a blocker.
-                        <span className="text-warning-strong font-medium">
-                          Quoting {needed} but only {item.availableStock}
-                          {item.stockUnit ? ` ${item.stockUnit}` : ''} in stock — you may need to restock before invoicing.
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground">
-                          In stock: {item.availableStock}{item.stockUnit ? ` ${item.stockUnit}` : ''}
-                        </span>
-                      )}
-                    </div>
-                  )}
 
                   {items.length > 1 && (
                     <Button
@@ -420,8 +405,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
                   )}
                 </CardContent>
               </Card>
-              );
-            })}
+            ))}
           </div>
 
           {/* Totals */}

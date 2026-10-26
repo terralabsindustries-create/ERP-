@@ -43,6 +43,11 @@ export function NewTransactionDialog({ open, onOpenChange, onTransactionCreated 
       return;
     }
 
+    if (!(parseFloat(formData.amount) > 0)) {
+      toast({ title: "Invalid Input", description: "The amount must be more than 0", variant: "destructive" });
+      return;
+    }
+
     setLoading(true);
     try {
       await apiClient.createAccountTransaction({

@@ -67,7 +67,7 @@ function StatusPicker({ value, onChange, label, readOnly }: { value: Status; onC
 export default function Attendance() {
   const { toast } = useToast();
   const { hasPermission } = useAuth();
-  const canEdit = hasPermission("Human Resources: Create & Edit");
+  const canEdit = hasPermission("Human Resources: Create & Edit") || hasPermission("Attendance: Mark Attendance");
   const [date, setDate] = useState(() => ymd(new Date()));
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [saved, setSaved] = useState<Record<string, Status>>({});

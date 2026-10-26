@@ -3,6 +3,8 @@ const mongoose = require('mongoose');
 const quotationItemSchema = new mongoose.Schema({
   item_name: { type: String, required: true, trim: true },
   description: { type: String, trim: true, default: '' },
+  // Filled from the stock item when one is picked; carried onto the invoice.
+  hsn_code: { type: String, trim: true, uppercase: true, default: '' },
   quantity: { type: Number, required: true, min: [0.01, 'Quantity must be greater than 0'] },
   unit_price: { type: Number, required: true, min: [0, 'Unit price cannot be negative'] },
   unit: {

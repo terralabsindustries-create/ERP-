@@ -115,6 +115,8 @@ const purchaseOrderSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
+  // Set when the order is placed (marked ordered): an approved order can have
+  // its purchase bill generated in one click (routes/purchaseBills.js).
   approvedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
@@ -130,6 +132,14 @@ const purchaseOrderSchema = new mongoose.Schema({
   },
   completedAt: {
     type: Date
+  },
+  // The purchase bill generated from this order, once there is one.
+  purchaseBillId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PurchaseBill'
+  },
+  purchaseBillNumber: {
+    type: String
   }
 }, {
   timestamps: true

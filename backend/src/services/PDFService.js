@@ -410,9 +410,10 @@ class PDFService {
 
   /**
    * One row of the items table, from a line in either document's terms:
-   * { name, description, quantity, unit, rate, amount, length, width,
+   * { name, description, hsn, quantity, unit, rate, amount, length, width,
    *   areaPerPiece, totalArea }. An area-priced line shows its size and area
-   * per piece, its total area, the pieces and the rate per sq ft / sq m.
+   * per piece, its total area, the pieces and the rate per sq ft / sq m. The
+   * line's note and HSN code print under its name.
    */
   static itemRow(line) {
     const size = sizeLabel(line);
@@ -420,7 +421,7 @@ class PDFService {
     const showArea = !!areaUnit && (line.totalArea || 0) > 0;
     return {
       description: line.name || '',
-      sub: line.description || '',
+      sub: [line.description, line.hsn ? 'HSN: ' + line.hsn : ''].filter(Boolean).join('\n'),
       size,
       sizeSub: size && line.areaPerPiece > 0 ? `${areaLabel(line.areaPerPiece, line.unit)} each` : '',
       area: showArea ? areaLabel(line.totalArea, line.unit) : '',
@@ -452,6 +453,7 @@ class PDFService {
       return this.itemRow({
         name: item.itemName,
         description: item.description,
+        hsn: item.hsnCode,
         quantity: item.quantity,
         unit,
         rate: item.unitPrice || 0,
@@ -518,6 +520,7 @@ class PDFService {
       this.itemRow({
         name: item.item_name,
         description: item.description,
+        hsn: item.hsn_code,
         quantity: item.quantity,
         unit: item.unit,
         rate: item.unit_price || 0,

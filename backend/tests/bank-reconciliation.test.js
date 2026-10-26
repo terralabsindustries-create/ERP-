@@ -9,8 +9,11 @@ const { createOrg, auth } = require('./helpers/fixtures');
 let org;
 let other;
 let sequence = 0;
-const today = new Date().toISOString().slice(0, 10);
-const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+// Statement dates are interpreted in IST by the API. Pick calendar days in
+// that timezone so entries created after midnight IST are eligible for today.
+const istNow = new Date(Date.now() + 330 * 60000);
+const today = istNow.toISOString().slice(0, 10);
+const tomorrow = new Date(istNow.getTime() + 86400000).toISOString().slice(0, 10);
 
 const transaction = (user, type, amount, accountName = 'Main Bank') => AccountTransaction.create({
   transactionNumber: `TESTBANK${process.pid}${++sequence}`,

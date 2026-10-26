@@ -75,6 +75,9 @@ function documentTotals(amounts, designCharge = 0, discount = 0) {
   return { subtotal, designCharge: design, gross, discount: disc, total: round2(gross - disc) };
 }
 
+/** An HSN code as stored on a line: trimmed and upper-cased, '' when there is none. */
+const hsnOf = (value) => (value ? String(value).trim().toUpperCase() : '');
+
 /**
  * An invoice line as stored, priced from what the client sent. Only the
  * quantity, unit, rate and dimensions are taken; every amount is recomputed.
@@ -87,6 +90,7 @@ function toInvoiceLine(item = {}) {
   return {
     itemName: String(item.itemName || '').trim(),
     description: item.description ? String(item.description).trim() : '',
+    hsnCode: hsnOf(item.hsnCode),
     quantity: p.quantity,
     unit,
     unitPrice: p.unitPrice,
@@ -113,6 +117,7 @@ function toQuotationLine(item = {}) {
   return {
     item_name: String(item.item_name || '').trim(),
     description: item.description ? String(item.description).trim() : '',
+    hsn_code: hsnOf(item.hsn_code),
     quantity: p.quantity,
     unit,
     unit_price: p.unitPrice,
@@ -128,7 +133,7 @@ function toQuotationLine(item = {}) {
 
 /** The invoice line a quotation line becomes on conversion. */
 const quotationLineToInvoiceLine = (q) =>
-  toInvoiceLine({ itemName: q.item_name, description: q.description, quantity: q.quantity, unit: q.unit, unitPrice: q.unit_price, length: q.length, width: q.width });
+  toInvoiceLine({ itemName: q.item_name, description: q.description, hsnCode: q.hsn_code, quantity: q.quantity, unit: q.unit, unitPrice: q.unit_price, length: q.length, width: q.width });
 
 /** "6 × 4 ft", or '' for a line without dimensions. */
 function sizeLabel(line) {
@@ -148,8 +153,12 @@ function areaLabel(area, unit) {
   return `${fmtQty(area)} ${meta ? meta.label : unit || ''}`.trim();
 }
 
+/** HSN codes are 4 to 8 digits (the same rule as stock items). */
+const HSN_PATTERN = /^\d{4,8}$/;
+
 module.exports = {
   AREA_UNITS,
+  HSN_PATTERN,
   isAreaUnit,
   round2,
   round4,

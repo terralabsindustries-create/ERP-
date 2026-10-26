@@ -186,6 +186,7 @@ class InventoryService {
    */
   static async checkStockAvailability(items, user) {
     const stockCheck = { available: true, items: [], errors: [] };
+    const requiredByStock = new Map();
 
     for (const item of items || []) {
       const inventoryItem = item.itemName ? await findItem(user, item.itemName) : null;
@@ -194,16 +195,19 @@ class InventoryService {
         continue;
       }
       const required = stockNeeded(item, inventoryItem);
-      const isAvailable = inventoryItem.quantity >= required;
+      const id = String(inventoryItem._id);
+      const totalRequired = (requiredByStock.get(id) || 0) + required;
+      requiredByStock.set(id, totalRequired);
+      const isAvailable = inventoryItem.quantity >= totalRequired;
       if (!isAvailable) {
         stockCheck.available = false;
-        stockCheck.errors.push(`Insufficient stock for "${item.itemName}". Available: ${inventoryItem.quantity}, Required: ${required}`);
+        stockCheck.errors.push(`Insufficient stock for "${item.itemName}". Available: ${inventoryItem.quantity}, Required: ${totalRequired} across invoice lines`);
       }
       stockCheck.items.push({
         itemName: item.itemName,
         available: isAvailable,
         availableQuantity: inventoryItem.quantity,
-        requiredQuantity: required,
+        requiredQuantity: totalRequired,
         unit: inventoryItem.unit
       });
     }

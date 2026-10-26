@@ -92,6 +92,7 @@ export const MODULE_INFO: Record<string, { label: string; hint: string }> = {
   "SAC Codes": { label: "SAC Codes", hint: "Service tax codes" },
   "Staff & Tasks": { label: "Staff & Tasks", hint: "Assign tasks, schedules, team overview" },
   "Human Resources": { label: "Employees & HR", hint: "Employees, attendance, leave" },
+  Attendance: { label: "Attendance", hint: "The daily attendance register only" },
   Payroll: { label: "Payroll", hint: "Salaries and payslips" },
   WhatsApp: { label: "WhatsApp", hint: "Messages to customers" },
   "User Management": { label: "Users & Roles", hint: "Logins, roles and teams" },
@@ -106,7 +107,7 @@ export const PERMISSION_AREAS: { label: string; modules: string[] }[] = [
   { label: "Production", modules: ["Jobs", "Walk-In Jobs", "Job Proofing", "Designer Timer", "Delivery"] },
   { label: "Billing & finance", modules: ["Invoicing", "Invoicing (View No GST)", "Payments", "Payment Reminders", "Accounts", "Reports", "Cost & Profit"] },
   { label: "Materials & purchase", modules: ["Inventory", "Vendors", "Purchase Bills", "HSN Codes", "SAC Codes"] },
-  { label: "People", modules: ["Staff & Tasks", "Human Resources", "Payroll"] },
+  { label: "People", modules: ["Staff & Tasks", "Human Resources", "Attendance", "Payroll"] },
   { label: "Admin & setup", modules: ["User Management", "Settings", "Activity Log", "WhatsApp"] }
 ];
 

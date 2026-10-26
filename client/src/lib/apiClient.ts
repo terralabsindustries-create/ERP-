@@ -546,6 +546,16 @@ class ApiClient {
     return this.get('/purchase-bills/stats/summary');
   }
 
+  /** Approved (ordered) purchase orders that have no bill yet. */
+  async getBillableOrders() {
+    return this.get('/purchase-bills/from-orders');
+  }
+
+  /** Generate the bills of approved purchase orders: these ones, or all that are waiting. */
+  async generatePurchaseBills(purchaseOrderIds?: string[]) {
+    return this.post('/purchase-bills/generate', purchaseOrderIds ? { purchaseOrderIds } : {});
+  }
+
   async downloadPurchaseBillPDF(billId: string) {
     const token = localStorage.getItem('token');
     const response = await fetch(`${this.baseURL}/purchase-bills/${billId}/pdf`, {

@@ -31,6 +31,7 @@ import { lineAmount, lineDraftFrom, lineInput, lineProblem, newLineDraft, type L
 interface InvoiceItem {
   itemName: string;
   description?: string;
+  hsnCode?: string;
   quantity: number;
   unit?: string;
   unitPrice: number;
@@ -185,7 +186,7 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
         jobId: formData.jobId === 'no-job' ? null : formData.jobId,
         invoiceDate: formData.invoiceDate,
         dueDate: formData.dueDate,
-        items: formData.items.map((l) => ({ itemName: l.itemName.trim(), description: l.description.trim(), ...lineInput(l) })),
+        items: formData.items.map((l) => ({ itemName: l.itemName.trim(), description: l.description.trim(), hsnCode: l.hsnCode.trim(), ...lineInput(l) })),
         designCharge: Number(formData.designCharge) || 0,
         discountAmount: Number(formData.discountAmount) || 0,
         notes: formData.notes,
@@ -326,7 +327,7 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_7rem] gap-4">
                     <div className="space-y-2">
                       <Label htmlFor={`edit-item-${item.key}`}>Item Name</Label>
                       <Input
@@ -339,12 +340,23 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
                     </div>
 
                     <div className="space-y-2">
-                      <Label htmlFor={`edit-desc-${item.key}`}>Description</Label>
+                      <Label htmlFor={`edit-desc-${item.key}`}>Note</Label>
                       <Input
                         id={`edit-desc-${item.key}`}
                         value={item.description}
                         onChange={(e) => updateItem(index, { description: e.target.value })}
-                        placeholder="Enter description"
+                        placeholder="Material, finish… (optional)"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor={`edit-hsn-${item.key}`}>HSN code</Label>
+                      <Input
+                        id={`edit-hsn-${item.key}`}
+                        value={item.hsnCode}
+                        onChange={(e) => updateItem(index, { hsnCode: e.target.value.replace(/\D/g, '').slice(0, 8) })}
+                        inputMode="numeric"
+                        placeholder="Optional"
                       />
                     </div>
                   </div>

@@ -28,7 +28,7 @@ const transactionValidation = [
   body('transactionType').isIn(['income', 'expense', 'transfer', 'opening_balance', 'adjustment'])
     .withMessage('Invalid transaction type'),
   body('category').notEmpty().withMessage('Category is required').trim(),
-  body('amount').isFloat({ min: 0 }).withMessage('Amount must be a positive number'),
+  body('amount').isFloat({ gt: 0 }).withMessage('Enter an amount above 0'),
   body('description').notEmpty().withMessage('Description is required').trim(),
   body('paymentMethod').isIn(['cash', 'bank_transfer', 'cheque', 'card', 'upi', 'wallet', 'other'])
     .withMessage('Invalid payment method'),
@@ -462,9 +462,12 @@ router.get('/stats/summary', protect, async (req, res) => {
 });
 
 // @route   GET /api/accounts/reports/summary
-// @desc    Period-aware financial summary (income/expense/net) + current balances
-// @access  Private
+// @desc    Profit & loss for a period (income, expenses, net) + current balances
+// @access  Private — the admin (business owner) only, whatever else a login may see
 router.get('/reports/summary', protect, async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ status: 'error', message: 'Only the owner can see the profit & loss report.', code: 'PERMISSION_DENIED' });
+  }
   try {
     const period = req.query.period || 'month';
     const now = new Date();

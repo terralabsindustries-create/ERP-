@@ -118,7 +118,8 @@ export function CounterBillingDialog({ job, onOpenChange, onBilled }: { job: Cou
     if (customer.state === "new" && !canAddCustomer) return `${job?.customerName} isn't in Customers yet, and your login can't add customers. Ask an admin to add them first.`;
     if (!calc.items.length || calc.items.some((i) => !i.itemName.trim())) return "Every line needs an item name.";
     if (calc.items.some((i) => !(i.qty > 0))) return "Every line needs a quantity.";
-    if (calc.items.some((i) => !(Number(i.rate) >= 0) || i.rate === "")) return "Every line needs a rate.";
+    if (calc.items.some((i) => i.rate === "")) return "Every line needs a rate.";
+    if (calc.items.some((i) => !(i.unitPrice > 0))) return "Every line needs a rate above ₹0.";
     if (calc.subtotal <= 0) return "The bill is ₹0 — enter the rates.";
     if (calc.disc < 0 || calc.disc > calc.subtotal) return "The discount can't be more than the bill.";
     if (collectNow < 0 || collectNow > balance + 0.001) return `You can collect at most ${formatINR(balance)} now.`;

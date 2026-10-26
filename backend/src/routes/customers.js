@@ -22,7 +22,7 @@ const customerValidation = [
   // the create route treats any truthy email as one to de-duplicate on.
   body('email').optional({ values: 'falsy' }).isEmail().normalizeEmail(),
   body('phone').optional({ values: 'falsy' }).matches(/^\+?[\d\s()-]{7,20}$/).withMessage('Enter a valid phone number'),
-  body('customerType').optional({ values: 'falsy' }).isIn(['Individual', 'Business', 'Corporate', 'Walk-in']),
+  body('customerType').optional({ values: 'falsy' }).isIn(Customer.schema.path('customerType').enumValues).withMessage('Choose walk-in, agency or another customer type'),
 ];
 
 // @route   GET /api/customers
@@ -168,8 +168,6 @@ router.get('/:id', protect, async (req, res) => {
 // @access  Private
 router.post('/', protect, requirePermission('Customers: Create & Edit'), customerValidation, validate, async (req, res) => {
   try {
-
-    console.log('REQUEST BODY IS WORKING', req.body)
     // Check if customer with same email already exists (scoped to the same company/admin)
     // Prefer dataScope isolation when available; fallback to userId during migration
     if (req.body.email) {

@@ -11,7 +11,10 @@ export type PricingMode = "unit" | AreaUnit;
 export interface LineDraft {
   key: number;
   itemName: string;
+  /** The line's note: material, finish, instructions. */
   description: string;
+  /** Filled from the stock item when one is picked; editable. */
+  hsnCode: string;
   pricing: PricingMode;
   quantity: string;
   /** The unit counted for per-unit lines; the area unit (sqft/sqm) for area lines. */
@@ -27,6 +30,7 @@ export const newLineDraft = (key: number, patch: Partial<LineDraft> = {}): LineD
   key,
   itemName: "",
   description: "",
+  hsnCode: "",
   pricing: "unit",
   quantity: "1",
   unit: "pieces",
@@ -39,7 +43,7 @@ export const newLineDraft = (key: number, patch: Partial<LineDraft> = {}): LineD
 /** A saved line (either document) back into the editor. */
 export function lineDraftFrom(
   key: number,
-  line: { itemName?: string; description?: string; quantity?: number; unit?: string; unitPrice?: number; length?: number; width?: number; itemType?: string }
+  line: { itemName?: string; description?: string; hsnCode?: string; quantity?: number; unit?: string; unitPrice?: number; length?: number; width?: number; itemType?: string }
 ): LineDraft {
   // Older area lines from job tickets can say "pieces"; they were priced per sq ft.
   const unit = line.itemType === "Square Feet" && !isAreaUnit(line.unit) ? "sqft" : line.unit || "pieces";
@@ -48,6 +52,7 @@ export function lineDraftFrom(
     key,
     itemName: line.itemName || "",
     description: line.description || "",
+    hsnCode: line.hsnCode || "",
     pricing: isAreaUnit(unit) && hasSize ? unit : "unit",
     quantity: line.quantity === undefined ? "1" : String(line.quantity),
     unit,
@@ -71,12 +76,17 @@ export function lineInput(l: LineDraft) {
 
 export const lineAmount = (l: LineDraft) => priceLine(lineInput(l)).amount;
 
+/** HSN codes are 4 to 8 digits (backend utils/billing.js HSN_PATTERN). */
+export const HSN_PATTERN = /^\d{4,8}$/;
+
 /** What is wrong with a line, or "" when it can be saved. */
 export function lineProblem(l: LineDraft, n: number): string {
   if (!l.itemName.trim()) return `Line ${n}: enter the item name.`;
   if (!(Number(l.quantity) > 0)) return `Line ${n}: the quantity must be more than 0.`;
-  if (l.unitPrice === "" || !(Number(l.unitPrice) >= 0)) return `Line ${n}: enter the rate.`;
+  if (l.unitPrice === "") return `Line ${n}: enter the rate.`;
+  if (!(Number(l.unitPrice) > 0)) return `Line ${n}: the rate must be more than 0.`;
   if (l.pricing !== "unit" && !(Number(l.length) > 0 && Number(l.width) > 0)) return `Line ${n}: enter the length and width.`;
+  if (l.hsnCode.trim() && !HSN_PATTERN.test(l.hsnCode.trim())) return `Line ${n}: an HSN code is 4 to 8 digits.`;
   return "";
 }
 

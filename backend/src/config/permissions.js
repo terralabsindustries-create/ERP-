@@ -30,6 +30,9 @@ const PERMISSION_TREE = [
 
   { module: 'Staff & Tasks', actions: ['View', 'Assign Tasks', 'Manage Schedule'] },
   { module: 'Human Resources', actions: ['View', 'Create & Edit', 'Delete', 'View Salary', 'Manage Leaves'] },
+  // Attendance on its own, for logins (e.g. the accountant) who need the
+  // register but not the rest of HR. Human Resources still includes it.
+  { module: 'Attendance', actions: ['View', 'Mark Attendance'] },
   { module: 'Payroll', actions: ['View', 'Process Payroll', 'Export'] },
 
   { module: 'Delivery', actions: ['View', 'Create & Edit', 'Update Status'] },

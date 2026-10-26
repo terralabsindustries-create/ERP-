@@ -63,7 +63,7 @@ describe('creating an invoice', () => {
       isInterState: false,
       noGst: false
     });
-    expect(invoice.items[0]).toMatchObject({ unit: 'sqft', itemType: 'Square Feet', length: 6, width: 4, areaPerPiece: 24, totalSquareFeet: 240, quantity: 10, unitPrice: 12, totalAmount: 2880, gstRate: 0, gstAmount: 0 });
+    expect(invoice.items[0]).toMatchObject({ unit: 'sqft', itemType: 'Square Feet', length: 6, width: 4, areaPerPiece: 24, totalSquareFeet: 240, quantity: 10, unitPrice: 12, totalAmount: 2880, gstRate: 0, gstAmount: 0, hsnCode: '4911' });
     expect(invoice.items[1]).toMatchObject({ itemType: 'Numbers', quantity: 100, totalAmount: 250, gstRate: 0 });
   });
 
@@ -98,7 +98,8 @@ describe('creating an invoice', () => {
   test('the PDF shows the size, area, pieces and rate per sq ft, and the design charge as its own line', async () => {
     const stored = await Invoice.findById(invoice._id);
     const d = PDFService.invoiceDocument(stored.toObject({ virtuals: true }), company);
-    expect(d.items[0]).toMatchObject({ description: 'Flex banner', sub: 'Star flex, eyelets', size: '6 × 4 ft', sizeSub: '24 sq ft each', area: '240 sq ft', qty: '10', rate: '12.00', rateSub: 'per sq ft', amount: '2,880.00' });
+    // The line's note and its HSN code print under the item name.
+    expect(d.items[0]).toMatchObject({ description: 'Flex banner', sub: 'Star flex, eyelets\nHSN: 4911', size: '6 × 4 ft', sizeSub: '24 sq ft each', area: '240 sq ft', qty: '10', rate: '12.00', rateSub: 'per sq ft', amount: '2,880.00' });
     expect(d.items[1]).toMatchObject({ size: '', area: '', qty: '100', amount: '250.00' });
     expect(d.summary.map((s) => s.label)).toEqual(['Subtotal', 'Design Charge', 'Discount', 'Total']);
     expect(d.summary.find((s) => s.label === 'Design Charge').value).toBe('INR 500.00');

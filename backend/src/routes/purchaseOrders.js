@@ -8,7 +8,7 @@ const InventoryMovement = require('../models/InventoryMovement');
 const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
-const { orgUserFilter } = require('../utils/accessScope');
+const { orgUserFilter, purchaseOrderScope } = require('../utils/accessScope');
 const InventoryService = require('../services/InventoryService');
 
 const router = express.Router();
@@ -25,10 +25,7 @@ const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const oid = (v) => mongoose.isValidObjectId(v);
 
 /** POs of the caller's business: tagged with its dataScope, or older ones made by its logins. */
-async function poScope(user) {
-  if (!user.dataScope) return { userId: user._id };
-  return { $or: [{ dataScope: user.dataScope }, { dataScope: { $exists: false }, ...(await orgUserFilter(user)) }] };
-}
+const poScope = purchaseOrderScope;
 
 const findPO = async (req, id) => (oid(id) ? PurchaseOrder.findOne({ $and: [{ _id: id }, await poScope(req.user)] }) : null);
 
@@ -56,7 +53,7 @@ const orderRules = [
   body('items').isArray({ min: 1, max: 100 }).withMessage('Add at least one item'),
   body('items.*.inventoryId').isMongoId().withMessage('Choose a stock item for every line'),
   body('items.*.quantity').isFloat({ gt: 0 }).withMessage('Every line needs a quantity'),
-  body('items.*.unitCost').isFloat({ min: 0 }).withMessage('Unit cost cannot be negative')
+  body('items.*.unitCost').isFloat({ gt: 0 }).withMessage('Every line needs a unit cost above 0')
 ];
 
 /** Vendor and lines checked against the business; lines priced and named from the stock items. */
@@ -169,6 +166,8 @@ router.post('/', protect, orderRules, validate, async (req, res) => {
           vendorName: built.vendor.name,
           status: send ? 'sent' : 'draft',
           sentAt: send ? new Date() : undefined,
+          approvedBy: send ? req.user._id : undefined,
+          approvedAt: send ? new Date() : undefined,
           expectedDelivery: req.body.expectedDelivery ? new Date(req.body.expectedDelivery) : undefined,
           items: built.items,
           subtotal: built.subtotal,
@@ -196,6 +195,7 @@ router.put('/:id', protect, orderRules, validate, async (req, res) => {
   try {
     const po = await findPO(req, req.params.id);
     if (!po) return res.status(404).json({ status: 'error', message: 'Purchase order not found' });
+    if (po.purchaseBillId) return res.status(409).json({ status: 'error', message: 'Delete the generated purchase bill before changing this order' });
     if (!['draft', 'sent', 'acknowledged'].includes(po.status) || po.items.some((i) => i.receivedQuantity > 0)) {
       return res.status(409).json({ status: 'error', message: 'Goods have been received against this order, so it can no longer be changed' });
     }
@@ -227,6 +227,9 @@ router.patch('/:id/status', protect, [body('status').isIn(['draft', 'sent', 'can
     const po = await findPO(req, req.params.id);
     if (!po) return res.status(404).json({ status: 'error', message: 'Purchase order not found' });
     const { status } = req.body;
+    if (po.purchaseBillId && status !== po.status) {
+      return res.status(409).json({ status: 'error', message: 'Delete the generated purchase bill before changing this order' });
+    }
     const received = po.items.some((i) => i.receivedQuantity > 0);
     const allowed = {
       sent: ['draft'].includes(po.status),
@@ -235,7 +238,12 @@ router.patch('/:id/status', protect, [body('status').isIn(['draft', 'sent', 'can
     };
     if (!allowed[status]) return res.status(409).json({ status: 'error', message: `A ${po.status} order can't be marked ${status}` });
     po.status = status;
-    if (status === 'sent') po.sentAt = new Date();
+    // Placing the order is its approval; from then on a bill can be generated from it.
+    if (status === 'sent') {
+      po.sentAt = new Date();
+      po.approvedBy = req.user._id;
+      po.approvedAt = po.sentAt;
+    }
     if (req.body.notes) po.notes = req.body.notes;
     await po.save();
     log(req, po, status === 'cancelled' ? 'Purchase Order Cancelled' : status === 'sent' ? 'Purchase Order Sent' : 'Purchase Order Back To Draft', status === 'cancelled' ? 'cancel' : 'update');
@@ -262,8 +270,8 @@ router.post(
     try {
       const po = await findPO(req, req.params.id);
       if (!po) return res.status(404).json({ status: 'error', message: 'Purchase order not found' });
-      if (!['sent', 'acknowledged', 'partial', 'draft'].includes(po.status)) {
-        return res.status(409).json({ status: 'error', message: `A ${po.status} order can't receive goods` });
+      if (!['sent', 'acknowledged', 'partial'].includes(po.status)) {
+        return res.status(409).json({ status: 'error', message: 'Mark the purchase order Ordered before receiving goods' });
       }
       const lines = req.body.lines.filter((l) => Number(l.quantity) > 0);
       if (!lines.length) return res.status(400).json({ status: 'error', message: 'Enter a quantity for at least one item' });

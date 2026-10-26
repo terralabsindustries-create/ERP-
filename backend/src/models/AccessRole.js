@@ -38,6 +38,12 @@ const accessRoleSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  // Which version of the starter set a preset role was made from or last
+  // upgraded to; see PRESET_VERSION in config/rolePresets.js. Older roles
+  // have none and count as version 1.
+  presetVersion: {
+    type: Number
+  },
   dataScope: {
     type: String,
     index: true

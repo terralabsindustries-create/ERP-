@@ -164,8 +164,8 @@ export function AccountsReports() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">Accounts Reports</h2>
-          <p className="text-muted-foreground">Financial reports and analytics</p>
+          <h2 className="text-2xl font-bold tracking-tight">Profit & loss</h2>
+          <p className="text-muted-foreground">Income, expenses and net profit. Only the owner sees this report.</p>
         </div>
         <div className="flex items-center space-x-2">
           <Select value={selectedUserId} onValueChange={setSelectedUserId}>

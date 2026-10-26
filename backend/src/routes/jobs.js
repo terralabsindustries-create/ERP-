@@ -9,14 +9,37 @@ const { requirePermission, userCan } = require('../middleware/requirePermission'
 const Task = require('../models/Task');
 const { isSameOrgUser, orgScope } = require('../utils/accessScope');
 const { notify } = require('../utils/notify');
+const { HSN_PATTERN } = require('../utils/billing');
 
 const router = express.Router();
 
 // Validation rules
+// Items are optional, but every item a job does carry must be worth something:
+// a name, a price above 0, and a quantity (or, priced by area, a length and
+// width) above 0.
 const jobValidation = [
   body('title').notEmpty().withMessage('Job title is required').trim(),
   body('customerId').isMongoId().withMessage('Valid customer ID is required'),
   body('priority').optional({ values: 'falsy' }).isIn(['low', 'medium', 'high', 'urgent']),
+  body('items').optional({ values: 'null' }).isArray({ max: 100 }).withMessage('Items must be a list'),
+  body('items.*.itemName').trim().notEmpty().withMessage('Every item needs a name'),
+  body('items.*.description').optional({ values: 'null' }).isString().trim().isLength({ max: 500 }).withMessage('Item notes are limited to 500 characters'),
+  body('items.*.unitPrice').isFloat({ gt: 0 }).withMessage('Every item needs a price above 0'),
+  body('items.*.hsnCode').optional({ values: 'falsy' }).trim().matches(HSN_PATTERN).withMessage('HSN codes are 4 to 8 digits'),
+  body('items.*').custom((item) => {
+    if (item?.itemType === 'Square Feet') {
+      if (!(Number(item.length) > 0 && Number(item.width) > 0)) throw new Error('Every item priced by area needs a length and width above 0');
+    } else if (!(Number(item?.quantity) > 0)) {
+      throw new Error('Every item needs a quantity above 0');
+    }
+    return true;
+  }),
+  body('designCharge').optional({ values: 'null' }).custom((charge) => {
+    if (typeof charge === 'object' && !(Number(charge.amount) > 0)) throw new Error('Enter a design charge above 0, or remove it');
+    return true;
+  }),
+  body('estimatedCost').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('The estimated cost cannot be negative'),
+  body('printSpecs.quantity').optional({ values: 'falsy' }).isFloat({ gt: 0 }).withMessage('The print quantity must be above 0')
 ];
 
 // @route   GET /api/jobs

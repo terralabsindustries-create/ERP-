@@ -159,6 +159,15 @@ const purchaseBillSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  // The purchase order this bill was generated from, if any.
+  purchaseOrderId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PurchaseOrder'
+  },
+  purchaseOrderNumber: {
+    type: String,
+    trim: true
+  },
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -179,6 +188,8 @@ purchaseBillSchema.index({ businessId: 1, billNumber: 1 }, { unique: true, parti
 purchaseBillSchema.index({ userId: 1, vendorId: 1 });
 purchaseBillSchema.index({ userId: 1, billDate: -1 });
 purchaseBillSchema.index({ userId: 1, paymentStatus: 1 });
+// One bill per purchase order.
+purchaseBillSchema.index({ purchaseOrderId: 1 }, { unique: true, partialFilterExpression: { purchaseOrderId: { $type: 'objectId' } } });
 
 // Round to 2 decimals to avoid floating point drift
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;

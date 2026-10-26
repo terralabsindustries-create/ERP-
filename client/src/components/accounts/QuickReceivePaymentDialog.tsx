@@ -38,6 +38,11 @@ export function QuickReceivePaymentDialog({ open, onOpenChange, onPaymentRecorde
       return;
     }
 
+    if (!(parseFloat(formData.amount) > 0)) {
+      toast({ title: "Invalid Input", description: "The amount must be more than 0", variant: "destructive" });
+      return;
+    }
+
     setLoading(true);
     try {
       // Create income transaction for payment received

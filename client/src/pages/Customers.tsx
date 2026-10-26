@@ -36,7 +36,7 @@ interface Customer {
   billing?: { invoiced: number; outstanding: number; invoices: number; lastInvoiceDate?: string } | null;
 }
 
-type View = "all" | "business" | "individual" | "walkin" | "inactive";
+type View = "all" | "agency" | "walkin" | "business" | "individual" | "inactive";
 
 const isBusiness = (c: Customer) => c.customerType === "Business" || c.customerType === "Corporate";
 const inView = (c: Customer, v: View) =>
@@ -45,7 +45,13 @@ const inView = (c: Customer, v: View) =>
     : v === "inactive"
       ? c.status !== "active"
       : c.status === "active" &&
-        (v === "business" ? isBusiness(c) : v === "walkin" ? c.customerType === "Walk-in" : !isBusiness(c) && c.customerType !== "Walk-in");
+        (v === "business"
+          ? isBusiness(c)
+          : v === "walkin"
+            ? c.customerType === "Walk-in"
+            : v === "agency"
+              ? c.customerType === "Agency"
+              : !isBusiness(c) && c.customerType !== "Walk-in" && c.customerType !== "Agency");
 
 /** Fetches every customer, a hundred at a time (the API's page limit). */
 async function fetchAllCustomers(): Promise<Customer[]> {
@@ -289,9 +295,10 @@ export default function Customers() {
           onChange={setView}
           tabs={[
             { value: "all", label: "All", count: customers.length },
+            { value: "walkin", label: "Walk-in", count: count("walkin") },
+            { value: "agency", label: "Agencies", count: count("agency") },
             { value: "business", label: "Businesses", count: count("business") },
             { value: "individual", label: "Individuals", count: count("individual") },
-            { value: "walkin", label: "Walk-in", count: count("walkin") },
             { value: "inactive", label: "Inactive", count: count("inactive") }
           ]}
         />

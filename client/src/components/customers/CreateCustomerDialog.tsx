@@ -2,11 +2,11 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
+import { CustomerTypePicker } from "./CustomerTypePicker";
 
 interface CreateCustomerDialogProps {
   open: boolean;
@@ -22,7 +22,7 @@ export function CreateCustomerDialog({ open, onOpenChange, onCustomerCreated }: 
     phone: "",
     company: "",
     address: "",
-    customerType: "Individual" as 'Individual' | 'Business' | 'Corporate' | 'Walk-in',
+    customerType: "Walk-in",
     gstNumber: "",
     notes: ""
   });
@@ -43,10 +43,7 @@ export function CreateCustomerDialog({ open, onOpenChange, onCustomerCreated }: 
 
     setLoading(true);
     try {
-      console.log('📋 Creating customer:', formData);
-
       const response: any = await apiClient.createCustomer(formData);
-      console.log('📋 Customer created successfully:', response);
 
       toast({
         title: "Customer Created",
@@ -63,7 +60,7 @@ export function CreateCustomerDialog({ open, onOpenChange, onCustomerCreated }: 
         phone: "",
         company: "",
         address: "",
-        customerType: "Individual",
+        customerType: "Walk-in",
         gstNumber: "",
         notes: ""
       });
@@ -91,13 +88,15 @@ export function CreateCustomerDialog({ open, onOpenChange, onCustomerCreated }: 
         <DialogHeader>
           <DialogTitle>Add New Customer</DialogTitle>
           <DialogDescription>
-            Add a new customer to your database.
+            A walk-in customer or an agency. Another customer may already have the same name.
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          <CustomerTypePicker value={formData.customerType} onChange={(customerType) => setFormData(prev => ({ ...prev, customerType }))} />
+
           <div className="space-y-2">
-            <Label htmlFor="name">Customer Name *</Label>
+            <Label htmlFor="name">{formData.customerType === "Agency" ? "Agency name *" : "Customer Name *"}</Label>
             <Input
               id="name"
               value={formData.name}
@@ -146,23 +145,6 @@ export function CreateCustomerDialog({ open, onOpenChange, onCustomerCreated }: 
               placeholder="Enter customer address"
               rows={3}
             />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="customerType">Customer Type</Label>
-            <Select value={formData.customerType} onValueChange={(value: 'Individual' | 'Business' | 'Corporate' | 'Walk-in') =>
-              setFormData(prev => ({ ...prev, customerType: value }))
-            }>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="Individual">Individual</SelectItem>
-                <SelectItem value="Business">Business</SelectItem>
-                <SelectItem value="Corporate">Corporate</SelectItem>
-                <SelectItem value="Walk-in">Walk-in</SelectItem>
-              </SelectContent>
-            </Select>
           </div>
 
           <div className="space-y-2">

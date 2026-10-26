@@ -113,7 +113,7 @@ export const NAVIGATION: NavGroup[] = [
       { title: "Team Overview", href: "/team", icon: UsersRound, permission: "Staff & Tasks", orgViewOnly: true },
       { title: "Staff & Tasks", href: "/staff", icon: UserCog, permission: "Staff & Tasks" },
       { title: "Employees", href: "/employees", icon: Contact, permission: "Human Resources" },
-      { title: "Attendance", href: "/attendance", icon: CalendarCheck, permission: "Human Resources" },
+      { title: "Attendance", href: "/attendance", icon: CalendarCheck, permission: ["Human Resources", "Attendance"] },
       { title: "Leave Requests", href: "/leaves", icon: CalendarOff, permission: "Human Resources" },
       { title: "Payroll", href: "/payroll", icon: BadgeIndianRupee, permission: "Payroll" },
     ],

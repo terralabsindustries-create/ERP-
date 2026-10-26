@@ -48,4 +48,10 @@ async function isSameOrgUser(user, otherUserId) {
   return ids.some((id) => id.toString() === otherUserId.toString());
 }
 
-module.exports = { isOrgViewer, orgMemberIds, orgScope, orgUserFilter, ownOrOrgUserFilter, isSameOrgUser };
+/** Purchase orders of the user's business: tagged with its dataScope, or older untagged ones made by its logins. */
+async function purchaseOrderScope(user) {
+  if (!user.dataScope) return { userId: user._id };
+  return { $or: [{ dataScope: user.dataScope }, { dataScope: { $exists: false }, ...(await orgUserFilter(user)) }] };
+}
+
+module.exports = { isOrgViewer, orgMemberIds, orgScope, orgUserFilter, ownOrOrgUserFilter, isSameOrgUser, purchaseOrderScope };

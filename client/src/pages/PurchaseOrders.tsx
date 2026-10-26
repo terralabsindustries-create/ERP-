@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { format } from "date-fns";
-import { Ban, ClipboardList, Loader2, PackageCheck, Pencil, Plus, Send, Trash2, X } from "lucide-react";
+import { Ban, ClipboardList, FilePlus2, Loader2, PackageCheck, Pencil, Plus, Send, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -45,8 +45,14 @@ interface PO {
   terms?: string;
   createdAt: string;
   sentAt?: string;
+  approvedAt?: string;
   completedAt?: string;
+  /** The purchase bill generated from this order, once there is one. */
+  purchaseBillNumber?: string;
 }
+
+/** Placed (approved) and not cancelled: such an order can have its bill generated. */
+const billable = (po: PO) => !po.purchaseBillNumber && (["sent", "acknowledged"].includes(po.status) || (["partial", "completed"].includes(po.status) && !!po.approvedAt));
 
 interface StockItem {
   _id: string;
@@ -97,6 +103,7 @@ export default function PurchaseOrders() {
   const { toast } = useToast();
   const [params, setParams] = useSearchParams();
   const canEdit = hasPermission("Inventory: Create & Edit") || hasPermission("Purchase Bills: Create & Edit");
+  const canBill = hasPermission("Purchase Bills: Create & Edit");
 
   const [rows, setRows] = useState<PO[]>([]);
   const [total, setTotal] = useState(0);
@@ -198,6 +205,10 @@ export default function PurchaseOrders() {
       toast({ title: "Choose a supplier and give each item a quantity", variant: "destructive" });
       return;
     }
+    if (lines.some((l) => !(Number(l.unitCost) > 0))) {
+      toast({ title: "Give each item a unit cost above 0", variant: "destructive" });
+      return;
+    }
     setSaving(send ? "send" : "draft");
     const payload = {
       vendorId: form.vendorId,
@@ -232,6 +243,17 @@ export default function PurchaseOrders() {
     } catch (error) {
       toast({ title: "Not changed", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
       throw error;
+    }
+  };
+
+  // One click, like generating payroll: the order's lines become its purchase bill.
+  const generateBill = async (po: PO) => {
+    try {
+      const res = (await apiClient.generatePurchaseBills([po._id])) as { bills?: { billNumber: string }[] };
+      toast({ title: `${res?.bills?.[0]?.billNumber || "Bill"} generated from ${po.poNumber}`, description: "It is on the Purchase bills page; add the supplier's invoice number when it arrives." });
+      load();
+    } catch (error) {
+      toast({ title: "Bill not generated", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     }
   };
 
@@ -315,7 +337,7 @@ export default function PurchaseOrders() {
       cell: (po) => (
         <Stack
           top={<StatusPill tone={isOverdue(po) ? "danger" : STATUS[po.status].tone}>{isOverdue(po) ? "Late" : STATUS[po.status].label}</StatusPill>}
-          bottom={po.status === "partial" ? `${progress(po)}% received` : undefined}
+          bottom={[po.status === "partial" ? `${progress(po)}% received` : "", po.purchaseBillNumber ? `Billed · ${po.purchaseBillNumber}` : ""].filter(Boolean).join(" · ") || undefined}
         />
       ),
       sortValue: (po) => po.status,
@@ -376,12 +398,13 @@ export default function PurchaseOrders() {
             rows={rows}
             rowKey={(po) => po._id}
             loading={loading}
-            onRowClick={canEdit ? (po) => (["draft", "sent", "acknowledged"].includes(po.status) && !po.items.some((l) => l.receivedQuantity > 0) ? openEditor(po) : ["partial"].includes(po.status) ? openReceive(po) : undefined) : undefined}
+            onRowClick={canEdit ? (po) => (["draft", "sent", "acknowledged"].includes(po.status) && !po.purchaseBillNumber && !po.items.some((l) => l.receivedQuantity > 0) ? openEditor(po) : ["partial"].includes(po.status) ? openReceive(po) : undefined) : undefined}
             actions={(po) => [
-              { label: "Receive goods", icon: PackageCheck, onClick: () => openReceive(po), hidden: !canEdit || !["sent", "acknowledged", "partial", "draft"].includes(po.status) },
+              { label: "Generate bill", icon: FilePlus2, onClick: () => generateBill(po), hidden: !canBill || !billable(po) },
+              { label: "Receive goods", icon: PackageCheck, onClick: () => openReceive(po), hidden: !canEdit || !["sent", "acknowledged", "partial"].includes(po.status) },
               { label: "Mark ordered", icon: Send, onClick: () => setStatus(po, "sent").catch(() => undefined), hidden: !canEdit || po.status !== "draft" },
-              { label: "Edit", icon: Pencil, onClick: () => openEditor(po), hidden: !canEdit || !["draft", "sent", "acknowledged"].includes(po.status) || po.items.some((l) => l.receivedQuantity > 0) },
-              { label: "Cancel order", icon: Ban, separated: true, onClick: () => setConfirm({ po, action: "cancel" }), hidden: !canEdit || !["draft", "sent", "acknowledged", "partial"].includes(po.status) },
+              { label: "Edit", icon: Pencil, onClick: () => openEditor(po), hidden: !canEdit || !!po.purchaseBillNumber || !["draft", "sent", "acknowledged"].includes(po.status) || po.items.some((l) => l.receivedQuantity > 0) },
+              { label: "Cancel order", icon: Ban, separated: true, onClick: () => setConfirm({ po, action: "cancel" }), hidden: !canEdit || !!po.purchaseBillNumber || !["draft", "sent", "acknowledged", "partial"].includes(po.status) },
               { label: "Delete", icon: Trash2, destructive: true, onClick: () => setConfirm({ po, action: "delete" }), hidden: !canEdit || !["draft", "cancelled"].includes(po.status) || po.items.some((l) => l.receivedQuantity > 0) }
             ]}
             actionsLabel={(po) => `Actions for ${po.poNumber}`}

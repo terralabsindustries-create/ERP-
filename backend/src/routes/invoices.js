@@ -13,7 +13,7 @@ const PDFService = require('../services/PDFService');
 const InventoryService = require('../services/InventoryService');
 const { protect } = require('../middleware/auth');
 const { requirePermission, userCan } = require('../middleware/requirePermission');
-const { round2, parseDesignCharge, documentTotals, toInvoiceLine } = require('../utils/billing');
+const { round2, parseDesignCharge, documentTotals, toInvoiceLine, HSN_PATTERN } = require('../utils/billing');
 
 // Invoices are issued without GST. Bills marked "No GST" before that stay
 // visible only to logins granted "Invoicing (View No GST)".
@@ -101,7 +101,8 @@ const INVOICE_UNITS = Invoice.schema.path('items').schema.path('unit').enumValue
 const lineValidation = [
   body('items.*.itemName').trim().notEmpty().withMessage('Item name is required'),
   body('items.*.quantity').isFloat({ min: 0.01 }).withMessage('Quantity must be greater than 0'),
-  body('items.*.unitPrice').isFloat({ min: 0 }).withMessage('Unit price cannot be negative'),
+  body('items.*.unitPrice').isFloat({ gt: 0 }).withMessage('Every line needs a rate above 0'),
+  body('items.*.hsnCode').optional({ values: 'falsy' }).trim().matches(HSN_PATTERN).withMessage('HSN codes are 4 to 8 digits'),
   body('items.*.unit').optional({ values: 'falsy' }).isIn(INVOICE_UNITS).withMessage('Invalid unit'),
   body('items.*.length').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Length cannot be negative'),
   body('items.*.width').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Width cannot be negative'),

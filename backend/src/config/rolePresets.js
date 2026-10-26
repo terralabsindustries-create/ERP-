@@ -12,6 +12,13 @@ const actionName = (module, action) => `${module}: ${action}`;
 
 const ALL = true;
 
+/**
+ * Bumped when a starter role changes, so businesses that already have the
+ * starter roles get the change once (utils/upgradePresetRoles.js) without
+ * undoing edits the owner made since.
+ */
+const PRESET_VERSION = 2;
+
 const PRESETS = [
   {
     name: 'Shop manager',
@@ -38,11 +45,13 @@ const PRESETS = [
   },
   {
     name: 'Accountant',
-    description: 'Invoices, payments, purchase bills, accounts and GST reports. Sees everyone\'s billing records.',
+    description: 'Job tickets, quotations, invoices, payments and reminders, purchase bills, accounts, reports, attendance and WhatsApp. Sees everyone\'s billing records; the profit & loss report stays with the owner.',
     baseRole: 'accountant',
     canViewAllData: true,
     grant: {
       Customers: ['View'],
+      Jobs: ['View'],
+      Quotations: ['View', 'Convert to Invoice'],
       Invoicing: ALL,
       'Invoicing (View No GST)': ALL,
       Payments: ALL,
@@ -51,9 +60,18 @@ const PRESETS = [
       Vendors: ['View'],
       Accounts: ALL,
       Reports: ALL,
-      'Cost & Profit': ['View'],
+      Attendance: ['View'],
+      WhatsApp: ALL,
       'HSN Codes': ['View'],
       'SAC Codes': ['View']
+    },
+    // What upgradePresetRoles changes on an Accountant role made from an
+    // earlier version of this preset.
+    upgrades: {
+      2: {
+        add: { Jobs: ['View'], Quotations: ['View', 'Convert to Invoice'], Attendance: ['View'], WhatsApp: ALL },
+        remove: ['Cost & Profit']
+      }
     }
   },
   {
@@ -100,17 +118,44 @@ const PRESETS = [
   }
 ];
 
-/** The permission list for a preset: Dashboard, each module and its actions. */
-function presetPermissions(preset) {
-  const perms = ['Dashboard'];
-  for (const [module, actions] of Object.entries(preset.grant)) {
+/** The permissions a grant ({ module: actions | ALL }) stands for. */
+function grantPermissions(grant) {
+  const perms = [];
+  for (const [module, actions] of Object.entries(grant)) {
     perms.push(module);
     if (actions === ALL) perms.push(...actionsForModule(module));
     else perms.push(...actions.map((a) => actionName(module, a)));
   }
-  return [...new Set(perms)];
+  return perms;
+}
+
+/** The permission list for a preset: Dashboard, each module and its actions. */
+const presetPermissions = (preset) => [...new Set(['Dashboard', ...grantPermissions(preset.grant)])];
+
+/**
+ * The changes to apply to a role made from preset `name` at `fromVersion`, as
+ * permission lists: { add, remove }. Removing a module removes its actions.
+ */
+function presetUpgrade(name, fromVersion) {
+  const preset = PRESETS.find((p) => p.name === name);
+  const add = [];
+  const remove = [];
+  for (let v = (fromVersion || 1) + 1; v <= PRESET_VERSION; v++) {
+    const step = preset?.upgrades?.[v];
+    if (!step) continue;
+    add.push(...grantPermissions(step.add || {}));
+    for (const module of step.remove || []) remove.push(module, ...actionsForModule(module));
+  }
+  return { add, remove };
 }
 
 module.exports = {
-  ROLE_PRESETS: PRESETS.map(({ grant, ...rest }) => ({ ...rest, canViewAllData: rest.canViewAllData === true, permissions: presetPermissions({ grant }) }))
+  PRESET_VERSION,
+  presetUpgrade,
+  ROLE_PRESETS: PRESETS.map(({ grant, upgrades, ...rest }) => ({
+    ...rest,
+    canViewAllData: rest.canViewAllData === true,
+    permissions: presetPermissions({ grant }),
+    presetVersion: PRESET_VERSION
+  }))
 };

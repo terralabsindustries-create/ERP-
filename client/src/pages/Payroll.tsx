@@ -131,10 +131,13 @@ export default function Payroll() {
 
   const generate = async () => {
     try {
-      const res = (await apiClient.generatePayroll(period.month, period.year)) as { generated?: number; skipped?: number };
+      const res = (await apiClient.generatePayroll(period.month, period.year)) as { generated?: number; skipped?: number; noSalary?: string[] };
+      const noSalary = res?.noSalary || [];
       toast({
         title: `Payroll ready for ${label}`,
-        description: `${plural(res?.generated || 0, "payslip")} worked out${res?.skipped ? `; ${res.skipped} already paid and left as they were` : ""}.`
+        description: `${plural(res?.generated || 0, "payslip")} worked out${res?.skipped ? `; ${res.skipped} already paid and left as they were` : ""}${
+          noSalary.length ? `; no payslip for ${noSalary.join(", ")} (no salary set)` : ""
+        }.`
       });
       setGenerateOpen(false);
       load();

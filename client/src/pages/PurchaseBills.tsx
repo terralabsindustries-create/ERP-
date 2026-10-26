@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { CheckCircle2, Download, Pencil, Plus, ReceiptText, Trash2 } from "lucide-react";
+import { CheckCircle2, Download, FilePlus2, Pencil, Plus, ReceiptText, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -24,6 +24,14 @@ interface Bill {
   paidAmount?: number;
   balanceAmount?: number;
   paymentStatus: "pending" | "partial" | "paid";
+  purchaseOrderNumber?: string;
+}
+
+/** Approved purchase orders with no bill yet (GET /purchase-bills/from-orders). */
+interface Waiting {
+  count: number;
+  totalAmount: number;
+  orders: { _id: string; poNumber: string; vendorName: string }[];
 }
 
 interface Stats {
@@ -64,6 +72,8 @@ export default function PurchaseBills() {
   const [page, setPage] = useState(1);
   const [dialog, setDialog] = useState<{ open: boolean; bill: Bill | null }>({ open: false, bill: null });
   const [deleting, setDeleting] = useState<Bill | null>(null);
+  const [waiting, setWaiting] = useState<Waiting | null>(null);
+  const [generateOpen, setGenerateOpen] = useState(false);
 
   const canEdit = hasPermission("Purchase Bills: Create & Edit");
   const canDelete = hasPermission("Purchase Bills: Delete");
@@ -76,7 +86,14 @@ export default function PurchaseBills() {
     } catch {
       setStats(null);
     }
-  }, []);
+    if (canEdit) {
+      try {
+        setWaiting((await apiClient.getBillableOrders()) as Waiting);
+      } catch {
+        setWaiting(null);
+      }
+    }
+  }, [canEdit]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -133,6 +150,24 @@ export default function PurchaseBills() {
     }
   };
 
+  // Like generating payroll: one click turns every approved purchase order
+  // that has no bill yet into its bill.
+  const generate = async () => {
+    try {
+      const res = (await apiClient.generatePurchaseBills()) as { generated?: number; problems?: string[] };
+      const problems = res?.problems || [];
+      toast({
+        title: `${res?.generated || 0} purchase bill${res?.generated === 1 ? "" : "s"} generated`,
+        description: problems.length ? `Not billed: ${problems.join("; ")}` : "Add the supplier's invoice number to each bill when it arrives."
+      });
+      setGenerateOpen(false);
+      refresh();
+    } catch (error) {
+      toast({ title: "Bills not generated", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      throw error;
+    }
+  };
+
   const remove = async () => {
     if (!deleting) return;
     try {
@@ -153,7 +188,13 @@ export default function PurchaseBills() {
     {
       id: "bill",
       header: "Bill",
-      cell: (b) => <EntityCell title={b.billNumber} mono subtitle={b.vendorInvoiceNumber ? `Supplier ref ${b.vendorInvoiceNumber}` : undefined} />,
+      cell: (b) => (
+        <EntityCell
+          title={b.billNumber}
+          mono
+          subtitle={[b.vendorInvoiceNumber ? `Supplier ref ${b.vendorInvoiceNumber}` : "", b.purchaseOrderNumber ? `From ${b.purchaseOrderNumber}` : ""].filter(Boolean).join(" · ") || undefined}
+        />
+      ),
       sortValue: (b) => b.billNumber,
       className: "min-w-[170px]"
     },
@@ -199,10 +240,21 @@ export default function PurchaseBills() {
         description="Bills from paper, ink and plate suppliers — what you bought, what's paid and what's still due."
         actions={
           canEdit && (
-            <Button onClick={() => setDialog({ open: true, bill: null })}>
-              <Plus />
-              Record a bill
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                onClick={() => setGenerateOpen(true)}
+                disabled={!waiting?.count}
+                title={waiting?.count ? undefined : "No approved purchase orders are waiting for a bill"}
+              >
+                <FilePlus2 />
+                {waiting?.count ? `Generate bills (${waiting.count})` : "Generate bills"}
+              </Button>
+              <Button onClick={() => setDialog({ open: true, bill: null })}>
+                <Plus />
+                Record a bill
+              </Button>
+            </>
           )
         }
       />
@@ -328,6 +380,23 @@ export default function PurchaseBills() {
         onSaved={refresh}
         bill={dialog.bill}
         defaultVendorId={vendor !== "all" ? vendor : undefined}
+      />
+      <ConfirmDialog
+        open={generateOpen}
+        onOpenChange={setGenerateOpen}
+        title={`Generate ${waiting?.count === 1 ? "a purchase bill" : `${waiting?.count || 0} purchase bills`}?`}
+        description={
+          <>
+            One bill for each approved purchase order that has no bill yet ({formatINR(waiting?.totalAmount || 0)} before GST):{" "}
+            {(waiting?.orders || []).slice(0, 4).map((o) => `${o.poNumber} · ${o.vendorName}`).join(", ")}
+            {(waiting?.orders.length || 0) > 4 ? ` and ${(waiting?.orders.length || 0) - 4} more` : ""}. Lines, rates, HSN codes and GST come from the order and its stock
+            items; each bill can be edited afterwards.
+          </>
+        }
+        confirmLabel="Generate"
+        cancelLabel="Cancel"
+        destructive={false}
+        onConfirm={generate}
       />
       <ConfirmDialog
         open={!!deleting}

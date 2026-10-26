@@ -32,6 +32,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Edit, Trash2 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
+import { CUSTOMER_TYPES } from "@/lib/customerTypes";
 import { useToast } from "@/hooks/use-toast";
 
 interface Customer {
@@ -258,10 +259,9 @@ export function EditCustomerDialog({ customer, onCustomerUpdated, onCustomerDele
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="Individual">Individual</SelectItem>
-                    <SelectItem value="Business">Business</SelectItem>
-                    <SelectItem value="Corporate">Corporate</SelectItem>
-                    <SelectItem value="Walk-in">Walk-in</SelectItem>
+                    {CUSTOMER_TYPES.map((t) => (
+                      <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

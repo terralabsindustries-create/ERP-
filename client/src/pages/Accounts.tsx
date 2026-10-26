@@ -39,8 +39,10 @@ const METHOD: Record<string, string> = { cash: "Cash", bank_transfer: "Bank tran
 const direction = (t: Txn) => (t.transactionType === "income" ? "in" : t.transactionType === "expense" ? "out" : "other");
 
 export default function Accounts() {
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
   const { toast } = useToast();
+  // The profit & loss report is the owner's alone (the API refuses anyone else).
+  const isOwner = user?.role === "admin";
   const [rows, setRows] = useState<Txn[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -216,13 +218,13 @@ export default function Accounts() {
             { value: "expense", label: "Money out", icon: ArrowUpRight },
             { value: "other", label: "Balances & adjustments", icon: Landmark },
             { value: "reconciliation", label: "Bank reconciliation", icon: Scale },
-            { value: "reports", label: "Reports", icon: BarChart3 }
+            ...(isOwner ? [{ value: "reports" as const, label: "Profit & loss", icon: BarChart3 }] : [])
           ]}
         />
 
         {view === "reconciliation" ? (
           <BankReconciliation canEdit={canEdit} />
-        ) : view === "reports" ? (
+        ) : view === "reports" && isOwner ? (
           <AccountsReports />
         ) : (
           <DataCard

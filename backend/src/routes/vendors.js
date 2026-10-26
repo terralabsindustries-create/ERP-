@@ -530,7 +530,7 @@ router.post('/:id/communication', protect, [
 // @desc    Add payment record
 // @access  Private
 router.post('/:id/payment', protect, [
-  body('amount').isFloat({ min: 0 }),
+  body('amount').isFloat({ gt: 0 }).withMessage('Enter an amount above 0'),
   body('invoiceNumber').optional({ values: 'falsy' }).trim(),
   body('paymentMethod').isIn(['Bank Transfer', 'Cheque', 'Cash', 'UPI', 'Other']),
   body('status').isIn(['Pending', 'Paid', 'Overdue', 'Cancelled']),

@@ -23,9 +23,11 @@ const customerSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  // Walk-in and Agency are the two kinds a print shop books jobs for; the
+  // others are older ways of describing a direct customer.
   customerType: {
     type: String,
-    enum: ['Individual', 'Business', 'Corporate', 'Walk-in'],
+    enum: ['Walk-in', 'Agency', 'Individual', 'Business', 'Corporate'],
     default: 'Individual'
   },
   gstNumber: {

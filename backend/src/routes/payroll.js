@@ -109,6 +109,9 @@ router.post('/generate', async (req, res) => {
 
     const results = [];
     let skipped = 0;
+    // A payslip of ₹0 is not a payslip: employees with no salary set are left
+    // out and named, so the salary can be filled in and payroll run again.
+    const noSalary = [];
 
     for (const emp of employees) {
       // Don't overwrite an already-paid payslip
@@ -118,6 +121,7 @@ router.post('/generate', async (req, res) => {
       const s = emp.salary || {};
       const d = emp.deductions || {};
       const gross = (s.basic || 0) + (s.hra || 0) + (s.allowances || 0) + (s.specialAllowance || 0);
+      if (!(gross > 0)) { noSalary.push(emp.name); continue; }
 
       const att = attByEmp[String(emp._id)] || { absent: 0, halfDay: 0 };
       const lopDays = att.absent + att.halfDay * 0.5;
@@ -169,10 +173,17 @@ router.post('/generate', async (req, res) => {
       results.push(payslip);
     }
 
+    if (!results.length && !skipped && noSalary.length) {
+      return res.status(400).json({
+        status: 'error',
+        message: `No payslips generated: ${noSalary.join(', ')} ${noSalary.length === 1 ? 'has' : 'have'} no salary set. Add it on the Employees page first.`
+      });
+    }
+
     res.json({
       status: 'success',
-      message: `Payroll generated for ${results.length} employee(s)${skipped ? `, ${skipped} already paid (skipped)` : ''}`,
-      data: { payslips: results, generated: results.length, skipped }
+      message: `Payroll generated for ${results.length} employee(s)${skipped ? `, ${skipped} already paid (skipped)` : ''}${noSalary.length ? `, ${noSalary.length} without a salary left out` : ''}`,
+      data: { payslips: results, generated: results.length, skipped, noSalary }
     });
   } catch (error) {
     console.error('Generate payroll error:', error);

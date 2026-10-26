@@ -49,6 +49,7 @@ import { formatINR } from "@/lib/format";
 interface InvoiceItem {
   itemName: string;
   description?: string;
+  hsnCode?: string;
   quantity: number;
   unit?: string;
   unitPrice: number;
@@ -431,6 +432,7 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
                             {item.description && (
                               <p className="text-sm text-muted-foreground">{item.description}</p>
                             )}
+                            {item.hsnCode && <p className="font-mono text-xs text-muted-foreground">HSN {item.hsnCode}</p>}
                           </div>
                           <span className="font-semibold">{formatINR(item.totalAmount || 0)}</span>
                         </div>

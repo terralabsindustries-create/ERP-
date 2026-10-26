@@ -7,7 +7,7 @@ const Customer = require('../models/Customer');
 const Settings = require('../models/Settings');
 const { settingsOwnerId, businessSettings } = require('../utils/businessSettings');
 const PDFService = require('../services/PDFService');
-const { AREA_UNITS, round2, parseDesignCharge, documentTotals, toQuotationLine, quotationLineToInvoiceLine, sizeLabel, areaLabel } = require('../utils/billing');
+const { AREA_UNITS, HSN_PATTERN, round2, parseDesignCharge, documentTotals, toQuotationLine, quotationLineToInvoiceLine, sizeLabel, areaLabel } = require('../utils/billing');
 const { protect } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/requirePermission');
 
@@ -61,7 +61,8 @@ const quotationValidation = [
   body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
   body('items.*.item_name').notEmpty().withMessage('Item name is required'),
   body('items.*.quantity').isFloat({ min: 0.01 }).withMessage('Quantity must be greater than 0'),
-  body('items.*.unit_price').isFloat({ min: 0 }).withMessage('Unit price cannot be negative'),
+  body('items.*.unit_price').isFloat({ gt: 0 }).withMessage('Every line needs a rate above 0'),
+  body('items.*.hsn_code').optional({ values: 'falsy' }).trim().matches(HSN_PATTERN).withMessage('HSN codes are 4 to 8 digits'),
   body('items.*.unit').optional({ values: 'falsy' }).isIn(Quotation.schema.path('items').schema.path('unit').enumValues).withMessage('Invalid unit'),
   body('items.*.length').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Length cannot be negative'),
   body('items.*.width').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Width cannot be negative'),

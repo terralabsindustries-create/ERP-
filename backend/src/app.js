@@ -235,8 +235,14 @@ guarded('/api/settings', require('./routes/settings'), {
 app.use('/api/email', require('./routes/email'));
 app.use('/api/razorpay', require('./routes/razorpay'));
 // HR & Payroll
-guarded('/api/hr/employees', require('./routes/employees'), { read: ['Human Resources', 'Payroll'], write: 'Human Resources: Create & Edit', remove: 'Human Resources: Delete' });
-guarded('/api/hr/attendance', require('./routes/attendance'), { read: 'Human Resources', write: 'Human Resources: Create & Edit', remove: 'Human Resources: Create & Edit' });
+// The attendance register lists employees, so Attendance alone may read them
+// (salaries stay hidden without View Salary or Payroll; see routes/employees.js).
+guarded('/api/hr/employees', require('./routes/employees'), { read: ['Human Resources', 'Payroll', 'Attendance'], write: 'Human Resources: Create & Edit', remove: 'Human Resources: Delete' });
+guarded('/api/hr/attendance', require('./routes/attendance'), {
+  read: ['Human Resources', 'Attendance'],
+  write: ['Human Resources: Create & Edit', 'Attendance: Mark Attendance'],
+  remove: ['Human Resources: Create & Edit', 'Attendance: Mark Attendance']
+});
 guarded('/api/hr/leaves', require('./routes/leaves'), {
   read: 'Human Resources',
   write: 'Human Resources: Create & Edit',

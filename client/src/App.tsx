@@ -113,7 +113,7 @@ const App = () => (
                         <Route path="/accounts" element={<PermissionRoute permission="Accounts"><Accounts /></PermissionRoute>} />
                         <Route path="/portal" element={<PermissionRoute permission="Customer Portal"><Portal /></PermissionRoute>} />
                         <Route path="/employees" element={<PermissionRoute permission="Human Resources"><Employees /></PermissionRoute>} />
-                        <Route path="/attendance" element={<PermissionRoute permission="Human Resources"><Attendance /></PermissionRoute>} />
+                        <Route path="/attendance" element={<PermissionRoute permission={["Human Resources", "Attendance"]}><Attendance /></PermissionRoute>} />
                         <Route path="/leaves" element={<PermissionRoute permission="Human Resources"><Leaves /></PermissionRoute>} />
                         <Route path="/payroll" element={<PermissionRoute permission="Payroll"><Payroll /></PermissionRoute>} />
                         <Route path="/settings" element={<PermissionRoute permission="Settings"><Settings /></PermissionRoute>} />

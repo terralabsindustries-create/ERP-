@@ -160,9 +160,15 @@ export function NewPurchaseBillDialog({ open, onOpenChange, onSaved, bill, defau
       toast({ title: "Vendor required", description: "Please select a vendor", variant: "destructive" });
       return;
     }
-    const validItems = items.filter((it) => it.description.trim() && parseFloat(it.rate) >= 0 && parseFloat(it.quantity) > 0);
+    const validItems = items.filter((it) => it.description.trim());
     if (validItems.length === 0) {
-      toast({ title: "Items required", description: "Add at least one valid line item", variant: "destructive" });
+      toast({ title: "Items required", description: "Add at least one line item", variant: "destructive" });
+      return;
+    }
+    // A line worth nothing is a typing slip, not a purchase.
+    const zero = validItems.findIndex((it) => !(parseFloat(it.rate) > 0) || !(parseFloat(it.quantity) > 0));
+    if (zero !== -1) {
+      toast({ title: "Check the lines", description: `${validItems[zero].description}: the rate and quantity must be more than 0`, variant: "destructive" });
       return;
     }
 

@@ -13,6 +13,10 @@ import { Search, User, Mail, Phone, Plus, Trash2 } from "lucide-react";
 import { JobInvoiceDialog } from "./JobInvoiceDialog";
 import { ViewInvoiceDialog } from "../invoices/ViewInvoiceDialog";
 import { UNITS_OF_MEASUREMENT } from "../inventory/CreateItemDialog";
+import { CustomerTypePicker } from "../customers/CustomerTypePicker";
+import { StockAvailability, StockCheckList } from "../billing/StockAvailability";
+import { stockItemNamed, stockNeeded, unitText, type StockItem } from "../billing/stock";
+import { HSN_PATTERN } from "../billing/lineDraft";
 import { localDate } from "@/lib/format";
 
 const AREA_UNITS = ['sqft', 'sqm'];
@@ -28,6 +32,8 @@ interface CreateJobDialogProps {
 
 interface InvoiceItem {
   itemName: string;
+  /** A note for this item; it becomes the line's description on the invoice. */
+  description?: string;
   quantity: number;
   unitPrice: number;
   hsnCode?: string;
@@ -104,14 +110,15 @@ export function CreateJobDialog({
   const [showAddCustomerForm, setShowAddCustomerForm] = useState(false);
   const [safeCustomers, setSafeCustomers] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState<{ [key: number]: boolean }>({});
-  const [inventoryItems, setInventoryItems] = useState<any[]>([]);
+  const [inventoryItems, setInventoryItems] = useState<(StockItem & { gstRate?: number })[]>([]);
   const [hsnCodes, setHsnCodes] = useState<any[]>([]);
   const [sacCodes, setSacCodes] = useState<any[]>([]);
   const [newCustomerData, setNewCustomerData] = useState({
     name: "",
     email: "",
     phone: "",
-    address: ""
+    address: "",
+    customerType: "Walk-in"
   });
   const [creatingCustomer, setCreatingCustomer] = useState(false);
   const [showInvoiceQuestion, setShowInvoiceQuestion] = useState(false);
@@ -150,7 +157,6 @@ export function CreateJobDialog({
 
   const fetchCustomers = async () => {
     try {
-      console.log('fetchCustomers is working')
       setSafeCustomers(await apiClient.listAll('/customers', 'customers'));
     } catch (error) {
       console.error('Error fetching customers:', error);
@@ -160,9 +166,8 @@ export function CreateJobDialog({
   const fetchInventoryItems = async () => {
     try {
       const response = await apiClient.getInventory();
-      const inventoryData = Array.isArray(response) ? response : ((response as { inventory?: unknown[] })?.inventory || []);
+      const inventoryData = Array.isArray(response) ? response : ((response as { inventory?: StockItem[] })?.inventory || []);
       setInventoryItems(inventoryData);
-      console.log('🔍 Inventory items loaded:', inventoryData.length);
     } catch (error) {
       console.error('Error fetching inventory items:', error);
     }
@@ -170,9 +175,7 @@ export function CreateJobDialog({
 
   const fetchHsnCodes = async () => {
     try {
-      const hsnData = await apiClient.listAll('/hsn-codes', 'hsnCodes');
-      setHsnCodes(hsnData);
-      console.log('🔍 HSN codes loaded:', hsnData.length);
+      setHsnCodes(await apiClient.listAll('/hsn-codes', 'hsnCodes'));
     } catch (error) {
       console.error('Error fetching HSN codes:', error);
     }
@@ -180,9 +183,7 @@ export function CreateJobDialog({
 
   const fetchSacCodes = async () => {
     try {
-      const sacData = await apiClient.listAll('/sac-codes', 'sacCodes');
-      setSacCodes(sacData);
-      console.log('🔍 SAC codes loaded:', sacData.length);
+      setSacCodes(await apiClient.listAll('/sac-codes', 'sacCodes'));
     } catch (error) {
       console.error('Error fetching SAC codes:', error);
     }
@@ -221,6 +222,7 @@ export function CreateJobDialog({
         ...prev.items,
         {
           itemName: '',
+          description: '',
           quantity: 1,
           unitPrice: '' as any,
           hsnCode: '',
@@ -330,32 +332,31 @@ export function CreateJobDialog({
 
     setCreatingCustomer(true);
     try {
+      // Another customer may already have this name; each one is its own record.
       const customerData = {
-        name: newCustomerData.name,
+        name: newCustomerData.name.trim(),
         email: newCustomerData.email || undefined,
         phone: newCustomerData.phone || undefined,
         address: newCustomerData.address || undefined,
+        customerType: newCustomerData.customerType,
       };
 
-      console.log('📋 Creating customer with data:', customerData);
-
       const response = await apiClient.createCustomer(customerData);
-      console.log('📋 Customer creation response:', response);
 
       toast({
-        title: "Customer Created",
-        description: "Customer has been created successfully",
+        title: newCustomerData.customerType === "Agency" ? "Agency added" : "Customer added",
+        description: customerData.name,
       });
 
       const newCustomer = (response as { customer?: unknown })?.customer || response;
-      console.log('newCustomer', newCustomer)
       setSafeCustomers(prev => [...prev, newCustomer]);
 
       setNewCustomerData({
         name: "",
         email: "",
         phone: "",
-        address: ""
+        address: "",
+        customerType: "Walk-in"
       });
       setShowAddCustomerForm(false);
 
@@ -368,8 +369,8 @@ export function CreateJobDialog({
     } catch (error) {
       console.error('Error creating customer:', error);
       toast({
-        title: "Error",
-        description: "Failed to create customer",
+        title: "Customer not added",
+        description: error instanceof Error ? error.message : "Failed to create customer",
         variant: "destructive",
       });
     } finally {
@@ -382,13 +383,12 @@ export function CreateJobDialog({
 
     setIsGeneratingInvoice(true);
     try {
-      console.log('📄 Generating invoice directly for job:', createdJob._id);
-
       // The server prices every line (area lines: length × width × pieces ×
       // rate) and adds the design charge before tax. Invoices carry no GST.
       const items = (createdJob.items || []).map((item: any) => ({
         itemName: item.itemName,
         description: item.description || '',
+        hsnCode: item.hsnCode || '',
         itemType: item.itemType || 'Numbers',
         unit: item.unit || 'pieces',
         quantity: item.quantity || 0,
@@ -412,10 +412,7 @@ export function CreateJobDialog({
         notes: createdJob.notes || ''
       };
 
-      console.log('📄 Creating invoice with data:', invoiceData);
-
       const response = await apiClient.createInvoice(invoiceData);
-      console.log('📄 Invoice created:', response);
 
       const created = response as { invoice?: { _id?: string; id?: string }; _id?: string; id?: string };
       const invoiceId = created?.invoice?._id || created?._id || created?.id;
@@ -539,11 +536,20 @@ export function CreateJobDialog({
           }
         }
 
-        // Validate unit price
-        if (item.unitPrice === undefined || item.unitPrice === null || item.unitPrice < 0) {
+        // A job item worth nothing is a mistake, not a free line.
+        if (!(Number(item.unitPrice) > 0)) {
           toast({
             title: "Validation Error",
-            description: `Item ${i + 1}: Unit price is required and cannot be negative`,
+            description: `Item ${i + 1}: the price must be more than 0`,
+            variant: "destructive",
+          });
+          return;
+        }
+
+        if (item.hsnCode && !HSN_PATTERN.test(item.hsnCode)) {
+          toast({
+            title: "Validation Error",
+            description: `Item ${i + 1}: an HSN code is 4 to 8 digits`,
             variant: "destructive",
           });
           return;
@@ -584,7 +590,7 @@ export function CreateJobDialog({
         estimatedCost: formData.estimatedCost ? parseFloat(formData.estimatedCost) : 0,
         dueDate: formData.dueDate || null,
         notes: formData.notes.trim(),
-        items: formData.items,
+        items: formData.items.map((item) => ({ ...item, itemName: item.itemName.trim(), description: (item.description || '').trim() })),
         designCharge: formData.designCharge,
         printSpecs: {
           ...formData.printSpecs,
@@ -592,10 +598,7 @@ export function CreateJobDialog({
         }
       };
 
-      console.log('📋 Creating job with data:', jobData);
-
       const response = await apiClient.createJob(jobData);
-      console.log('📋 Job creation response:', response);
 
       toast({
         title: "Success",
@@ -640,11 +643,26 @@ export function CreateJobDialog({
     }
   };
 
-  const customerExists = safeCustomers.some(customer =>
-    customer.name?.toLowerCase() === searchQuery.trim().toLowerCase()
-  );
-  const shouldShowAddCustomerButton = searchQuery.trim() !== "" && filteredCustomers.length === 0 && !customerExists;
+  // Names need not be unique, so a new customer can always be added — even
+  // when the search finds someone with the same name.
+  const sameNameCount = safeCustomers.filter(customer =>
+    customer.name?.trim().toLowerCase() === searchQuery.trim().toLowerCase()
+  ).length;
+  const openAddCustomerForm = () => {
+    setNewCustomerData(prev => ({ ...prev, name: searchQuery.trim() }));
+    setShowCustomerResults(false);
+    setShowAddCustomerForm(true);
+  };
   const today = localDate();
+
+  // What each stock item on the ticket needs: an area item counted in the
+  // stock's own area unit uses its length × width, anything else its quantity.
+  const stockNeededFor = (item: InvoiceItem, stockUnit?: string) =>
+    stockNeeded({ quantity: item.itemType === 'Square Feet' ? item.quantity || 1 : item.quantity, unit: item.unit, length: item.length, width: item.width }, stockUnit);
+  const stockRows = formData.items.map((item, index) => {
+    const stock = stockItemNamed(inventoryItems, item.itemName);
+    return { key: index, name: item.itemName, item: stock, needed: stock ? stockNeededFor(item, stock.unit) : 0 };
+  });
 
   const setPrintSpec = (field: keyof typeof EMPTY_PRINT_SPECS, value: string) =>
     setFormData(prev => ({ ...prev, printSpecs: { ...prev.printSpecs, [field]: value } }));
@@ -736,96 +754,63 @@ export function CreateJobDialog({
                       </div>
 
                       {showCustomerResults && (
-                        <div className="absolute z-10 w-full mt-1 bg-background border border-border rounded-md shadow-lg max-h-60 overflow-y-auto">
+                        <div className="absolute z-10 w-full mt-1 bg-background border border-border rounded-md shadow-lg max-h-72 overflow-y-auto">
                           {filteredCustomers.length === 0 ? (
-                            <div className="space-y-2 p-2">
-                              <div className="px-2 py-3 text-sm text-muted-foreground text-center">
-                                {searchQuery.trim()
-                                  ? customerExists
-                                    ? `Customer "${searchQuery}" exists - click to select`
-                                    : `No customers found for "${searchQuery}"`
-                                  : safeCustomers.length === 0
-                                    ? "No customers available"
-                                    : "Type to search for customers"
-                                }
-                              </div>
-                              {customerExists && searchQuery.trim() && (
-                                <>
-                                  {safeCustomers
-                                    .filter(customer => customer.name?.toLowerCase() === searchQuery.trim().toLowerCase())
-                                    .map((customer) => (
-                                      <div
-                                        key={customer.id || customer._id}
-                                        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-muted/50 border-b border-border"
-                                        onClick={() => handleCustomerSelect(customer)}
-                                      >
-                                        <div className="flex-shrink-0">
-                                          <User className="h-4 w-4 text-muted-foreground" />
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                          <div className="font-medium text-sm truncate">{customer.name}</div>
-                                          <div className="flex flex-col sm:flex-row sm:gap-2 text-xs text-muted-foreground">
-                                            {customer.email && (
-                                              <div className="flex items-center gap-1">
-                                                <Mail className="h-3 w-3" />
-                                                <span className="truncate">{customer.email}</span>
-                                              </div>
-                                            )}
-                                            {customer.phone && (
-                                              <div className="flex items-center gap-1">
-                                                <Phone className="h-3 w-3" />
-                                                <span>{customer.phone}</span>
-                                              </div>
-                                            )}
-                                          </div>
-                                        </div>
-                                      </div>
-                                    ))}
-                                </>
-                              )}
-                              {shouldShowAddCustomerButton && (
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  className="w-full justify-start gap-2"
-                                  onClick={() => setShowAddCustomerForm(true)}
-                                >
-                                  <Plus className="h-4 w-4" />
-                                  Add "{searchQuery}" as New Customer
-                                </Button>
-                              )}
+                            <div className="px-4 py-3 text-sm text-muted-foreground text-center">
+                              {searchQuery.trim()
+                                ? `No customers match "${searchQuery.trim()}"`
+                                : safeCustomers.length === 0
+                                  ? "No customers yet"
+                                  : "Type to search for customers"}
                             </div>
                           ) : (
-                            <>
-                              {filteredCustomers.map((customer) => (
-                                <div
-                                  key={customer.id || customer._id}
-                                  className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-muted/50 border-b border-border last:border-b-0"
-                                  onClick={() => handleCustomerSelect(customer)}
-                                >
-                                  <div className="flex-shrink-0">
-                                    <User className="h-4 w-4 text-muted-foreground" />
+                            filteredCustomers.map((customer) => (
+                              <div
+                                key={customer.id || customer._id}
+                                className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-muted/50 border-b border-border last:border-b-0"
+                                onClick={() => handleCustomerSelect(customer)}
+                              >
+                                <div className="flex-shrink-0">
+                                  <User className="h-4 w-4 text-muted-foreground" />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium text-sm truncate">{customer.name}</span>
+                                    {customer.customerType && (
+                                      <span className="shrink-0 rounded border px-1.5 text-[11px] text-muted-foreground">{customer.customerType}</span>
+                                    )}
                                   </div>
-                                  <div className="flex-1 min-w-0">
-                                    <div className="font-medium text-sm truncate">{customer.name}</div>
-                                    <div className="flex flex-col sm:flex-row sm:gap-2 text-xs text-muted-foreground">
-                                      {customer.email && (
-                                        <div className="flex items-center gap-1">
-                                          <Mail className="h-3 w-3" />
-                                          <span className="truncate">{customer.email}</span>
-                                        </div>
-                                      )}
-                                      {customer.phone && (
-                                        <div className="flex items-center gap-1">
-                                          <Phone className="h-3 w-3" />
-                                          <span>{customer.phone}</span>
-                                        </div>
-                                      )}
-                                    </div>
+                                  {/* Customers can share a name; the contact details tell them apart. */}
+                                  <div className="flex flex-col sm:flex-row sm:gap-2 text-xs text-muted-foreground">
+                                    {customer.phone && (
+                                      <div className="flex items-center gap-1">
+                                        <Phone className="h-3 w-3" />
+                                        <span>{customer.phone}</span>
+                                      </div>
+                                    )}
+                                    {customer.email && (
+                                      <div className="flex items-center gap-1">
+                                        <Mail className="h-3 w-3" />
+                                        <span className="truncate">{customer.email}</span>
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
-                              ))}
-                            </>
+                              </div>
+                            ))
+                          )}
+                          {searchQuery.trim() && (
+                            <div className="border-t p-2">
+                              <Button type="button" variant="outline" className="w-full justify-start gap-2" onClick={openAddCustomerForm}>
+                                <Plus className="h-4 w-4" />
+                                Add "{searchQuery.trim()}" as a new customer
+                              </Button>
+                              {sameNameCount > 0 && (
+                                <p className="px-1 pt-1.5 text-xs text-muted-foreground">
+                                  {sameNameCount === 1 ? "A customer already has" : `${sameNameCount} customers already have`} this name. A new one is kept as a separate customer.
+                                </p>
+                              )}
+                            </div>
                           )}
                         </div>
                       )}
@@ -833,7 +818,7 @@ export function CreateJobDialog({
                   ) : (
                     <div className="space-y-3 p-3 border rounded-md bg-muted/5">
                       <div className="flex items-center justify-between">
-                        <h4 className="font-medium text-sm">Add New Customer</h4>
+                        <h4 className="font-medium text-sm">Add a customer</h4>
                         <Button
                           type="button"
                           variant="ghost"
@@ -845,15 +830,20 @@ export function CreateJobDialog({
                       </div>
 
                       <div className="space-y-3">
+                        <CustomerTypePicker
+                          id="newCustomerType"
+                          compact
+                          value={newCustomerData.customerType}
+                          onChange={(customerType) => setNewCustomerData(prev => ({ ...prev, customerType }))}
+                        />
                         <div className="space-y-2">
-                          <Label htmlFor="newCustomerName" className="text-xs">Name *</Label>
+                          <Label htmlFor="newCustomerName" className="text-xs">{newCustomerData.customerType === "Agency" ? "Agency name *" : "Name *"}</Label>
                           <Input
                             id="newCustomerName"
                             value={newCustomerData.name}
                             onChange={(e) => setNewCustomerData(prev => ({ ...prev, name: e.target.value }))}
-                            placeholder="Customer name"
+                            placeholder={newCustomerData.customerType === "Agency" ? "Agency name" : "Customer name"}
                             className="text-sm"
-                            defaultValue={searchQuery}
                           />
                         </div>
 
@@ -1076,6 +1066,12 @@ export function CreateJobDialog({
                   />
                 </div>
               </div>
+              {stockRows.some((r) => r.item) && (
+                <div className="mt-4 space-y-1.5">
+                  <div className="text-xs font-medium text-muted-foreground">Stock for this job</div>
+                  <StockCheckList rows={stockRows} />
+                </div>
+              )}
             </div>
 
             <div className="space-y-2">
@@ -1186,7 +1182,7 @@ export function CreateJobDialog({
                                     </div>
                                     <div className="text-right text-sm">
                                       <div className="font-medium">₹{invItem.unitCost || 0}</div>
-                                      <div className="text-muted-foreground">Stock: {invItem.quantity || 0}</div>
+                                      <div className="text-muted-foreground">In stock: {invItem.quantity || 0} {unitText(invItem.unit)}</div>
                                     </div>
                                   </div>
                                 </div>
@@ -1315,23 +1311,16 @@ export function CreateJobDialog({
                     )}
 
                     <div className="space-y-1">
-                      <Label className="text-xs">HSN Code (Optional)</Label>
-                      <Select
-                        value={item.hsnCode || 'no-hsn'}
-                        onValueChange={(value) => updateItem(index, 'hsnCode', value === 'no-hsn' ? undefined : value)}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Optional - Select HSN" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="no-hsn">No HSN Code</SelectItem>
-                          {hsnCodes.map((hsn) => (
-                            <SelectItem key={hsn._id || hsn.id} value={hsn.hsnCode}>
-                              {hsn.hsnCode} - {hsn.description}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      {/* Filled from the stock item when one is picked; any code can be typed. */}
+                      <Label htmlFor={`job-hsn-${index}`} className="text-xs">HSN Code (Optional)</Label>
+                      <Input
+                        id={`job-hsn-${index}`}
+                        list="job-hsn-options"
+                        value={item.hsnCode || ''}
+                        onChange={(e) => updateItem(index, 'hsnCode', e.target.value.replace(/\D/g, '').slice(0, 8) || undefined)}
+                        inputMode="numeric"
+                        placeholder="e.g. 4911"
+                      />
                     </div>
 
                     <div className="space-y-1">
@@ -1374,8 +1363,28 @@ export function CreateJobDialog({
                         </div>
                       </div>
                     </div>
+
+                    <div className="space-y-1 md:col-span-8">
+                      <Label htmlFor={`job-note-${index}`} className="text-xs">Note for this item</Label>
+                      <Input
+                        id={`job-note-${index}`}
+                        value={item.description || ''}
+                        onChange={(e) => updateItem(index, 'description', e.target.value)}
+                        placeholder="Finish, colour, cutting or other instructions (optional)"
+                        maxLength={500}
+                      />
+                    </div>
+                    {(() => {
+                      const stock = stockItemNamed(inventoryItems, item.itemName);
+                      return stock ? <StockAvailability className="md:col-span-8" item={stock} needed={stockNeededFor(item, stock.unit)} /> : null;
+                    })()}
                   </div>
                 ))}
+                <datalist id="job-hsn-options">
+                  {hsnCodes.map((hsn) => (
+                    <option key={hsn._id || hsn.id} value={hsn.hsnCode}>{hsn.description}</option>
+                  ))}
+                </datalist>
 
                 {formData.items.length === 0 && (
                   <div className="text-center py-8 text-muted-foreground">

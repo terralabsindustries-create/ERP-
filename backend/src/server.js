@@ -10,7 +10,13 @@ let mongoUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/print_arts_
 // Force IPv4 connection by replacing localhost with 127.0.0.1
 mongoUri = mongoUri.replace('localhost', '127.0.0.1');
 mongoose.connect(mongoUri)
-  .then(() => console.log('✅ MongoDB connected successfully'))
+  .then(() => {
+    console.log('✅ MongoDB connected successfully');
+    // Starter roles from an older release pick up what the current one adds.
+    require('./utils/upgradePresetRoles').upgradePresetRoles()
+      .then(({ upgraded }) => upgraded && console.log(`🔐 Updated ${upgraded} starter role(s) to the current permissions`))
+      .catch((err) => console.error('Starter role upgrade failed:', err.message));
+  })
   .catch(err => {
     console.error('❌ MongoDB connection error:', err);
     process.exit(1);
