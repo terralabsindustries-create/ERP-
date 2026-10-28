@@ -5,9 +5,18 @@ const User = require('../models/User');
 const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 const { requirePermission, userCan } = require('../middleware/requirePermission');
+const { preserveAccountHistory } = require('../utils/accountScope');
 
 const router = express.Router();
 router.use(protect);
+const requireEmployeeList = (req, res, next) => {
+  if (userCan(req.user, 'Human Resources') || userCan(req.user, 'Payroll') || userCan(req.user, 'Attendance')) return next();
+  return requirePermission('Human Resources')(req, res, next);
+};
+const requireEmployeeDetail = (req, res, next) => {
+  if (userCan(req.user, 'Human Resources') || userCan(req.user, 'Payroll')) return next();
+  return requirePermission('Human Resources')(req, res, next);
+};
 
 // Build a tenant-scoped filter (dataScope preferred, userId fallback)
 function scopeFilter(req, extra = {}) {
@@ -29,7 +38,7 @@ const present = (req, employee) => {
 };
 
 // GET /api/hr/employees - list with optional search/status/department filters
-router.get('/', async (req, res) => {
+router.get('/', requireEmployeeList, async (req, res) => {
   try {
     const { search, status, department } = req.query;
     const filter = scopeFilter(req);
@@ -47,7 +56,10 @@ router.get('/', async (req, res) => {
 
     const employees = await Employee.find(filter).sort({ createdAt: -1 });
 
-    res.json({ status: 'success', data: { employees: employees.map((e) => present(req, e)) } });
+    const attendanceOnly = !userCan(req.user, 'Human Resources') && !userCan(req.user, 'Payroll');
+    res.json({ status: 'success', data: { employees: employees.map((e) => attendanceOnly
+      ? { _id: e._id, name: e.name, employeeCode: e.employeeCode, designation: e.designation, department: e.department, status: e.status }
+      : present(req, e)) } });
   } catch (error) {
     console.error('List employees error:', error);
     res.status(500).json({ status: 'error', message: 'Server error while fetching employees' });
@@ -55,7 +67,7 @@ router.get('/', async (req, res) => {
 });
 
 // GET /api/hr/employees/stats - headcount & payroll summary
-router.get('/stats/summary', async (req, res) => {
+router.get('/stats/summary', requireEmployeeDetail, async (req, res) => {
   try {
     const employees = await Employee.find(scopeFilter(req));
     const active = employees.filter(e => e.status === 'active');
@@ -79,7 +91,7 @@ router.get('/stats/summary', async (req, res) => {
 });
 
 // GET /api/hr/employees/:id
-router.get('/:id', async (req, res) => {
+router.get('/:id', requireEmployeeDetail, async (req, res) => {
   try {
     const employee = await Employee.findOne(scopeFilter(req, { _id: req.params.id }));
     if (!employee) return res.status(404).json({ status: 'error', message: 'Employee not found' });
@@ -103,6 +115,9 @@ router.post('/', requirePermission('Human Resources: Create & Edit'), [
 
     const data = { ...req.body };
     delete data._id;
+    if (!canSeeSalary(req.user)) {
+      for (const field of ['salary', 'deductions', 'bankDetails']) delete data[field];
+    }
     data.createdBy = req.user._id;
     data.userId = req.user._id;
     if (req.user.dataScope) data.dataScope = req.user.dataScope;
@@ -123,7 +138,7 @@ router.post('/', requirePermission('Human Resources: Create & Edit'), [
       dataScope: req.user.dataScope
     }).catch(() => {});
 
-    res.status(201).json({ status: 'success', message: 'Employee created successfully', data: { employee } });
+    res.status(201).json({ status: 'success', message: 'Employee created successfully', data: { employee: present(req, employee) } });
   } catch (error) {
     console.error('Create employee error:', error);
     res.status(500).json({ status: 'error', message: 'Server error while creating employee', error: error.message });
@@ -141,6 +156,9 @@ router.put('/:id', requirePermission('Human Resources: Create & Edit'), async (r
     delete data.employeeCode;
     delete data.createdAt;
     delete data.updatedAt;
+    if (!canSeeSalary(req.user)) {
+      for (const field of ['salary', 'deductions', 'bankDetails']) delete data[field];
+    }
 
     const employee = await Employee.findOneAndUpdate(
       scopeFilter(req, { _id: req.params.id }),
@@ -149,7 +167,7 @@ router.put('/:id', requirePermission('Human Resources: Create & Edit'), async (r
     );
     if (!employee) return res.status(404).json({ status: 'error', message: 'Employee not found' });
 
-    res.json({ status: 'success', message: 'Employee updated successfully', data: { employee } });
+    res.json({ status: 'success', message: 'Employee updated successfully', data: { employee: present(req, employee) } });
   } catch (error) {
     console.error('Update employee error:', error);
     res.status(500).json({ status: 'error', message: 'Server error while updating employee', error: error.message });
@@ -177,6 +195,7 @@ router.delete('/:id', requirePermission('Human Resources: Delete'), async (req, 
           // Owner accounts are deliberately not deletable from the HR page.
           note = ' Their admin login was kept — remove it from User Management if you meant to.';
         } else {
+          await preserveAccountHistory(linked);
           await User.findByIdAndDelete(linked._id);
           note = ' Their login was removed too, so that email can be invited again.';
         }

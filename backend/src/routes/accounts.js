@@ -2,17 +2,22 @@ const express = require('express');
 const { body, query } = require('express-validator');
 const AccountTransaction = require('../models/AccountTransaction');
 const Cheque = require('../models/Cheque');
+const Customer = require('../models/Customer');
+const Vendor = require('../models/Vendor');
+const Job = require('../models/Job');
+const Invoice = require('../models/Invoice');
+const mongoose = require('mongoose');
 const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/requirePermission');
-const { orgUserFilter } = require('../utils/accessScope');
+const { orgUserFilter, orgScope } = require('../utils/accessScope');
+const { accountScope } = require('../utils/accountScope');
 
 const router = express.Router();
 router.use('/reconciliation', require('./bankReconciliation'));
 
 // The ledger belongs to the business. Deriving the displayed balance from
 // completed entries also repairs balances that older per-login snapshots missed.
-const accountScope = (user) => orgUserFilter(user);
 async function currentBalances(scope) {
   const rows = await AccountTransaction.getAccountBalances(scope);
   const balanceOf = (type) => rows.find((row) => row.accountType === type)?.balance || 0;
@@ -36,6 +41,40 @@ const transactionValidation = [
     .withMessage('Account type is required (cash, bank, credit_card, loan or investment)'),
   body('accountName').notEmpty().withMessage('Account name is required').trim(),
   body('postedAt').optional().isISO8601().withMessage('Invalid transaction date')
+];
+
+// Account entries may refer to business records, but never to another
+// business's customer, supplier, job or invoice. The IDs are optional.
+async function validRelatedRecords(user, body) {
+  const related = [
+    ['customerId', Customer, orgScope(user)],
+    ['vendorId', Vendor, await orgUserFilter(user)],
+    ['jobId', Job, orgScope(user)],
+    ['invoiceId', Invoice, orgScope(user)]
+  ];
+  for (const [field, Model, scope] of related) {
+    const id = body[field];
+    if (!id) continue;
+    if (!mongoose.isValidObjectId(id) || !(await Model.exists({ _id: id, ...scope }))) return field;
+  }
+  return null;
+}
+
+// Ownership, numbering, approval and reconciliation fields belong to the
+// server. An account editor can change only the actual entry fields.
+const ENTRY_FIELDS = [
+  'transactionType', 'category', 'subCategory', 'amount', 'description',
+  'postedAt', 'paymentMethod', 'accountType', 'accountName', 'reference',
+  'referenceNumber', 'customerId', 'vendorId', 'jobId', 'invoiceId',
+  'chequeDetails', 'transferDetails', 'taxDetails', 'status', 'attachments',
+  'notes', 'internalNotes'
+];
+const entryFields = (body) => Object.fromEntries(ENTRY_FIELDS.filter((key) => body[key] !== undefined).map((key) => [key, body[key]]));
+const accountReferences = async (user) => [
+  { path: 'customerId', select: 'name email phone', match: orgScope(user) },
+  { path: 'vendorId', select: 'name email phone', match: await orgUserFilter(user) },
+  { path: 'jobId', select: 'title status', match: orgScope(user) },
+  { path: 'invoiceId', select: 'invoiceNumber totalAmount', match: orgScope(user) }
 ];
 
 // @route   GET /api/accounts/transactions
@@ -101,10 +140,7 @@ router.get('/transactions', protect, [
     
     // Execute query
     const transactions = await AccountTransaction.find(query)
-      .populate('customerId', 'name email phone')
-      .populate('vendorId', 'name email phone')
-      .populate('jobId', 'title status')
-      .populate('invoiceId', 'invoiceNumber totalAmount')
+      .populate(await accountReferences(req.user))
       .sort(sort)
       .skip(skip)
       .limit(parseInt(limit));
@@ -250,12 +286,16 @@ router.post('/transactions', protect, requirePermission('Accounts: Create & Edit
       });
     }
 
+    const invalidRelated = await validRelatedRecords(req.user, req.body);
+    if (invalidRelated) return res.status(400).json({ status: 'error', message: `${invalidRelated} must belong to this business` });
+
     console.log('📝 Creating transaction with data:', req.body);
     console.log('👤 User ID:', req.user._id);
 
     const transactionData = {
-      ...req.body,
-      userId: req.user._id
+      ...entryFields(req.body),
+      userId: req.user._id,
+      dataScope: req.user.dataScope
     };
 
     console.log('💾 Transaction data to save:', transactionData);
@@ -266,10 +306,7 @@ router.post('/transactions', protect, requirePermission('Accounts: Create & Edit
 
     // Populate the created transaction
     const populatedTransaction = await AccountTransaction.findById(transaction._id)
-      .populate('customerId', 'name email phone')
-      .populate('vendorId', 'name email phone')
-      .populate('jobId', 'title status')
-      .populate('invoiceId', 'invoiceNumber totalAmount');
+      .populate(await accountReferences(req.user));
 
     ActivityLog.logActivity({
       action: 'Account Transaction Created',
@@ -334,19 +371,20 @@ router.post('/transactions', protect, requirePermission('Accounts: Create & Edit
 // @access  Private
 router.put('/transactions/:id', protect, requirePermission('Accounts: Create & Edit'), transactionValidation, async (req, res) => {
   try {
+    const { validationResult } = require('express-validator');
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ status: 'error', message: 'Validation failed', errors: errors.array().map((err) => ({ field: err.path || err.param, message: err.msg })) });
+    const invalidRelated = await validRelatedRecords(req.user, req.body);
+    if (invalidRelated) return res.status(400).json({ status: 'error', message: `${invalidRelated} must belong to this business` });
     const scope = await accountScope(req.user);
     const existing = await AccountTransaction.findOne({ _id: req.params.id, ...scope }).select('reconciled');
     if (existing?.reconciled) return res.status(409).json({ status: 'error', message: 'A reconciled entry cannot be edited.' });
-    const { reconciled, reconciledAt, reconciledBy, reconciliationId, userId, ...changes } = req.body;
+    const changes = entryFields(req.body);
     const transaction = await AccountTransaction.findOneAndUpdate(
       { _id: req.params.id, ...scope, reconciled: { $ne: true } },
       changes,
       { new: true, runValidators: true }
-    )
-      .populate('customerId', 'name email phone')
-      .populate('vendorId', 'name email phone')
-      .populate('jobId', 'title status')
-      .populate('invoiceId', 'invoiceNumber totalAmount');
+    ).populate(await accountReferences(req.user));
     
     if (!transaction) {
       return res.status(404).json({
@@ -495,9 +533,12 @@ router.get('/reports/summary', protect, async (req, res) => {
         break;
     }
 
-    // Sum income/expense for the period (completed transactions only)
+    // Use the statement/transaction date when supplied. A backdated entry
+    // belongs to that period, not the month someone typed it into the ERP.
     const agg = await AccountTransaction.aggregate([
-      { $match: { ...(await accountScope(req.user)), status: 'completed', createdAt: { $gte: start } } },
+      { $match: { ...(await accountScope(req.user)), status: 'completed' } },
+      { $addFields: { effectiveDate: { $ifNull: ['$postedAt', '$createdAt'] } } },
+      { $match: { effectiveDate: { $gte: start, $lte: now } } },
       { $group: { _id: '$transactionType', total: { $sum: '$amount' } } }
     ]);
 
@@ -565,9 +606,11 @@ router.get('/ledger', protect, [
     }
     
     if (startDate || endDate) {
-      query.createdAt = {};
-      if (startDate) query.createdAt.$gte = new Date(startDate);
-      if (endDate) query.createdAt.$lte = new Date(endDate);
+      const date = { $ifNull: ['$postedAt', '$createdAt'] };
+      const conditions = [];
+      if (startDate) conditions.push({ $gte: [date, new Date(startDate)] });
+      if (endDate) conditions.push({ $lte: [date, new Date(endDate)] });
+      query.$expr = conditions.length === 1 ? conditions[0] : { $and: conditions };
     }
     
     // Calculate pagination
@@ -575,10 +618,7 @@ router.get('/ledger', protect, [
     
     // Execute query
     const transactions = await AccountTransaction.find(query)
-      .populate('customerId', 'name email phone')
-      .populate('vendorId', 'name email phone')
-      .populate('jobId', 'title status')
-      .populate('invoiceId', 'invoiceNumber totalAmount')
+      .populate(await accountReferences(req.user))
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
@@ -635,6 +675,7 @@ router.get('/reports/export', protect, [
     if (startDate && endDate) {
       start = new Date(startDate);
       end = new Date(endDate);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(endDate)) end.setDate(end.getDate() + 1);
     } else {
       switch (period) {
         case 'week':
@@ -643,32 +684,30 @@ router.get('/reports/export', protect, [
           break;
         case 'month':
           start = new Date(now.getFullYear(), now.getMonth(), 1);
-          end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+          end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
           break;
         case 'quarter':
           const quarter = Math.floor(now.getMonth() / 3);
           start = new Date(now.getFullYear(), quarter * 3, 1);
-          end = new Date(now.getFullYear(), quarter * 3 + 3, 0);
+          end = new Date(now.getFullYear(), quarter * 3 + 3, 1);
           break;
         case 'year':
           start = new Date(now.getFullYear(), 0, 1);
-          end = new Date(now.getFullYear(), 11, 31);
+          end = new Date(now.getFullYear() + 1, 0, 1);
           break;
       }
     }
 
     // Fetch account transactions for the period
+    const effectiveDate = { $ifNull: ['$postedAt', '$createdAt'] };
     const transactionQuery = {
-      createdAt: { $gte: start, $lte: end },
+      $expr: { $and: [{ $gte: [effectiveDate, start] }, { $lt: [effectiveDate, end] }] },
       status: 'completed',
       ...(await accountScope(req.user))
     };
 
     const transactions = await AccountTransaction.find(transactionQuery)
-      .populate('customerId', 'name email phone')
-      .populate('vendorId', 'name email phone')
-      .populate('jobId', 'title status')
-      .populate('invoiceId', 'invoiceNumber totalAmount')
+      .populate(await accountReferences(req.user))
       .populate('userId', 'fullName email')
       .sort({ createdAt: -1 });
 

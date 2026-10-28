@@ -5,6 +5,7 @@ const BankReconciliation = require('../models/BankReconciliation');
 const { protect } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/requirePermission');
 const { orgUserFilter } = require('../utils/accessScope');
+const { accountScope } = require('../utils/accountScope');
 const { settingsOwnerId } = require('../utils/businessSettings');
 
 const router = express.Router();
@@ -40,15 +41,16 @@ router.get('/', protect, async (req, res) => {
   const accountName = typeof req.query.accountName === 'string' ? req.query.accountName.trim() : '';
   try {
     const scope = await orgUserFilter(req.user);
+    const txScope = await accountScope(req.user);
     const [accounts, history] = await Promise.all([
-      AccountTransaction.distinct('accountName', { ...scope, accountType: 'bank', status: 'completed' }),
+      AccountTransaction.distinct('accountName', { ...txScope, accountType: 'bank', status: 'completed' }),
       BankReconciliation.find({ ...scope, ...(accountName ? { accountName } : {}) }).sort({ statementDate: -1 }).limit(20).lean()
     ]);
     if (!accountName || !date) return res.json({ status: 'success', data: { accounts, history } });
     if (!accounts.includes(accountName)) return res.status(404).json({ status: 'error', message: 'Bank account not found.' });
     const [previous, transactions] = await Promise.all([
       BankReconciliation.findOne({ ...scope, accountName }).sort({ statementDate: -1 }).lean(),
-      AccountTransaction.find(eligible(scope, accountName, date)).sort({ createdAt: 1, _id: 1 }).lean()
+      AccountTransaction.find(eligible(txScope, accountName, date)).sort({ createdAt: 1, _id: 1 }).lean()
     ]);
     res.json({ status: 'success', data: {
       accounts, history, previous,
@@ -67,7 +69,7 @@ router.get('/:id', protect, async (req, res) => {
     const scope = await orgUserFilter(req.user);
     const reconciliation = await BankReconciliation.findOne({ _id: req.params.id, ...scope }).lean();
     if (!reconciliation) return res.status(404).json({ status: 'error', message: 'Reconciliation not found.' });
-    const transactions = await AccountTransaction.find({ _id: { $in: reconciliation.transactionIds }, ...scope }).sort({ createdAt: 1 }).lean();
+    const transactions = await AccountTransaction.find({ _id: { $in: reconciliation.transactionIds }, ...(await accountScope(req.user)) }).sort({ createdAt: 1 }).lean();
     res.json({ status: 'success', data: { reconciliation, transactions } });
   } catch (error) {
     console.error('Bank reconciliation detail error:', error);
@@ -89,14 +91,15 @@ router.post('/', protect, requirePermission('Accounts: Create & Edit'), async (r
   try {
     const userId = req.user._id;
     const scope = await orgUserFilter(req.user);
+    const txScope = await accountScope(req.user);
     const ownerId = await settingsOwnerId(req.user);
-    const accountExists = await AccountTransaction.exists({ ...scope, accountType: 'bank', accountName, status: 'completed' });
+    const accountExists = await AccountTransaction.exists({ ...txScope, accountType: 'bank', accountName, status: 'completed' });
     if (!accountExists) return res.status(404).json({ status: 'error', message: 'Bank account not found.' });
     const previous = await BankReconciliation.findOne({ ...scope, accountName }).sort({ statementDate: -1 }).lean();
     if (previous && date <= previous.statementDate) {
       return res.status(409).json({ status: 'error', message: 'Use a statement date after the last reconciliation.' });
     }
-    const matching = await AccountTransaction.find({ ...eligible(scope, accountName, date), _id: { $in: ids } }).lean();
+    const matching = await AccountTransaction.find({ ...eligible(txScope, accountName, date), _id: { $in: ids } }).lean();
     if (matching.length !== ids.length) {
       return res.status(409).json({ status: 'error', message: 'Some entries are unavailable or already reconciled. Refresh and try again.' });
     }
@@ -113,12 +116,12 @@ router.post('/', protect, requirePermission('Accounts: Create & Edit'), async (r
     });
     try {
       const result = await AccountTransaction.updateMany(
-        { ...eligible(scope, accountName, date), _id: { $in: ids } },
+        { ...eligible(txScope, accountName, date), _id: { $in: ids } },
         { $set: { reconciled: true, reconciledAt: new Date(), reconciledBy: userId, reconciliationId: reconciliation._id } }
       );
       if (result.modifiedCount !== ids.length) throw new Error('Entries changed during reconciliation');
     } catch (error) {
-      await AccountTransaction.updateMany({ reconciliationId: reconciliation._id, ...scope },
+      await AccountTransaction.updateMany({ reconciliationId: reconciliation._id, ...txScope },
         { $set: { reconciled: false }, $unset: { reconciledAt: '', reconciledBy: '', reconciliationId: '' } });
       await BankReconciliation.deleteOne({ _id: reconciliation._id });
       return res.status(409).json({ status: 'error', message: 'Entries changed during reconciliation. Refresh and try again.' });

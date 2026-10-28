@@ -12,6 +12,7 @@ const { pruneOrphanedActions } = require('../config/permissions');
 const { canViewAllStaffData } = require('../utils/dataScopeHelper');
 const { userCan, requirePermission } = require('../middleware/requirePermission');
 const { orgScope } = require('../utils/accessScope');
+const { preserveAccountHistory } = require('../utils/accountScope');
 const { VIEW_ALL_ROLES, manageableBy, accessFromRole, grantProblem } = require('../utils/userAccess');
 const { setUserTeams, teamsByUser, teamsInOrg } = require('../utils/teamMembership');
 const {
@@ -824,6 +825,7 @@ router.delete('/:id', protect, authorize('admin'), async (req, res) => {
       });
     }
 
+    await preserveAccountHistory(user);
     await User.findByIdAndDelete(req.params.id);
     await setUserTeams(req.user, user._id, []);
 

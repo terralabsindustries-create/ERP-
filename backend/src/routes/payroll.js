@@ -252,7 +252,8 @@ router.patch('/:id/pay', async (req, res) => {
           accountName: 'Payroll',
           reference: payslip.employeeCode || '',
           status: 'completed',
-          userId: req.user._id
+          userId: req.user._id,
+          dataScope: req.user.dataScope
         });
 
       } catch (txErr) {
@@ -271,8 +272,12 @@ router.patch('/:id/pay', async (req, res) => {
 // DELETE /api/hr/payroll/:id
 router.delete('/:id', async (req, res) => {
   try {
-    const payslip = await Payroll.findOneAndDelete(scopeFilter(req, { _id: req.params.id }));
+    const payslip = await Payroll.findOne(scopeFilter(req, { _id: req.params.id }));
     if (!payslip) return res.status(404).json({ status: 'error', message: 'Payslip not found' });
+    if (payslip.status === 'paid') {
+      return res.status(409).json({ status: 'error', message: 'A paid payslip cannot be deleted while its salary expense remains in Accounts' });
+    }
+    await payslip.deleteOne();
     res.json({ status: 'success', message: 'Payslip deleted' });
   } catch (error) {
     console.error('Delete payslip error:', error);
