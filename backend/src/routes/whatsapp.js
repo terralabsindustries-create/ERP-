@@ -175,6 +175,83 @@ router.post('/webhook', async (req, res) => {
 
 const Settings = require('../models/Settings');
 const { settingsOwnerId, businessSettings } = require('../utils/businessSettings');
+const { LANGUAGE: STARTER_LANGUAGE, STARTER_TEMPLATES, buildComponents } = require('../config/whatsappStarterTemplates');
+
+// @route   GET /api/whatsapp/account
+// @desc    The connected number as Meta reports it (display number, verified name, quality, limit).
+//          Doubles as the connection check: a bad token or ID comes back as Meta's error message.
+// @access  Private
+router.get('/account', protect, async (req, res) => {
+  try {
+    const settings = await Settings.findOne({ userId: await settingsOwnerId(req.user) });
+    const { phoneNumberId, accessToken } = settings?.whatsappIntegration || {};
+
+    if (!phoneNumberId || !accessToken) {
+      return res.status(400).json({ status: 'error', message: 'WhatsApp Business API credentials not configured.' });
+    }
+
+    const lookup = (fields) =>
+      fetch(`https://graph.facebook.com/v19.0/${phoneNumberId}?fields=${fields}`, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      }).then(async (response) => ({ ok: response.ok, data: await response.json() }));
+
+    let { ok, data } = await lookup('display_phone_number,verified_name,quality_rating,messaging_limit_tier,name_status,code_verification_status');
+    // Error 100 is also what Meta returns for a field it no longer serves; the core fields are enough.
+    if (!ok && data.error?.code === 100) {
+      ({ ok, data } = await lookup('display_phone_number,verified_name,quality_rating'));
+    }
+
+    if (!ok) {
+      console.error('Meta API Error (Phone Number):', data);
+      return res.status(400).json({ status: 'error', message: data.error?.message || 'Could not reach the WhatsApp number on Meta' });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        account: {
+          displayPhoneNumber: data.display_phone_number,
+          verifiedName: data.verified_name,
+          qualityRating: data.quality_rating,
+          messagingLimitTier: data.messaging_limit_tier,
+          nameStatus: data.name_status,
+          codeVerificationStatus: data.code_verification_status
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Fetch WhatsApp account error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
+
+// @route   GET /api/whatsapp/starter-templates
+// @desc    The templates the ERP's invoice, quotation and reminder sends are written for,
+//          as components ready to submit through POST /meta-templates
+// @access  Private
+router.get('/starter-templates', protect, async (req, res) => {
+  try {
+    const settings = await businessSettings(req.user);
+    // 'My Company' is the placeholder a new Settings document starts with.
+    const businessName = settings.companyName && settings.companyName !== 'My Company' ? settings.companyName : undefined;
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        templates: STARTER_TEMPLATES.map((template) => ({
+          name: template.name,
+          category: template.category,
+          language: STARTER_LANGUAGE,
+          purpose: template.purpose,
+          components: buildComponents(template, { businessName })
+        }))
+      }
+    });
+  } catch (error) {
+    console.error('Starter templates error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error' });
+  }
+});
 
 // @route   GET /api/whatsapp/settings
 // @desc    Get WhatsApp Business API settings
@@ -244,7 +321,8 @@ router.get('/meta-templates', protect, async (req, res) => {
 
     // Meta Graph API Bug: If you don't explicitly request fields, it sometimes throws an "Object does not exist" error for System Users
     const fields = 'name,status,category,language,components,id';
-    const response = await fetch(`https://graph.facebook.com/v19.0/${wabaId}/message_templates?fields=${fields}`, {
+    // Meta pages the list at 25 by default; one page of 200 covers any real account.
+    const response = await fetch(`https://graph.facebook.com/v19.0/${wabaId}/message_templates?fields=${fields}&limit=200`, {
       headers: { 'Authorization': `Bearer ${accessToken}` }
     });
     
