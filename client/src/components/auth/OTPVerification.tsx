@@ -38,7 +38,7 @@ export function OTPVerification({
   const [resendIn, setResendIn] = useState(RESEND_COOLDOWN_SECONDS);
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { refreshUser, setShowSubscriptionModal } = useAuth();
+  const { refreshUser } = useAuth();
 
   const canResend = resendIn === 0;
 
@@ -127,11 +127,8 @@ export function OTPVerification({
         }
 
         // Load the new account into AuthContext so the app treats them as
-        // signed in, then show the pricing modal — this is the one and only
-        // place it opens. Logins created later via User Management never
-        // trigger it.
+        // signed in.
         await refreshUser();
-        setShowSubscriptionModal(true);
 
         toast({
           title: "Account Created!",

@@ -1,13 +1,6 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import apiClient, { ApiResponse } from '@/lib/apiClient';
 import { useToast } from '@/hooks/use-toast';
-import { SubscriptionModal } from '@/components/subscription/SubscriptionModal';
-
-// Gates the general "your subscription lapsed" auto-check (sign in, page
-// reload, refreshUser). Hidden for now. Flip to `true` to re-enable it.
-// The signup-page pricing modal below is intentionally NOT gated by this —
-// it always shows once right after a brand-new account is created.
-const SUBSCRIPTION_PLANS_ENABLED = false;
 
 interface User {
   id: string;
@@ -41,8 +34,6 @@ interface AuthContextType {
   signOut: () => Promise<void>;
   hasPermission: (permission: string) => boolean; // Check if user has a specific permission
   refreshUser: () => Promise<User | undefined>;
-  showSubscriptionModal: boolean;
-  setShowSubscriptionModal: (show: boolean) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -51,31 +42,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
   const { toast } = useToast();
-
-  // Check subscription status and show modal if needed
-  const checkSubscriptionStatus = (userData: User) => {
-    if (!SUBSCRIPTION_PLANS_ENABLED) return;
-
-    // Subscriptions belong to the admin who signed up — manager/staff logins
-    // are created via User Management, never carry their own subscription,
-    // and must never be shown the paywall.
-    if (userData.role !== 'admin') {
-      setShowSubscriptionModal(false);
-      return;
-    }
-
-    // Show modal if subscription is not active or doesn't exist
-    if (!userData.subscription || !userData.subscription.isActive) {
-      setShowSubscriptionModal(true);
-    } else {
-      setShowSubscriptionModal(false);
-    }
-  };
-
-  // Determine if modal can be closed (only if subscription exists and is not undefined)
-  const canCloseModal = user?.subscription !== undefined;
 
   useEffect(() => {
     // Check for existing token and user
@@ -86,7 +53,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const userData = await apiClient.getCurrentUser();
           setUser(userData);
           setSession({ user: userData });
-          checkSubscriptionStatus(userData);
         }
       } catch (error) {
         // Token is invalid, clear it
@@ -126,7 +92,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       
       setUser(response.user);
       setSession({ user: response.user });
-      checkSubscriptionStatus(response.user);
       
       
       toast({
@@ -218,14 +183,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return granted.includes(permission);
   };
 
-  // Re-fetch the current user (e.g. after a successful subscription payment)
-  // so the subscription gate updates immediately and stays correct on refresh.
+  // Re-fetch the current user (e.g. right after signup) so the app treats
+  // them as signed in.
   const refreshUser = async () => {
     try {
       const userData = await apiClient.getCurrentUser();
       setUser(userData);
       setSession({ user: userData });
-      checkSubscriptionStatus(userData);
       return userData;
     } catch (error) {
       console.error('Failed to refresh user:', error);
@@ -241,23 +205,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     signOut,
     hasPermission,
     refreshUser,
-    showSubscriptionModal,
-    setShowSubscriptionModal,
   };
 
   return (
     <AuthContext.Provider value={value}>
       {children}
-      {/* Not gated by SUBSCRIPTION_PLANS_ENABLED: this modal is only ever
-          opened explicitly, right after a brand-new account is created on
-          the signup page (see OTPVerification). */}
-      <SubscriptionModal
-        open={showSubscriptionModal}
-        onClose={() => setShowSubscriptionModal(false)}
-        userPlan={user?.subscription?.plan}
-        onPaymentSuccess={refreshUser}
-        payer={user}
-      />
     </AuthContext.Provider>
   );
 }
