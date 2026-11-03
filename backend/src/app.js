@@ -26,6 +26,8 @@ app.use(cors({
     // process.env.FRONTEND_URL || 'https://serpy.synxautomate.com',
     process.env.FRONTEND_URL || 'http://localhost:8080',
     'https://serpy-silk.vercel.app',
+    'https://erp-delta-one-83.vercel.app',
+    'https://api.carbonprintflow.com',
     'http://localhost:8081',
     'http://localhost:8080',
     'https://app.serpy.in',
