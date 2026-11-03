@@ -16,6 +16,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import apiClient from "@/lib/apiClient";
+import { compactSettingsImage } from "@/lib/compactSettingsImage";
 import { useToast } from "@/hooks/use-toast";
 
 const Settings = () => {
@@ -172,6 +173,7 @@ const Settings = () => {
       if (qrCodeFile && qrCodePreview) {
         paymentQRCode = qrCodePreview;
       }
+      paymentQRCode = await compactSettingsImage(paymentQRCode || '');
 
       let companyLogo = companySettings.companyLogo;
       // If a new logo file was selected, use the base64 data
@@ -180,6 +182,7 @@ const Settings = () => {
       } else if (logoPreview) {
         companyLogo = logoPreview;
       }
+      companyLogo = await compactSettingsImage(companyLogo || '');
 
       const dataToSave = {
         ...companySettings,
@@ -190,7 +193,11 @@ const Settings = () => {
         companyLogo
       };
 
-      console.log('📤 Data to save:', { ...dataToSave, paymentQRCode: paymentQRCode ? 'base64...' : 'none' });
+      if (new Blob([JSON.stringify(dataToSave)]).size > 900_000) {
+        throw new Error('Company settings are too large to save. Please use smaller logo and QR images.');
+      }
+
+      console.log('📤 Saving company settings');
 
       const response = await apiClient.updateCompanySettings(dataToSave);
       console.log('✅ Save response:', response);
