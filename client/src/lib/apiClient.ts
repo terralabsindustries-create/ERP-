@@ -892,7 +892,17 @@ class ApiClient {
   }
 
   async deleteMetaTemplate(name: string) {
-    return this.delete(`/whatsapp/meta-templates/${name}`);
+    return this.delete(`/whatsapp/meta-templates/${encodeURIComponent(name)}`);
+  }
+
+  /** The connected number as Meta reports it; fails with Meta's own message when the token or IDs are wrong. */
+  async getWhatsAppAccount() {
+    return this.get<any>('/whatsapp/account');
+  }
+
+  /** The templates the ERP's invoice, quotation and reminder sends are written for. */
+  async getWhatsAppStarterTemplates() {
+    return this.get<any>('/whatsapp/starter-templates');
   }
 
   // WhatsApp Embedded Signup

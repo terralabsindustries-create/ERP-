@@ -403,7 +403,7 @@ router.delete('/meta-templates/:name', protect, async (req, res) => {
 
     const templateName = req.params.name;
 
-    const response = await fetch(`https://graph.facebook.com/v19.0/${wabaId}/message_templates?name=${templateName}`, {
+    const response = await fetch(`https://graph.facebook.com/v19.0/${wabaId}/message_templates?name=${encodeURIComponent(templateName)}`, {
       method: 'DELETE',
       headers: { 'Authorization': `Bearer ${accessToken}` }
     });
