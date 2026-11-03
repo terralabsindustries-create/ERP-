@@ -15,7 +15,7 @@ const getEmailTemplate = (template, data) => {
           <html>
           <head>
             <meta charset="utf-8">
-            <title>Welcome to Terralabs ERP</title>
+            <title>Welcome to Carbon</title>
             <style>
               body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
               .container { max-width: 600px; margin: 0 auto; padding: 20px; }
@@ -29,13 +29,13 @@ const getEmailTemplate = (template, data) => {
           <body>
             <div class="container">
               <div class="header">
-                <h1>Welcome to Terralabs ERP</h1>
-                <p>Your Enterprise Resource Planning System</p>
+                <h1>Welcome to Carbon</h1>
+                <p>Print Flow Engine</p>
               </div>
               
               <div class="content">
                 <h2>Dear ${data.fullName},</h2>
-                <p>Welcome to ${data.companyName}! Your account has been created and you can now access the Terralabs ERP system.</p>
+                <p>Welcome to ${data.companyName}! Your account has been created and you can now access the Carbon system.</p>
                 
                 <div class="credentials">
                   <h3>Your Login Credentials:</h3>
@@ -45,7 +45,7 @@ const getEmailTemplate = (template, data) => {
                 </div>
                 
                 <p>Please click the button below to login to your account:</p>
-                <a href="${data.loginUrl}" class="button">Login to Terralabs ERP</a>
+                <a href="${data.loginUrl}" class="button">Login to Carbon</a>
                 
                 <p><strong>Important:</strong> For security reasons, please change your password after your first login.</p>
                 
@@ -62,11 +62,11 @@ const getEmailTemplate = (template, data) => {
           </html>
         `,
         text: `
-          Welcome to Terralabs ERP
+          Welcome to Carbon
           
           Dear ${data.fullName},
           
-          Welcome to ${data.companyName}! Your account has been created and you can now access the Terralabs ERP system.
+          Welcome to ${data.companyName}! Your account has been created and you can now access the Carbon system.
           
           Your Login Credentials:
           Email: ${data.email}
@@ -117,7 +117,7 @@ router.post('/send', protect, authorize('admin', 'manager'), async (req, res) =>
 
       // Email options
       const mailOptions = {
-        from: getFromAddress(process.env.COMPANY_NAME || 'Terralabs ERP'),
+        from: getFromAddress(process.env.COMPANY_NAME || 'Carbon'),
         to: Array.isArray(to) ? to.join(', ') : to,
         subject: subject,
         html: emailContent.html,
@@ -148,7 +148,7 @@ router.post('/send', protect, authorize('admin', 'manager'), async (req, res) =>
 
     // Email options
     const mailOptions = {
-      from: getFromAddress(process.env.COMPANY_NAME || 'Terralabs ERP'),
+      from: getFromAddress(process.env.COMPANY_NAME || 'Carbon'),
       to: Array.isArray(to) ? to.join(', ') : to,
       subject: subject,
       html: emailContent.html,
@@ -211,9 +211,9 @@ router.post('/send-staff-credentials', protect, authorize('admin', 'manager'), a
 
     // Email options
     const mailOptions = {
-      from: getFromAddress(process.env.COMPANY_NAME || 'Terralabs ERP'),
+      from: getFromAddress(process.env.COMPANY_NAME || 'Carbon'),
       to: Array.isArray(to) ? to.join(', ') : to,
-      subject: 'Welcome to Terralabs ERP - Your Login Credentials',
+      subject: 'Welcome to Carbon - Your Login Credentials',
       html: emailContent.html,
       text: emailContent.text
     };
@@ -270,14 +270,14 @@ router.post('/test-public', async (req, res) => {
 
     // Send test email
     const mailOptions = {
-      from: getFromAddress(process.env.COMPANY_NAME || 'Terralabs ERP'),
+      from: getFromAddress(process.env.COMPANY_NAME || 'Carbon'),
       to: to,
-      subject: 'Terralabs ERP - Email Configuration Test',
+      subject: 'Carbon - Email Configuration Test',
       html: `
         <h2>Email Configuration Test</h2>
         <p>This is a test email to verify that the email configuration is working correctly.</p>
         <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
-        <p><strong>System:</strong> Terralabs ERP</p>
+        <p><strong>System:</strong> Carbon</p>
       `,
       text: `
         Email Configuration Test
@@ -285,7 +285,7 @@ router.post('/test-public', async (req, res) => {
         This is a test email to verify that the email configuration is working correctly.
         
         Time: ${new Date().toLocaleString()}
-        System: Terralabs ERP
+        System: Carbon
       `
     };
 
@@ -335,14 +335,14 @@ router.post('/test', protect, authorize('admin'), async (req, res) => {
 
     // Send test email
     const mailOptions = {
-      from: getFromAddress(process.env.COMPANY_NAME || 'Terralabs ERP'),
+      from: getFromAddress(process.env.COMPANY_NAME || 'Carbon'),
       to: to,
-      subject: 'Terralabs ERP - Email Configuration Test',
+      subject: 'Carbon - Email Configuration Test',
       html: `
         <h2>Email Configuration Test</h2>
         <p>This is a test email to verify that the email configuration is working correctly.</p>
         <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
-        <p><strong>System:</strong> Terralabs ERP</p>
+        <p><strong>System:</strong> Carbon</p>
       `,
       text: `
         Email Configuration Test
@@ -350,7 +350,7 @@ router.post('/test', protect, authorize('admin'), async (req, res) => {
         This is a test email to verify that the email configuration is working correctly.
         
         Time: ${new Date().toLocaleString()}
-        System: Terralabs ERP
+        System: Carbon
       `
     };
 

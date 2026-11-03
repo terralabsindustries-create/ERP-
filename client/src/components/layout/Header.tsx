@@ -163,7 +163,7 @@ export function Header() {
 
         {/* Where am I */}
         <nav aria-label="Breadcrumb" className="hidden min-w-0 items-center gap-1.5 text-sm md:flex">
-          <span className="whitespace-nowrap text-muted-foreground">{page?.group || "Terralabs ERP"}</span>
+          <span className="whitespace-nowrap text-muted-foreground">{page?.group || "Carbon"}</span>
           {page && (
             <>
               <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />

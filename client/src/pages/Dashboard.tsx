@@ -179,7 +179,7 @@ export default function Dashboard() {
     return (
       <EmptyState
         className="h-64"
-        title="Welcome to Terralabs ERP"
+        title="Welcome to Carbon"
         description="Please sign in to access your dashboard"
         action={<Button onClick={() => navigate('/auth')}>Go to Sign In</Button>}
       />

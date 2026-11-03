@@ -241,6 +241,31 @@ describe('business settings', () => {
     expect(owner.whatsappIntegration.accessToken).toBe('SECRET-TOKEN');
     expect(owner.whatsappIntegration.wabaId).toBe('W2');
   });
+
+  test("the ERP's starter templates use the business name as their sample", async () => {
+    const res = await as(a.tokens.admin).get('/api/whatsapp/starter-templates');
+    expect(res.status).toBe(200);
+    const reminder = res.body.data.templates.find((t) => t.name === 'payment_reminder');
+    expect(reminder.purpose).toBe('Payment reminders');
+    expect(reminder.components[0].example.body_text[0][5]).toBe('PA Printers Pvt Ltd');
+  });
+
+  test("the account check passes on Meta's view of the number, or Meta's error", async () => {
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ display_phone_number: '+91 90000 00000', verified_name: 'PA Printers', quality_rating: 'GREEN' })
+    });
+    const ok = await as(a.tokens.admin).get('/api/whatsapp/account');
+    expect(ok.status).toBe(200);
+    expect(ok.body.data.account).toMatchObject({ displayPhoneNumber: '+91 90000 00000', verifiedName: 'PA Printers', qualityRating: 'GREEN' });
+    expect(JSON.stringify(ok.body)).not.toMatch(/SECRET-TOKEN/);
+
+    fetchSpy.mockResolvedValueOnce({ ok: false, json: async () => ({ error: { code: 190, message: 'Error validating access token' } }) });
+    const bad = await as(a.tokens.admin).get('/api/whatsapp/account');
+    fetchSpy.mockRestore();
+    expect(bad.status).toBe(400);
+    expect(bad.body.message).toBe('Error validating access token');
+  });
 });
 
 describe('input checks', () => {

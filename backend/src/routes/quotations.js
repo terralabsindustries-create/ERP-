@@ -337,7 +337,7 @@ router.post('/:id/send-email', protect, requirePermission('Quotations: Send Emai
       console.warn('⚠️ Quotation PDF generation for email failed:', pdfErr.message);
     }
 
-    const companyName = process.env.COMPANY_NAME || 'Terralabs ERP';
+    const companyName = process.env.COMPANY_NAME || 'Carbon';
     const validUntil = quotation.valid_until
       ? new Date(quotation.valid_until).toLocaleDateString('en-IN') : 'N/A';
 

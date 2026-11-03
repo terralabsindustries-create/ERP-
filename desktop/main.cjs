@@ -1,5 +1,5 @@
 /**
- * Terralabs ERP desktop shell.
+ * Carbon desktop shell.
  *
  * The window loads the very same React bundle the website serves — there is no
  * second copy of the UI. The only difference is how the files are handed to the
@@ -29,9 +29,9 @@ const { startBackend } = require('./backend-runner.cjs');
 const { checkForUpdates } = require('./updater.cjs');
 
 /**
- * Builds named SerpY kept their data (login session, preferences) in
- * Application Support/SerpY (%APPDATA%\SerpY on Windows). The product is now
- * Terralabs ERP, so Electron looks in a new folder; copy the old one across
+ * Older builds kept their data (login session, preferences) under
+ * Terralabs ERP or SerpY. Carbon uses a new folder, so copy the Terralabs ERP
+ * data when present, falling back to the older SerpY data.
  * once so nobody is signed out by the rename. Caches and lock files are left
  * behind — they are rebuilt — and an existing new folder is never touched.
  * Runs before anything (the single-instance lock included) opens userData.
@@ -39,17 +39,20 @@ const { checkForUpdates } = require('./updater.cjs');
 function migrateUserData() {
   try {
     const current = app.getPath('userData');
-    const previous = path.join(app.getPath('appData'), 'SerpY');
-    if (fs.existsSync(current) || !fs.existsSync(previous)) return;
+    const appData = app.getPath('appData');
+    const previous = ['Terralabs ERP', 'SerpY']
+      .map((name) => path.join(appData, name))
+      .find((candidate) => fs.existsSync(candidate));
+    if (fs.existsSync(current) || !previous) return;
     const skip = /^(Singleton|Cache$|Code Cache$|GPUCache$|DawnGraphiteCache$|DawnWebGPUCache$|GraphiteDawnCache$|GPUPersistentCache$)/;
     fs.cpSync(previous, current, {
       recursive: true,
       filter: (src) => !skip.test(path.basename(src))
     });
-    console.log(`[terralabs] carried app data over from ${previous}`);
+    console.log(`[carbon] carried app data over from ${previous}`);
   } catch (error) {
     // A failed copy only means signing in again; never block startup over it.
-    console.warn('[terralabs] could not carry over data from the SerpY build:', error.message);
+    console.warn('[carbon] could not carry over data from an older build:', error.message);
   }
 }
 migrateUserData();
@@ -127,7 +130,7 @@ async function startBackendOrQuit() {
       // it belongs in the editor, not in a dialog.
       if (!app.isPackaged) {
         dialog.showErrorBox(
-          'Terralabs ERP — backend failed to start',
+          'Carbon — backend failed to start',
           `${error.message}\n\nConfiguration file:\n${CONFIG_FILE}`
         );
         return null;
@@ -135,8 +138,8 @@ async function startBackendOrQuit() {
 
       const message = isMissingConfig
         ? `This build is missing its database configuration (${CONFIG_FILE} not found).\n\n` +
-          'Reinstall the latest version of Terralabs ERP, or contact support.'
-        : `Terralabs ERP could not reach the database.\n\n${error.message}\n\n` +
+          'Reinstall the latest version of Carbon, or contact support.'
+        : `Carbon could not reach the database.\n\n${error.message}\n\n` +
           'Check your internet connection and try again.';
 
       // A missing bundled file will never appear on retry — only a live
@@ -144,7 +147,7 @@ async function startBackendOrQuit() {
       const buttons = isMissingConfig ? ['Quit'] : ['Retry', 'Quit'];
       const { response } = await dialog.showMessageBox({
         type: 'error',
-        title: 'Terralabs ERP — could not start',
+        title: 'Carbon — could not start',
         message,
         buttons,
         defaultId: 0,
@@ -165,7 +168,7 @@ function createWindow() {
     minHeight: 640,
     show: false,
     backgroundColor: '#ffffff',
-    title: 'Terralabs ERP',
+    title: 'Carbon',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -184,7 +187,7 @@ function createWindow() {
     win.loadURL(`${APP_ORIGIN}/`);
   } else {
     dialog.showErrorBox(
-      'Terralabs ERP — build missing',
+      'Carbon — build missing',
       `No UI bundle found at:\n${DIST_DIR}\n\nRun "npm run build:renderer" in the desktop folder first.`
     );
     app.quit();
@@ -310,7 +313,7 @@ function buildMenu() {
         },
         { type: 'separator' },
         {
-          label: 'Open Terralabs ERP on the web',
+          label: 'Open Carbon on the web',
           click: () => shell.openExternal('https://app.serpy.in')
         }
       ]

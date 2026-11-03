@@ -199,7 +199,7 @@ export default function AcceptInvitation() {
         <CardTitle className="text-xl font-semibold">Create your password</CardTitle>
         <p className="text-sm text-muted-foreground">
           Welcome, {invitation?.fullName}. Set a password to activate your{" "}
-          {invitation?.companyName || "Terralabs ERP"} account.
+          {invitation?.companyName || "Carbon"} account.
         </p>
       </CardHeader>
 

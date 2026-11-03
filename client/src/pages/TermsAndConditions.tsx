@@ -20,7 +20,7 @@ const TermsAndConditions: React.FC = () => {
             Terms & Conditions
           </h1>
           <h2 className="text-xl text-foreground/80 mb-4">
-            SerpY — Smart ERP for Modern Manufacturers
+            Carbon — Print Flow Engine
           </h2>
           
           <div className="text-sm text-muted-foreground space-y-1">
@@ -36,7 +36,7 @@ const TermsAndConditions: React.FC = () => {
           <section>
             <h3 className="text-xl font-semibold text-foreground mb-3">1. Introduction & Acceptance</h3>
             <p className="text-foreground/80 mb-3">
-              These Terms & Conditions ("Terms") govern your access to and use of SerpY, a cloud-based ERP, invoicing, CRM, and automation platform available at https://www.serpy.in ("the Service"), developed, owned, and operated by Synx Automation Private Limited ("Synx", "we", "us", "our"), a company incorporated under the Companies Act, 2013.
+              These Terms & Conditions ("Terms") govern your access to and use of Carbon, a cloud-based ERP, invoicing, CRM, and automation platform available at https://www.serpy.in ("the Service"), developed, owned, and operated by Synx Automation Private Limited ("Synx", "we", "us", "our"), a company incorporated under the Companies Act, 2013.
             </p>
             <p className="text-foreground/80 mb-3">
               By registering for, accessing, or using the Service — including any free trial — you ("User", "Subscriber", "you") confirm that you have read, understood, and agree to be legally bound by these Terms and all policies incorporated herein. If you do not agree, you must not use the Service.
@@ -59,7 +59,7 @@ const TermsAndConditions: React.FC = () => {
               <p><strong>Corporate Website:</strong> https://www.synxautomate.com</p>
             </div>
             <p className="text-foreground/80 mt-3">
-              SerpY is a product owned and distributed exclusively by Synx Automation Private Limited. All intellectual property, data, and service obligations relating to SerpY vest solely in Synx Automation Private Limited.
+              Carbon is a product owned and distributed exclusively by Synx Automation Private Limited. All intellectual property, data, and service obligations relating to Carbon vest solely in Synx Automation Private Limited.
             </p>
           </section>
 
@@ -196,7 +196,7 @@ const TermsAndConditions: React.FC = () => {
           <section>
             <h3 className="text-xl font-semibold text-foreground mb-3">9. Data & Manufacturing Records</h3>
             <p className="text-foreground/80 mb-3">
-              All job records, inventory data, invoices, production schedules, customer data, and business information you input into SerpY ("Your Data") remains your property. We process Your Data solely to provide the Service to you and in accordance with our Privacy Policy.
+              All job records, inventory data, invoices, production schedules, customer data, and business information you input into Carbon ("Your Data") remains your property. We process Your Data solely to provide the Service to you and in accordance with our Privacy Policy.
             </p>
             <p className="text-foreground/80 mb-3">
               By using the Service, you grant Synx Automation Private Limited a limited, non-exclusive licence to process, store, and transmit Your Data as necessary to provide and improve the Service. This licence terminates upon account deletion, subject to retention obligations described in our Privacy Policy.
@@ -210,7 +210,7 @@ const TermsAndConditions: React.FC = () => {
           <section>
             <h3 className="text-xl font-semibold text-foreground mb-3">10. GST & Invoicing Compliance</h3>
             <p className="text-foreground/80 mb-3">
-              SerpY provides tools to generate GST-compliant invoices. However, you are solely responsible for ensuring that: (a) your GST registrations are valid and current; (b) HSN/SAC codes applied are correct for your goods and services; (c) invoices generated are reviewed for accuracy before issuance; and (d) all GST filings and payments are made in accordance with applicable law.
+              Carbon provides tools to generate GST-compliant invoices. However, you are solely responsible for ensuring that: (a) your GST registrations are valid and current; (b) HSN/SAC codes applied are correct for your goods and services; (c) invoices generated are reviewed for accuracy before issuance; and (d) all GST filings and payments are made in accordance with applicable law.
             </p>
             <p className="text-foreground/80">
               Synx Automation Private Limited makes no warranty that use of the invoicing feature alone constitutes compliance with GST law. You are advised to engage a qualified chartered accountant for all tax compliance matters.
@@ -221,10 +221,10 @@ const TermsAndConditions: React.FC = () => {
           <section>
             <h3 className="text-xl font-semibold text-foreground mb-3">11. Intellectual Property</h3>
             <p className="text-foreground/80 mb-3">
-              All intellectual property in the Service — including the SerpY name, logo, platform design, codebase, algorithms, documentation, and all features — is owned exclusively by Synx Automation Private Limited or its licensors.
+              All intellectual property in the Service — including the Carbon name, logo, platform design, codebase, algorithms, documentation, and all features — is owned exclusively by Synx Automation Private Limited or its licensors.
             </p>
             <p className="text-foreground/80">
-              Nothing in these Terms grants you any ownership, licence, or right to use our intellectual property for any purpose beyond accessing the Service for your own business operations. You may not use the SerpY name or branding in any external communication without prior written approval.
+              Nothing in these Terms grants you any ownership, licence, or right to use our intellectual property for any purpose beyond accessing the Service for your own business operations. You may not use the Carbon name or branding in any external communication without prior written approval.
             </p>
           </section>
 

@@ -2,10 +2,10 @@
   "name": "terralabs-erp-desktop",
   "version": "1.1.0",
   "private": true,
-  "//productName": "Electron prefers this over `name` for app.getName(), which decides app.getPath('userData'). Data from the SerpY-named builds (Application Support/SerpY) is copied across on first launch — see migrateUserData in main.cjs.",
-  "productName": "Terralabs ERP",
-  "description": "Terralabs ERP desktop shell — wraps the web client, does not fork it",
-  "author": "Terralabs",
+  "//productName": "Electron uses this for app.getPath('userData'); migration from Terralabs ERP and SerpY is handled in main.cjs.",
+  "productName": "Carbon",
+  "description": "Carbon desktop shell — wraps the web client, does not fork it",
+  "author": "Carbon",
   "main": "main.cjs",
   "scripts": {
     "build:renderer": "npm --prefix ../client run build:desktop",
@@ -23,7 +23,7 @@
   },
   "build": {
     "appId": "in.serpy.erp",
-    "productName": "Terralabs ERP",
+    "productName": "Carbon",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -86,7 +86,7 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "artifactName": "Terralabs-ERP-Setup-${version}.${ext}"
+      "artifactName": "Carbon-Setup-${version}.${ext}"
     },
     "publish": [
       {
@@ -96,7 +96,7 @@
         "releaseType": "release"
       }
     ],
-    "artifactName": "Terralabs-ERP-${version}-${arch}.${ext}"
+    "artifactName": "Carbon-${version}-${arch}.${ext}"
   },
   "dependencies": {
     "electron-updater": "^6.8.9"

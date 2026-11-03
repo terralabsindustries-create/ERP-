@@ -20,7 +20,7 @@ const DataPolicy: React.FC = () => {
             Data Security Policy
           </h1>
           <h2 className="text-xl text-foreground/80 mb-4">
-            SerpY — Smart ERP for Modern Manufacturers
+            Carbon — Print Flow Engine
           </h2>
           
           <div className="text-sm text-muted-foreground space-y-1">
@@ -36,7 +36,7 @@ const DataPolicy: React.FC = () => {
           <section>
             <h3 className="text-xl font-semibold text-foreground mb-3">1. Purpose & Scope</h3>
             <p className="text-foreground/80 mb-3">
-              This Data Security Policy ("Policy") describes the technical and organisational security measures implemented by Synx Automation Private Limited ("Synx") to protect all data processed through SerpY ("the Service") at https://www.serpy.in.
+              This Data Security Policy ("Policy") describes the technical and organisational security measures implemented by Synx Automation Private Limited ("Synx") to protect all data processed through Carbon ("the Service") at https://www.serpy.in.
             </p>
             <p className="text-foreground/80 mb-3">
               This Policy applies to all data stored, transmitted, or processed by Synx on behalf of subscribers and their teams, including job records, inventory data, invoices, customer information, procurement records, and user account data.
@@ -90,7 +90,7 @@ const DataPolicy: React.FC = () => {
             
             <h4 className="text-lg font-medium text-foreground mb-2 mt-4">3.1 Cloud Infrastructure</h4>
             <p className="text-foreground/80 mb-3">
-              SerpY is hosted on enterprise-grade cloud infrastructure (AWS, Google Cloud, or equivalent) providing:
+              Carbon is hosted on enterprise-grade cloud infrastructure (AWS, Google Cloud, or equivalent) providing:
             </p>
             <ul className="list-disc list-inside space-y-1 text-foreground/80 mb-4">
               <li>Geographically distributed data centres with physical access controls, CCTV, and biometric entry.</li>
@@ -110,7 +110,7 @@ const DataPolicy: React.FC = () => {
 
             <h4 className="text-lg font-medium text-foreground mb-2 mt-4">3.3 Multi-Role Access Architecture</h4>
             <p className="text-foreground/80 mb-3">
-              SerpY implements a three-tier role-based access model reflecting the platform's operational design:
+              Carbon implements a three-tier role-based access model reflecting the platform's operational design:
             </p>
             <div className="overflow-x-auto mb-4">
               <table className="min-w-full border border-border">
@@ -163,7 +163,7 @@ const DataPolicy: React.FC = () => {
           <section>
             <h3 className="text-xl font-semibold text-foreground mb-3">5. GST & Invoice Data Security</h3>
             <p className="text-foreground/80 mb-3">
-              Given that SerpY processes GST-compliant invoices and tax records, the following additional controls apply:
+              Given that Carbon processes GST-compliant invoices and tax records, the following additional controls apply:
             </p>
             <ul className="list-disc list-inside space-y-1 text-foreground/80">
               <li>All invoice data is stored in encrypted, access-controlled databases separate from general operational data.</li>
@@ -201,7 +201,7 @@ const DataPolicy: React.FC = () => {
               <li><strong>Document:</strong> Maintain a full record of the breach, response actions, and outcomes.</li>
             </ul>
             <p className="text-foreground/80 mt-3">
-              To report a suspected security incident, contact legal@synxautomate.com with the subject line "Security Incident — SerpY".
+              To report a suspected security incident, contact legal@synxautomate.com with the subject line "Security Incident — Carbon".
             </p>
           </section>
 

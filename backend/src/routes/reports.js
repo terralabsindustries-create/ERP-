@@ -336,7 +336,7 @@ router.post('/revenue/email', protect, requirePermission('Reports: Export'), [
     const { month, email, notes } = req.body;
     // Figures are rebuilt on the server, never taken from the request.
     const report = await buildMonthlyReport(req.user, month);
-    const company = req.user.companyName || 'Terralabs ERP';
+    const company = req.user.companyName || 'Carbon';
     const subject = req.body.subject || `Monthly report for ${report.month} — ${company}`;
     const message = req.body.message || `Please find attached the sales summary for ${report.month}.`;
 

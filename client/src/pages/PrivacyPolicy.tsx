@@ -20,7 +20,7 @@ const PrivacyPolicy: React.FC = () => {
             Privacy Policy
           </h1>
           <h2 className="text-xl text-foreground/80 mb-4">
-            SerpY — Smart ERP for Modern Manufacturers
+            Carbon — Print Flow Engine
           </h2>
           
           <div className="text-sm text-muted-foreground space-y-1">
@@ -36,7 +36,7 @@ const PrivacyPolicy: React.FC = () => {
           <section>
             <h3 className="text-xl font-semibold text-foreground mb-3">1. Introduction</h3>
             <p className="text-foreground/80 mb-3">
-              Synx Automation Private Limited ("Synx", "we", "us") is committed to protecting the privacy of businesses and individuals who use SerpY. This Privacy Policy explains how we collect, use, share, and protect personal and business data processed through the Service at https://www.serpy.in.
+              Synx Automation Private Limited ("Synx", "we", "us") is committed to protecting the privacy of businesses and individuals who use Carbon. This Privacy Policy explains how we collect, use, share, and protect personal and business data processed through the Service at https://www.serpy.in.
             </p>
             <p className="text-foreground/80 mb-3">
               This Policy is compliant with the Information Technology Act, 2000, the IT (Reasonable Security Practices and Sensitive Personal Data or Information) Rules, 2011 ("SPDI Rules"), and the Digital Personal Data Protection Act, 2023 ("DPDPA"), as applicable.
@@ -103,7 +103,7 @@ const PrivacyPolicy: React.FC = () => {
           <section>
             <h3 className="text-xl font-semibold text-foreground mb-3">4. How We Use Your Data</h3>
             <ul className="list-disc list-inside space-y-1 text-foreground/80">
-              <li><strong>Service Delivery:</strong> To operate, maintain, and improve the SerpY platform and all its features.</li>
+              <li><strong>Service Delivery:</strong> To operate, maintain, and improve the Carbon platform and all its features.</li>
               <li><strong>Account Management:</strong> To manage registrations, authenticate users across all role tiers, and maintain account security.</li>
               <li><strong>Billing:</strong> To process payments, issue tax invoices, and manage subscription renewals.</li>
               <li><strong>Support:</strong> To respond to support queries, diagnose issues, and improve user experience.</li>
@@ -195,7 +195,7 @@ const PrivacyPolicy: React.FC = () => {
           <section>
             <h3 className="text-xl font-semibold text-foreground mb-3">10. Third-Party Integrations & Data</h3>
             <p className="text-foreground/80">
-              When you connect SerpY to third-party services (WhatsApp Business, SMTP email, cloud storage, API connections), data may be transmitted to those platforms. Such transmission is governed by the respective third-party's privacy policy. We recommend reviewing those policies before enabling integrations.
+              When you connect Carbon to third-party services (WhatsApp Business, SMTP email, cloud storage, API connections), data may be transmitted to those platforms. Such transmission is governed by the respective third-party's privacy policy. We recommend reviewing those policies before enabling integrations.
             </p>
           </section>
 
@@ -219,7 +219,7 @@ const PrivacyPolicy: React.FC = () => {
           <section>
             <h3 className="text-xl font-semibold text-foreground mb-3">12. Children's Privacy</h3>
             <p className="text-foreground/80">
-              SerpY is a business platform not intended for use by individuals under 18 years of age. We do not knowingly collect personal data from minors. Contact privacy@synxautomate.com to report any such instance.
+              Carbon is a business platform not intended for use by individuals under 18 years of age. We do not knowingly collect personal data from minors. Contact privacy@synxautomate.com to report any such instance.
             </p>
           </section>
 

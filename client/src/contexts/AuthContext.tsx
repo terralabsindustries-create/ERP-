@@ -120,7 +120,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       toast({
         title: "Account Created!",
-        description: "Welcome to Terralabs ERP.",
+        description: "Welcome to Carbon.",
       });
 
       return { error: null };

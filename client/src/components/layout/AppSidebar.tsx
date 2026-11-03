@@ -13,7 +13,7 @@ import {
   SidebarMenuButton,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { BrandLogo, BrandMark } from "@/components/brand/BrandMark";
+import { BrandLogo, BrandMark, PRODUCT_NAME } from "@/components/brand/BrandMark";
 import { NAVIGATION } from "./navigation";
 import { cn } from "@/lib/utils";
 
@@ -29,7 +29,7 @@ export function AppSidebar() {
         <Link
           to="/"
           className="flex items-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-          aria-label="Terralabs ERP home"
+          aria-label={`${PRODUCT_NAME} home`}
           onClick={() => isMobile && setOpenMobile(false)}
         >
           {collapsed ? <BrandMark className="h-7 w-7" /> : <BrandLogo tone="light" />}
@@ -103,7 +103,7 @@ export function AppSidebar() {
               </div>
             )}
             <div className="flex items-center justify-between text-[11px] text-sidebar-muted">
-              <span>Terralabs ERP · v2.0</span>
+              <span>{PRODUCT_NAME} · v2.0</span>
               <span className="cmyk-strip h-1 w-8 rounded-full" aria-hidden />
             </div>
           </div>

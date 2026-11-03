@@ -365,7 +365,7 @@ router.post('/', protect, requirePermission('User Management: Create Login'), us
       });
 
       await transporter.sendMail({
-        from: getFromAddress(userData.companyName || process.env.COMPANY_NAME || 'Terralabs ERP'),
+        from: getFromAddress(userData.companyName || process.env.COMPANY_NAME || 'Carbon'),
         to: email,
         subject: emailContent.subject,
         html: emailContent.html,
@@ -469,7 +469,7 @@ router.post('/:id/resend-invitation', protect, requirePermission('User Managemen
     });
 
     await transporter.sendMail({
-      from: getFromAddress(user.companyName || process.env.COMPANY_NAME || 'Terralabs ERP'),
+      from: getFromAddress(user.companyName || process.env.COMPANY_NAME || 'Carbon'),
       to: user.email,
       subject: emailContent.subject,
       html: emailContent.html,
@@ -665,7 +665,7 @@ router.put('/:id', protect, updateUserValidation, validate, async (req, res) => 
         });
 
         await mailer.createTransporter().sendMail({
-          from: getFromAddress(updatedUser.companyName || process.env.COMPANY_NAME || 'Terralabs ERP'),
+          from: getFromAddress(updatedUser.companyName || process.env.COMPANY_NAME || 'Carbon'),
           to: updatedUser.email,
           subject: emailContent.subject,
           html: emailContent.html,

@@ -119,7 +119,7 @@ router.post('/access', protect, requirePermission('Customer Portal: Manage Acces
         emailError = 'This customer has no email address on file.';
       } else {
         try {
-          const company = req.user.companyName || 'Terralabs ERP';
+          const company = req.user.companyName || 'Carbon';
           await mailer.createTransporter().sendMail({
             from: mailer.getFromAddress(company),
             to: customer.email,

@@ -23,7 +23,7 @@ const EMPTY = { name: "", category: "UTILITY", language: "en_US", body: "", foot
 
 const CATEGORY_HELP: Record<string, string> = {
   UTILITY: "About something the customer already has with you: an order, invoice, payment or delivery.",
-  MARKETING: "Offers, promotions and announcements. Meta charges more for these, and customers can block them."
+  MARKETING: "Offers, promotions and announcements. Meta charges more for marketing messages than for utility ones."
 };
 
 /**

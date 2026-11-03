@@ -260,7 +260,7 @@ export default function Auth() {
       <main className="flex flex-col">
         <div className="flex flex-1 items-center justify-center px-5 py-10 sm:px-8">
           <div className="w-full max-w-[400px]">
-            <BrandLogo className="mb-10 lg:hidden" />
+            <img src="/brand/carbon-logo.png" alt="Carbon — Print Flow Engine" className="mb-8 h-auto w-44 sm:w-52 lg:w-56" />
 
             <h2 className="text-2xl font-semibold tracking-tight">
               {activeTab === "signin" ? "Sign in to your workspace" : "Create your workspace"}
@@ -268,7 +268,7 @@ export default function Auth() {
             <p className="mt-1.5 text-sm text-muted-foreground">
               {activeTab === "signin"
                 ? "Welcome back. Enter your details to continue."
-                : "Set up Terralabs ERP for your print business."}
+                : "Set up Carbon for your print business."}
             </p>
 
             <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-8 w-full">

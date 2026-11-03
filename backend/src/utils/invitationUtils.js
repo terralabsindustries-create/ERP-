@@ -43,7 +43,7 @@ const titleCase = (value) =>
  * link the recipient uses to choose their own.
  */
 const getInvitationEmailTemplate = ({ fullName, email, role, department, companyName, acceptUrl }) => {
-  const company = companyName || 'Terralabs ERP';
+  const company = companyName || 'Carbon';
   const roleLine = department
     ? `${titleCase(role)} · ${department}`
     : titleCase(role);

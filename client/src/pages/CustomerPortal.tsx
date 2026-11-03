@@ -219,7 +219,7 @@ export default function CustomerPortal() {
       </header>
       <main className="mx-auto max-w-5xl space-y-5 px-4 py-6 sm:px-6">{children}</main>
       <footer className="mx-auto flex max-w-5xl items-center gap-2 px-4 pb-8 text-xs text-muted-foreground sm:px-6">
-        <BrandMark className="h-4 w-4" /> Powered by Terralabs ERP
+        <BrandMark className="h-4 w-4" /> Powered by Carbon
       </footer>
     </div>
   );

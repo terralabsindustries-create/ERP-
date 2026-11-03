@@ -80,7 +80,7 @@ export function RoleSheet({ open, onOpenChange, role, copyOf, readOnly = false, 
   const title = readOnly && role ? role.name : role ? `Edit ${role.name}` : copyOf ? "Duplicate role" : "New role";
   const subtitle = readOnly
     ? "View only. This role includes access you don't hold, so only the admin can change it."
-    : "Choose which parts of Terralabs ERP this role opens and what it can do in each.";
+    : "Choose which parts of Carbon this role opens and what it can do in each.";
 
   return (
     <EditorSheet

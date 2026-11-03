@@ -108,9 +108,9 @@ router.post('/send-otp', sendOTPValidation, async (req, res) => {
     const emailTemplate = getOTPEmailTemplate(otp, fullName);
 
     const mailOptions = {
-      from: getFromAddress('Terralabs ERP'),
+      from: getFromAddress('Carbon'),
       to: email,
-      subject: 'Verify Your Email - Terralabs ERP',
+      subject: 'Verify Your Email - Carbon',
       html: emailTemplate.html,
       text: emailTemplate.text
     };
