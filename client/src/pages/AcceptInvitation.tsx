@@ -9,11 +9,15 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Building2,
   CheckCircle2,
+  Clock,
   Eye,
   EyeOff,
   Loader2,
+  RefreshCw,
   ShieldAlert,
+  WifiOff,
 } from "lucide-react";
+import { format } from "date-fns";
 import apiClient from "@/lib/apiClient";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -21,9 +25,61 @@ interface Invitation {
   fullName: string;
   email: string;
   role: string;
+  roleName?: string | null;
+  department?: string | null;
   companyName?: string;
   expiresAt: string;
 }
+
+type ProblemKind = "used" | "expired" | "invalid" | "unreachable";
+interface LinkProblem {
+  kind: ProblemKind;
+  message: string;
+}
+
+// How each kind of unusable link is presented. The API's message is the body.
+const PROBLEMS: Record<ProblemKind, { title: string; icon: typeof ShieldAlert; tone: "success" | "warning" | "destructive" }> = {
+  used: { title: "Invitation already used", icon: CheckCircle2, tone: "success" },
+  expired: { title: "Invitation expired", icon: Clock, tone: "warning" },
+  invalid: { title: "Invitation link not valid", icon: ShieldAlert, tone: "destructive" },
+  unreachable: { title: "Couldn't check your invitation", icon: WifiOff, tone: "warning" },
+};
+
+const TONE_CLASSES = {
+  success: "bg-success-soft text-success-strong",
+  warning: "bg-warning-soft text-warning-strong",
+  destructive: "bg-destructive-soft text-destructive-strong",
+};
+
+// Maps an API error onto a link problem, or null if the link itself is fine
+// (a validation error on the password, say).
+const linkProblem = (raw: unknown): LinkProblem | null => {
+  const error = (raw ?? {}) as { message?: string; code?: string; status?: number };
+  const message = error.message || "";
+  switch (error.code) {
+    case "INVITATION_USED":
+      return { kind: "used", message };
+    case "INVITATION_EXPIRED":
+      return { kind: "expired", message };
+    case "INVITATION_INVALID":
+      return { kind: "invalid", message };
+  }
+  // No status means the request never got an answer; 5xx means the server failed.
+  if (!error.status || error.status >= 500) {
+    return { kind: "unreachable", message: message || "The server could not be reached. Check your connection and try again." };
+  }
+  if (error.status === 400 || error.status === 404 || error.status === 410) {
+    // Older servers answered every unusable link with a plain 400.
+    return { kind: "invalid", message: message || "This invitation link is invalid or has expired. Ask your administrator to send a new one." };
+  }
+  return null;
+};
+
+const roleLabel = (invitation: Invitation | null) => {
+  if (!invitation) return "";
+  if (invitation.roleName) return invitation.roleName;
+  return invitation.role ? invitation.role.charAt(0).toUpperCase() + invitation.role.slice(1) : "";
+};
 
 /**
  * Landing page for the one-time link in a staff invitation email. The token in
@@ -37,7 +93,8 @@ export default function AcceptInvitation() {
 
   const [invitation, setInvitation] = useState<Invitation | null>(null);
   const [isValidating, setIsValidating] = useState(true);
-  const [tokenError, setTokenError] = useState("");
+  const [problem, setProblem] = useState<LinkProblem | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -51,22 +108,32 @@ export default function AcceptInvitation() {
   const destination = signedIn ? "/" : "/auth";
 
   useEffect(() => {
+    let cancelled = false;
     const validate = async () => {
+      setIsValidating(true);
+      setProblem(null);
       try {
-        const response: any = await apiClient.getInvitation(token || "");
-        setInvitation(response?.data?.invitation || null);
-      } catch (error: any) {
-        setTokenError(
-          error.message ||
-            "This invitation link is invalid or has expired. Ask your administrator to send a new one."
-        );
+        const response = (await apiClient.getInvitation(token || "")) as { data?: { invitation?: Invitation } };
+        if (!cancelled) setInvitation(response?.data?.invitation || null);
+      } catch (error) {
+        if (!cancelled) {
+          setProblem(
+            linkProblem(error) || {
+              kind: "invalid",
+              message: (error instanceof Error && error.message) || "This invitation link can't be used. Ask your administrator to send a new one.",
+            }
+          );
+        }
       } finally {
-        setIsValidating(false);
+        if (!cancelled) setIsValidating(false);
       }
     };
 
     validate();
-  }, [token]);
+    return () => {
+      cancelled = true;
+    };
+  }, [token, attempt]);
 
   useEffect(() => {
     if (!isDone) return;
@@ -91,7 +158,7 @@ export default function AcceptInvitation() {
     setIsSubmitting(true);
 
     try {
-      const response: any = await apiClient.acceptInvitation(token || "", password);
+      const response = (await apiClient.acceptInvitation(token || "", password)) as { token?: string };
 
       // Adopt the new session, replacing any account already signed in on this
       // browser — otherwise they would land in someone else's dashboard.
@@ -102,8 +169,15 @@ export default function AcceptInvitation() {
       }
 
       setIsDone(true);
-    } catch (error: any) {
-      setFormError(error.message || "Could not set your password. Please try again.");
+    } catch (error) {
+      // The link stopped working while the form was open (used in another tab,
+      // expired, or replaced by a newer invitation): show that, not a form error.
+      const code = (error as { code?: string } | null)?.code || "";
+      if (["INVITATION_USED", "INVITATION_EXPIRED", "INVITATION_INVALID"].includes(code)) {
+        setProblem(linkProblem(error));
+      } else {
+        setFormError((error instanceof Error && error.message) || "Could not set your password. Please try again.");
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -127,25 +201,28 @@ export default function AcceptInvitation() {
     );
   }
 
-  if (tokenError) {
+  if (problem) {
+    const { title, icon: Icon, tone } = PROBLEMS[problem.kind];
     return shell(
       <Card className="shadow-elevated">
         <CardHeader className="space-y-4 text-center">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-destructive-soft">
-            <ShieldAlert className="h-7 w-7 text-destructive-strong" />
+          <div className={`mx-auto flex h-14 w-14 items-center justify-center rounded-full ${TONE_CLASSES[tone]}`}>
+            <Icon className="h-7 w-7" />
           </div>
-          <CardTitle className="text-xl font-bold text-foreground">
-            Invitation link not valid
-          </CardTitle>
+          <CardTitle className="text-xl font-bold text-foreground">{title}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-6 text-center">
-          <p className="text-muted-foreground">{tokenError}</p>
-          <Button
-            asChild
-            className="h-10 w-full"
-          >
-            <Link to="/auth">Go to login</Link>
-          </Button>
+          <p className="text-muted-foreground">{problem.message}</p>
+          {problem.kind === "unreachable" ? (
+            <Button className="h-10 w-full" onClick={() => setAttempt((n) => n + 1)}>
+              <RefreshCw className="h-4 w-4" />
+              Try again
+            </Button>
+          ) : (
+            <Button asChild className="h-10 w-full" variant={problem.kind === "used" ? "default" : "outline"}>
+              <Link to="/auth">{problem.kind === "used" ? "Sign in" : "Go to sign in"}</Link>
+            </Button>
+          )}
         </CardContent>
       </Card>
     );
@@ -211,8 +288,19 @@ export default function AcceptInvitation() {
           </div>
           <div className="flex justify-between gap-4 py-1">
             <span className="text-muted-foreground">Role</span>
-            <span className="font-semibold capitalize text-foreground">{invitation?.role}</span>
+            <span className="font-semibold text-foreground">{roleLabel(invitation)}</span>
           </div>
+          {invitation?.department && (
+            <div className="flex justify-between gap-4 py-1">
+              <span className="text-muted-foreground">Department</span>
+              <span className="font-semibold text-foreground">{invitation.department}</span>
+            </div>
+          )}
+          {invitation?.expiresAt && (
+            <p className="mt-2 border-t border-border pt-2 text-xs text-muted-foreground">
+              This link works once and expires {format(new Date(invitation.expiresAt), "d MMM yyyy, h:mm a")}.
+            </p>
+          )}
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">

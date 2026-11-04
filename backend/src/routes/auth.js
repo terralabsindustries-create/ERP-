@@ -7,7 +7,7 @@ const { protect, sendTokenResponse } = require('../middleware/auth');
 const crypto = require('crypto');
 const { generateOTP, hashOTP, verifyOTP, getOTPEmailTemplate } = require('../utils/otpUtils');
 const { createTransporter, getFromAddress, sendMailErrorResponse } = require('../utils/mailer');
-const { hashInvitationToken } = require('../utils/invitationUtils');
+const { hashInvitationToken, isLive } = require('../utils/invitationUtils');
 const { syncEmployeeForUser } = require('../utils/employeeSync');
 
 const router = express.Router();
@@ -293,23 +293,46 @@ router.post('/register', registerValidation, validate, async (req, res) => {
   }
 });
 
-// Look up an invited user from the raw token in their link. Only the hash is
-// stored, so we hash what we were given and compare — the raw token is never
-// written anywhere. Returns null for unknown, used, or expired invitations.
-const findInvitedUserByToken = async (token) => {
-  if (!token) return null;
+// What a link that can't be used should tell the person holding it.
+const INVITATION_PROBLEMS = {
+  invalid: {
+    status: 404,
+    code: 'INVITATION_INVALID',
+    message: "This invitation link isn't valid. If you were sent more than one invitation, open the newest email, or ask your administrator to send a new one."
+  },
+  expired: {
+    status: 410,
+    code: 'INVITATION_EXPIRED',
+    message: 'This invitation has expired. Ask your administrator to send you a new one.'
+  },
+  used: {
+    status: 410,
+    code: 'INVITATION_USED',
+    message: 'This invitation has already been used to set a password. Sign in with your email and password instead.'
+  }
+};
 
+const invitationProblem = (res, state) => {
+  const { status, code, message } = INVITATION_PROBLEMS[state];
+  return res.status(status).json({ status: 'error', code, message });
+};
+
+// Look up an invitation from the raw token in its link. Only hashes are stored,
+// so we hash what we were given and compare — the raw token is never written
+// anywhere. state is 'valid', 'expired', 'used' or 'invalid' (unknown, or
+// replaced by a newer invitation).
+const findInvitationByToken = async (token) => {
+  if (!/^[a-f0-9]{64}$/.test(String(token || ''))) return { state: 'invalid' };
+
+  const tokenHash = hashInvitationToken(token);
   const user = await User.findOne({
-    'invitation.tokenHash': hashInvitationToken(token)
-  }).select('+invitation.tokenHash');
+    $or: [{ 'invitation.tokenHash': tokenHash }, { 'invitation.usedTokenHash': tokenHash }]
+  }).select('+invitation.tokenHash +invitation.usedTokenHash');
 
-  if (!user) return null;
-  // A used invitation has already flipped the account to 'active'.
-  if (user.status !== 'invited') return null;
-  if (!user.invitation || !user.invitation.expiresAt) return null;
-  if (user.invitation.expiresAt.getTime() < Date.now()) return null;
-
-  return user;
+  if (!user) return { state: 'invalid' };
+  if (user.invitation.usedTokenHash === tokenHash || user.status !== 'invited') return { state: 'used', user, tokenHash };
+  if (!isLive(user.invitation)) return { state: 'expired', user, tokenHash };
+  return { state: 'valid', user, tokenHash };
 };
 
 // @route   GET /api/auth/invitation/:token
@@ -317,14 +340,8 @@ const findInvitedUserByToken = async (token) => {
 // @access  Public
 router.get('/invitation/:token', async (req, res) => {
   try {
-    const user = await findInvitedUserByToken(req.params.token);
-
-    if (!user) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'This invitation link is invalid or has expired. Ask your administrator to send a new one.'
-      });
-    }
+    const { state, user } = await findInvitationByToken(req.params.token);
+    if (state !== 'valid') return invitationProblem(res, state);
 
     res.status(200).json({
       status: 'success',
@@ -333,6 +350,8 @@ router.get('/invitation/:token', async (req, res) => {
           fullName: user.fullName,
           email: user.email,
           role: user.role,
+          roleName: user.accessRoleName || null,
+          department: user.department || null,
           companyName: user.companyName,
           expiresAt: user.invitation.expiresAt
         }
@@ -366,22 +385,18 @@ router.post('/invitation/:token/accept', [
       });
     }
 
-    const user = await findInvitedUserByToken(req.params.token);
-
-    if (!user) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'This invitation link is invalid or has expired. Ask your administrator to send a new one.'
-      });
-    }
+    const { state, user, tokenHash } = await findInvitationByToken(req.params.token);
+    if (state !== 'valid') return invitationProblem(res, state);
 
     // Password is hashed by the pre-save hook. Clearing the token is what makes
-    // the link one-time — replaying it will no longer match any account. The
-    // paths are unset individually because assigning a fresh object to a nested
-    // path merges rather than replaces, which would leave the hash behind.
+    // the link one-time — replaying it will no longer match an invited account,
+    // only the usedTokenHash that lets us say "already used". The paths are set
+    // individually because assigning a fresh object to a nested path merges
+    // rather than replaces, which would leave the hash behind.
     user.password = req.body.password;
     user.status = 'active';
     user.invitation.tokenHash = undefined;
+    user.invitation.usedTokenHash = tokenHash;
     user.invitation.expiresAt = undefined;
     user.invitation.acceptedAt = new Date();
     await user.save();
@@ -433,7 +448,9 @@ router.post('/login', loginValidation, validate, async (req, res) => {
     if (user.status === 'invited') {
       return res.status(403).json({
         status: 'error',
-        message: 'Your account setup is not complete. Use the invitation link emailed to you to set a password, or ask your administrator to resend it.',
+        message: isLive(user.invitation)
+          ? 'Your account setup is not complete. Open the invitation email and use its link to set a password.'
+          : 'Your account setup is not complete and your invitation has expired. Ask your administrator to send a new one.',
         code: 'INVITATION_PENDING'
       });
     }

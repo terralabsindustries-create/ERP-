@@ -24,14 +24,60 @@ const {
   createInvitationToken,
   buildAcceptUrl,
   getInvitationEmailTemplate,
+  isLive,
   INVITATION_EXPIRY_HOURS
 } = require('../utils/invitationUtils');
 // Called through the module so tests can stand in for the mail transport.
 const mailer = require('../utils/mailer');
 
-const { getFromAddress, sendMailErrorResponse } = mailer;
+const { getFromAddress, sendMailErrorResponse, describeMailError, logMailError } = mailer;
 
 const router = express.Router();
+
+// Every invitation (new, re-invite, resend, corrected address) goes out through
+// here, so they all carry the same Carbon template and sender.
+const mailInvitation = (transporter, invitee, token, inviter) => {
+  const content = getInvitationEmailTemplate({
+    fullName: invitee.fullName,
+    email: invitee.email,
+    role: invitee.role,
+    roleName: invitee.accessRoleName,
+    department: invitee.department,
+    companyName: invitee.companyName || inviter.companyName,
+    invitedByName: inviter.fullName,
+    acceptUrl: buildAcceptUrl(token)
+  });
+  return transporter.sendMail({
+    from: getFromAddress(),
+    to: invitee.email,
+    subject: content.subject,
+    html: content.html,
+    text: content.text
+  });
+};
+
+// The invitation email didn't go out. Say why, and say what that means for
+// the person: a new invite leaves nothing behind; a resend or re-invite leaves
+// the earlier link exactly as it was.
+const invitationNotSent = (res, mailError, { email, previous }) => {
+  const { message: reason } = describeMailError(mailError);
+  const previousValid = isLive(previous);
+  const outcome = !previous
+    ? 'No login was created.'
+    : previousValid
+      ? 'Nothing was changed, and the invitation sent earlier still works.'
+      : 'Nothing was changed. The invitation sent earlier has expired, so they need a new one once email is working.';
+  return sendMailErrorResponse(res, mailError, 'Send invitation', {
+    message: `Couldn't email the invitation to ${email}. ${reason} ${outcome}`,
+    data: {
+      previousInvitationValid: previousValid,
+      ...(previousValid && { previousInvitationExpiresAt: previous.expiresAt })
+    }
+  });
+};
+
+const withoutUndefined = (object) =>
+  Object.fromEntries(Object.entries(object).filter(([, value]) => value !== undefined));
 
 // An admin is minted by signup and owns one dataScope. Inside that scope they can
 // hand out a limited number of manager/staff logins.
@@ -313,7 +359,13 @@ router.post('/', protect, requirePermission('User Management: Create Login'), us
 
     // An invitation that can't be delivered is useless, so fail before writing
     // anything if the mail transport isn't usable.
-    const transporter = mailer.createTransporter();
+    const previousInvitation = isReinvite ? existingUser.invitation : null;
+    let transporter;
+    try {
+      transporter = mailer.createTransporter();
+    } catch (mailError) {
+      return invitationNotSent(res, mailError, { email, previous: previousInvitation });
+    }
 
     const invitation = createInvitationToken();
 
@@ -346,36 +398,31 @@ router.post('/', protect, requirePermission('User Management: Create Login'), us
       userData.dataScope = req.user.dataScope;
     }
 
-    // Re-inviting overwrites the pending record — including any detail the
-    // admin corrected on the form — and the new token voids the old link.
-    const user = isReinvite
-      ? await User.findByIdAndUpdate(existingUser._id, userData, { new: true, runValidators: true })
-      : await User.create(userData);
-
-    // Send the invitation. If the mail bounces on a brand new account it would
-    // be unreachable, so roll it back and report the failure to the admin.
-    try {
-      const emailContent = getInvitationEmailTemplate({
-        fullName,
-        email,
-        role,
-        department,
-        companyName: userData.companyName || process.env.COMPANY_NAME,
-        acceptUrl: buildAcceptUrl(invitation.token)
-      });
-
-      await transporter.sendMail({
-        from: getFromAddress(userData.companyName || process.env.COMPANY_NAME || 'Carbon'),
-        to: email,
-        subject: emailContent.subject,
-        html: emailContent.html,
-        text: emailContent.text
-      });
-    } catch (mailError) {
-      // Only undo what this request created; a pre-existing pending invitation
-      // stays put so the admin can retry with Resend invitation.
-      if (!isReinvite) await User.findByIdAndDelete(user._id);
-      return sendMailErrorResponse(res, mailError, 'Send invitation');
+    let user;
+    if (isReinvite) {
+      // Re-inviting overwrites the pending record — including any detail the
+      // admin corrected on the form — and the new token voids the old link.
+      // Nothing is written until the new email has been accepted for delivery,
+      // so a failed send leaves the earlier invitation and its link untouched.
+      existingUser.set(withoutUndefined(userData));
+      if (!roleAccess) existingUser.accessRoleName = undefined;
+      await existingUser.validate();
+      try {
+        await mailInvitation(transporter, existingUser, invitation.token, req.user);
+      } catch (mailError) {
+        return invitationNotSent(res, mailError, { email, previous: previousInvitation });
+      }
+      user = await existingUser.save();
+    } else {
+      // A brand new login is created first and removed again if the email
+      // can't be sent: an account nobody can activate is no use to anyone.
+      user = await User.create(userData);
+      try {
+        await mailInvitation(transporter, user, invitation.token, req.user);
+      } catch (mailError) {
+        await User.findByIdAndDelete(user._id);
+        return invitationNotSent(res, mailError, { email, previous: null });
+      }
     }
 
     await setUserTeams(req.user, user._id, teamIds);
@@ -415,9 +462,11 @@ router.post('/', protect, requirePermission('User Management: Create Login'), us
     });
 
   } catch (error) {
-    // No usable mail transport: say so rather than a generic server error.
-    if (error.code === 'EMAIL_NOT_CONFIGURED' || error.code === 'EAUTH') {
-      return sendMailErrorResponse(res, error, 'Send invitation');
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        status: 'error',
+        message: Object.values(error.errors).map((e) => e.message).join(' ') || 'Check the details and try again.'
+      });
     }
     console.error('Create user error:', error);
     res.status(500).json({
@@ -448,33 +497,35 @@ router.post('/:id/resend-invitation', protect, requirePermission('User Managemen
       });
     }
 
-    const transporter = mailer.createTransporter();
-
-    // Any previously mailed link stops working the moment we store a new hash.
+    // Send first, store second: the link already in their inbox keeps working
+    // until a replacement has actually been handed to the mail server.
     const invitation = createInvitationToken();
-    user.invitation = {
-      tokenHash: invitation.tokenHash,
-      expiresAt: invitation.expiresAt,
-      invitedBy: req.user._id,
-      invitedAt: new Date()
-    };
-    await user.save({ validateBeforeSave: false });
+    try {
+      await mailInvitation(mailer.createTransporter(), user, invitation.token, req.user);
+    } catch (mailError) {
+      return invitationNotSent(res, mailError, { email: user.email, previous: user.invitation });
+    }
 
-    const emailContent = getInvitationEmailTemplate({
-      fullName: user.fullName,
-      email: user.email,
-      role: user.role,
-      companyName: user.companyName || req.user.companyName || process.env.COMPANY_NAME,
-      acceptUrl: buildAcceptUrl(invitation.token)
-    });
-
-    await transporter.sendMail({
-      from: getFromAddress(user.companyName || process.env.COMPANY_NAME || 'Carbon'),
-      to: user.email,
-      subject: emailContent.subject,
-      html: emailContent.html,
-      text: emailContent.text
-    });
+    const stored = await User.findOneAndUpdate(
+      { _id: user._id, status: 'invited' },
+      {
+        $set: {
+          'invitation.tokenHash': invitation.tokenHash,
+          'invitation.expiresAt': invitation.expiresAt,
+          'invitation.invitedBy': req.user._id,
+          'invitation.invitedAt': new Date()
+        }
+      },
+      { new: true }
+    );
+    if (!stored) {
+      // They used the earlier link while this email was on its way.
+      return res.status(409).json({
+        status: 'error',
+        code: 'INVITATION_ALREADY_ACCEPTED',
+        message: `${user.fullName} has just finished setting up their account, so the new link isn't needed. They can sign in now.`
+      });
+    }
 
     await ActivityLog.logActivity({
       action: 'Invitation Resent',
@@ -492,14 +543,11 @@ router.post('/:id/resend-invitation', protect, requirePermission('User Managemen
 
     res.status(200).json({
       status: 'success',
-      message: `Invitation resent to ${user.email}. It expires in ${INVITATION_EXPIRY_HOURS} hours.`,
+      message: `A new invitation was sent to ${user.email}. It expires in ${INVITATION_EXPIRY_HOURS} hours, and the earlier link no longer works.`,
       data: { invitationExpiresAt: invitation.expiresAt }
     });
 
   } catch (error) {
-    if (error.code === 'EMAIL_NOT_CONFIGURED' || error.code === 'EAUTH') {
-      return sendMailErrorResponse(res, error, 'Resend invitation');
-    }
     console.error('Resend invitation error:', error);
     res.status(500).json({
       status: 'error',
@@ -653,29 +701,20 @@ router.put('/:id', protect, updateUserValidation, validate, async (req, res) => 
 
     if (Array.isArray(teamIds)) await setUserTeams(req.user, updatedUser._id, teamIds);
 
+    // The old link went to an address the admin has just corrected, so it
+    // stays void even if this email fails; the admin can retry with Resend.
     let invitationNote = '';
+    let invitationEmail;
     if (reissuedInvitation) {
       try {
-        const emailContent = getInvitationEmailTemplate({
-          fullName: updatedUser.fullName,
-          email: updatedUser.email,
-          role: updatedUser.role,
-          companyName: updatedUser.companyName || req.user.companyName || process.env.COMPANY_NAME,
-          acceptUrl: buildAcceptUrl(reissuedInvitation.token)
-        });
-
-        await mailer.createTransporter().sendMail({
-          from: getFromAddress(updatedUser.companyName || process.env.COMPANY_NAME || 'Carbon'),
-          to: updatedUser.email,
-          subject: emailContent.subject,
-          html: emailContent.html,
-          text: emailContent.text
-        });
+        await mailInvitation(mailer.createTransporter(), updatedUser, reissuedInvitation.token, req.user);
+        invitationEmail = { sent: true, to: updatedUser.email };
         invitationNote = ' A new invitation was sent to the updated address.';
       } catch (mailError) {
-        // The address change stands; the admin can retry with Resend invitation.
-        console.error('Invitation re-send after email change failed:', mailError.message);
-        invitationNote = ' The invitation could not be emailed — use Resend invitation to try again.';
+        logMailError('Invitation after email change', mailError);
+        const { code, message } = describeMailError(mailError);
+        invitationEmail = { sent: false, to: updatedUser.email, code, message };
+        invitationNote = ` The invitation couldn't be emailed to ${updatedUser.email}: ${message} Use Resend invitation to try again.`;
       }
     }
 
@@ -719,7 +758,10 @@ router.put('/:id', protect, updateUserValidation, validate, async (req, res) => 
     res.status(200).json({
       status: 'success',
       message: `User updated successfully.${invitationNote}`,
-      data: { user: { ...updatedUser.toJSON(), teams: teams[String(updatedUser._id)] || [] } }
+      data: {
+        user: { ...updatedUser.toJSON(), teams: teams[String(updatedUser._id)] || [] },
+        ...(invitationEmail && { invitationEmail })
+      }
     });
 
   } catch (error) {

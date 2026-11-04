@@ -8,6 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useAuth } from "@/contexts/AuthContext";
+import { toast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
 import {
   BASE_ROLES,
@@ -108,15 +109,28 @@ export function UserSheet({ open, onOpenChange, user, roles, teams, onSaved }: U
         });
         onSaved(`Invitation sent to ${email.trim()}. They set their own password from the email.`);
       } else {
-        await apiClient.updateUser(user._id, {
+        const result = (await apiClient.updateUser(user._id, {
           fullName: fullName.trim(),
           ...(email.trim().toLowerCase() !== user.email ? { email: email.trim().toLowerCase() } : {}),
           teamIds,
           // Leave the role alone when it didn't change, so a role edit made
           // meanwhile by someone else isn't overwritten with a stale copy.
           ...(unchangedRole && !isCustom ? {} : access)
-        });
-        onSaved(`${fullName.trim()}'s access was updated. It applies from their next action.`);
+        })) as { invitationEmail?: { sent: boolean; to: string; message?: string } } | undefined;
+        // Correcting a pending invitee's address mails them a fresh link.
+        const sentTo = result?.invitationEmail;
+        if (sentTo?.sent === false) {
+          toast({
+            title: "Invitation not sent",
+            description: `The new address was saved, but the email to ${sentTo.to} failed: ${sentTo.message} Use Resend invitation to try again.`,
+            variant: "destructive"
+          });
+        }
+        onSaved(
+          sentTo?.sent
+            ? `${fullName.trim()}'s details were updated and a new invitation was sent to ${sentTo.to}.`
+            : `${fullName.trim()}'s access was updated. It applies from their next action.`
+        );
       }
       onOpenChange(false);
     } catch (err) {

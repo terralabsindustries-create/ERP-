@@ -133,7 +133,7 @@ export default function UserManagement() {
   const resend = async (u: ManagedUser) => {
     try {
       await apiClient.resendInvitation(u._id);
-      done(`A new invitation was sent to ${u.email}.`);
+      done(`A new invitation was sent to ${u.email}. The earlier link no longer works.`);
     } catch (e) {
       failed("Invitation not sent", e);
     }

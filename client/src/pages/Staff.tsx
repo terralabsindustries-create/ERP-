@@ -197,7 +197,7 @@ export default function Staff() {
   const resendInvite = async (p: ManagedUser) => {
     try {
       await apiClient.resendInvitation(p._id);
-      toast({ title: "Invitation sent", description: `A new link was emailed to ${p.email}.` });
+      toast({ title: "Invitation sent", description: `A new link was emailed to ${p.email}. The earlier link no longer works.` });
       loadTeam();
     } catch (error) {
       toast({ title: "Invitation not sent", description: error instanceof Error ? error.message : undefined, variant: "destructive" });

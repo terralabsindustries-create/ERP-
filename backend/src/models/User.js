@@ -60,6 +60,14 @@ const userSchema = new mongoose.Schema({
       select: false,
       index: true
     },
+    // The hash of the link that was used, kept so opening it again can say
+    // "already used, sign in" instead of "invalid". It can no longer sign
+    // anyone in: acceptance only ever matches tokenHash on an invited account.
+    usedTokenHash: {
+      type: String,
+      select: false,
+      index: true
+    },
     expiresAt: {
       type: Date
     },

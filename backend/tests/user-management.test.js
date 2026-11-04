@@ -224,6 +224,9 @@ describe('invitations', () => {
     });
     expect(res.status).toBe(201);
     expect(sendMail).toHaveBeenCalledTimes(1);
+    expect(sendMail.mock.calls[0][0].from.name).toBe('Carbon');
+    expect(sendMail.mock.calls[0][0].html).toContain('/brand/carbon-logo.png');
+    expect(sendMail.mock.calls[0][0].text).toMatch(/Role: +Front desk/);
     const u = await User.findOne({ email: 'counter@example.test' });
     expect(u.status).toBe('invited');
     expect(u.accessRoleName).toBe('Front desk');
