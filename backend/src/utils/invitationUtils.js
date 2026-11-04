@@ -9,11 +9,10 @@
  */
 
 const crypto = require('crypto');
+const { DEFAULT_APP_URL, appBaseUrl } = require('./appUrl');
 
 const INVITATION_EXPIRY_HOURS = parseInt(process.env.INVITATION_EXPIRY_HOURS, 10) || 24;
 
-// Where the Carbon web app lives when the server has not been told otherwise.
-const DEFAULT_APP_URL = 'https://erp-delta-one-83.vercel.app';
 const LOCAL_HOST = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$/i;
 // Business names left over from before the rebrand must never reach an invitee.
 const LEGACY_NAME = /serpy|synx automation/i;
@@ -38,16 +37,6 @@ const createInvitationToken = () => {
 
 const isLive = (invitation) =>
   !!invitation && !!invitation.expiresAt && new Date(invitation.expiresAt).getTime() > Date.now();
-
-/**
- * The web app's address. Links in email must open in a browser, so anything
- * that isn't http(s) (the desktop app's app:// origin) falls back to the
- * hosted app.
- */
-const appBaseUrl = () => {
-  const configured = String(process.env.INVITATION_FRONTEND_URL || process.env.FRONTEND_URL || '').trim();
-  return (/^https?:\/\//i.test(configured) ? configured : DEFAULT_APP_URL).replace(/\/+$/, '');
-};
 
 const buildAcceptUrl = (token) =>
   `${appBaseUrl()}/accept-invitation/${encodeURIComponent(token)}`;
@@ -112,7 +101,12 @@ const getInvitationEmailTemplate = ({
 
   const subject = `You're invited to join ${workspace} on Carbon`;
   const heading = hasCompany ? `Join ${company} on Carbon` : 'Join your team on Carbon';
-  const intro = `${inviter ? `${inviter} has invited you` : "You've been invited"} to join ${workspace} on Carbon, where the team manages job tickets, production and billing. Set a password to activate your login.`;
+  // When the inviting login is named after the business ("TERRALABS INDUSTRIES
+  // has invited you to join TERRALABS INDUSTRIES"), say it once.
+  const inviterIsCompany = !!inviter && hasCompany && inviter.toLowerCase() === company.toLowerCase();
+  const intro = inviterIsCompany
+    ? `${company} has invited you to join their team on Carbon, where they manage job tickets, production and billing. Set a password to activate your login.`
+    : `${inviter ? `${inviter} has invited you` : "You've been invited"} to join ${workspace} on Carbon, where the team manages job tickets, production and billing. Set a password to activate your login.`;
   const reason = `You're receiving this because ${hasCompany ? company : 'a Carbon workspace'} added ${email} as a team member. If you weren't expecting it, you can ignore this email; nothing is activated until a password is set.`;
   const preheader = `Set your password to join ${workspace}. The link expires in ${expiry}.`;
 

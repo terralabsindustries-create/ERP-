@@ -5,7 +5,7 @@
  * second copy of the UI. The only difference is how the files are handed to the
  * renderer:
  *
- *   web      →  https://app.serpy.in/...   served by the host
+ *   web      →  https://erp-delta-one-83.vercel.app/...   served by the host
  *   desktop  →  app://serpy/...            served by the protocol handler below
  *
  * A custom scheme is used instead of file:// for three reasons: the History API
@@ -314,7 +314,7 @@ function buildMenu() {
         { type: 'separator' },
         {
           label: 'Open Carbon on the web',
-          click: () => shell.openExternal('https://app.serpy.in')
+          click: () => shell.openExternal('https://erp-delta-one-83.vercel.app')
         }
       ]
     }

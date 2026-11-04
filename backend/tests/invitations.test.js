@@ -72,6 +72,19 @@ describe('the invitation email', () => {
     }
   });
 
+  test('says the business name once when the inviting login is named after it', () => {
+    const { text } = getInvitationEmailTemplate({
+      fullName: 'Akbar Haleel',
+      email: 'a@example.test',
+      role: 'accountant',
+      companyName: 'TERRALABS INDUSTRIES',
+      invitedByName: 'Terralabs Industries',
+      acceptUrl: 'https://app.example.test/accept-invitation/abc'
+    });
+    expect(text).toContain('TERRALABS INDUSTRIES has invited you to join their team on Carbon');
+    expect(text.match(/TERRALABS INDUSTRIES has invited you to join TERRALABS/)).toBeNull();
+  });
+
   test('escapes what people typed and hides leftover SerpY names', () => {
     const { subject, html, text } = getInvitationEmailTemplate({
       fullName: '<script>alert(1)</script>',
@@ -90,6 +103,9 @@ describe('the invitation email', () => {
     const saved = process.env.FRONTEND_URL;
     try {
       process.env.FRONTEND_URL = 'app://serpy';
+      expect(buildAcceptUrl('abc')).toBe('https://erp-delta-one-83.vercel.app/accept-invitation/abc');
+      // The retired SerpY app is still online but must never receive a Carbon link.
+      process.env.FRONTEND_URL = 'https://app.serpy.in';
       expect(buildAcceptUrl('abc')).toBe('https://erp-delta-one-83.vercel.app/accept-invitation/abc');
       process.env.FRONTEND_URL = 'https://erp.example.test/';
       expect(buildAcceptUrl('abc')).toBe('https://erp.example.test/accept-invitation/abc');

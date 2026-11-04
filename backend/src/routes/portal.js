@@ -20,6 +20,7 @@ const { requirePermission } = require('../middleware/requirePermission');
 const { orgScope } = require('../utils/accessScope');
 // Called through the module so tests can stand in for the SMTP transport.
 const mailer = require('../utils/mailer');
+const { appBaseUrl } = require('../utils/appUrl');
 
 /*
   Customer portal
@@ -76,7 +77,7 @@ const rejectInvalid = (req, res) => {
   return true;
 };
 
-const portalUrl = (token) => `${(process.env.FRONTEND_URL || 'http://localhost:8080').replace(/\/$/, '')}/customer-portal/${token}`;
+const portalUrl = (token) => `${appBaseUrl()}/customer-portal/${token}`;
 
 // ============= STAFF: ISSUE AND REVOKE PORTAL LINKS =============
 

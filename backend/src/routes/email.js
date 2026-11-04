@@ -4,6 +4,7 @@ const { protect, authorize } = require('../middleware/auth');
 const router = express.Router();
 
 const { createTransporter, getFromAddress, sendMailErrorResponse } = require('../utils/mailer');
+const { appBaseUrl } = require('../utils/appUrl');
 
 // Email templates
 const getEmailTemplate = (template, data) => {
@@ -204,7 +205,7 @@ router.post('/send-staff-credentials', protect, authorize('admin', 'manager'), a
       email,
       password,
       role,
-      loginUrl: loginUrl || 'https://app.serpy.in',
+      loginUrl: loginUrl || appBaseUrl(),
       companyName: process.env.COMPANY_NAME || 'Synx Automation Private Limited',
       supportEmail: process.env.EMAIL_USER || 'support@serpy.in'
     });
