@@ -38,7 +38,17 @@ export interface InvoiceRow {
   createdAt: string;
 }
 
-type View = "all" | "unpaid" | "overdue" | "paid" | "draft" | "cancelled";
+interface PendingJob {
+  _id: string;
+  title: string;
+  status: string;
+  customerId?: { _id: string; name: string } | null;
+  items?: unknown[];
+  estimatedCost?: number;
+  createdAt: string;
+}
+
+type View = "all" | "unpaid" | "overdue" | "paid" | "draft" | "cancelled" | "to_invoice";
 const PAGE_SIZE = 25;
 
 interface ViewStats {
@@ -82,10 +92,14 @@ export function InvoicesView() {
   // ?view=overdue (e.g. from the dashboard) opens that view.
   const [view, setView] = useState<View>(() => {
     const v = params.get("view");
-    return v === "unpaid" || v === "overdue" || v === "paid" || v === "draft" || v === "cancelled" ? v : "all";
+    return v === "unpaid" || v === "overdue" || v === "paid" || v === "draft" || v === "cancelled" || v === "to_invoice" ? v : "all";
   });
   const [page, setPage] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
+  const [pendingJob, setPendingJob] = useState<PendingJob | null>(null);
+  const [pendingJobs, setPendingJobs] = useState<PendingJob[]>([]);
+  const [pendingTotal, setPendingTotal] = useState(0);
+  const [pendingLoading, setPendingLoading] = useState(false);
   const [viewing, setViewing] = useState<InvoiceRow | null>(null);
   // Set when the invoice was opened to send it: the view goes straight to that form.
   const [sendVia, setSendVia] = useState<InvoiceSendChannel | null>(null);
@@ -110,6 +124,7 @@ export function InvoicesView() {
   }, []);
 
   const load = useCallback(async () => {
+    if (view === "to_invoice") return;
     setLoading(true);
     try {
       const p: Record<string, string> = { page: String(page), limit: String(PAGE_SIZE), sortBy: "invoiceDate", sortOrder: "desc" };
@@ -125,17 +140,44 @@ export function InvoicesView() {
     }
   }, [page, q, view, toast]);
 
+  const loadPending = useCallback(async () => {
+    if (!canCreate) return;
+    setPendingLoading(true);
+    try {
+      const res = await apiClient.getJobsAwaitingInvoice({
+        page: view === "to_invoice" ? page : 1,
+        limit: PAGE_SIZE,
+        search: view === "to_invoice" ? q : undefined
+      });
+      setPendingJobs(res.jobs || []);
+      setPendingTotal(res.pagination?.totalJobs || 0);
+    } catch (error) {
+      if (view === "to_invoice") toast({ title: "Jobs awaiting invoice could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+    } finally {
+      setPendingLoading(false);
+    }
+  }, [canCreate, page, q, view, toast]);
+
   useEffect(() => {
     loadStats();
   }, [loadStats]);
   useEffect(() => {
     load();
   }, [load]);
+  useEffect(() => {
+    loadPending();
+  }, [loadPending]);
   useEffect(() => setPage(1), [q, view]);
 
   const refresh = () => {
     load();
     loadStats();
+    loadPending();
+  };
+
+  const invoiceJob = (job: PendingJob) => {
+    setPendingJob(job);
+    setCreateOpen(true);
   };
 
   const refreshViewing = async () => {
@@ -262,7 +304,7 @@ export function InvoicesView() {
       <PageHeader
         eyebrow="Billing & finance"
         title="Invoices"
-        description="Invoices you've issued — what's been paid and what's still owed."
+        description="Track issued invoices and jobs waiting to be invoiced."
         actions={
           canCreate && (
             <Button onClick={() => setCreateOpen(true)}>
@@ -307,16 +349,33 @@ export function InvoicesView() {
             { value: "overdue", label: "Overdue", count: s?.overdue, tone: "danger" },
             { value: "paid", label: "Paid", count: s?.paid },
             { value: "draft", label: "Drafts", count: s?.draft },
+            ...(canCreate ? [{ value: "to_invoice" as const, label: "To invoice", count: pendingTotal, tone: "warning" as const }] : []),
             { value: "cancelled", label: "Cancelled", count: s?.cancelled }
           ]}
         />
 
         <DataCard
-          toolbar={
-            <Toolbar search={<SearchField value={search} onChange={setSearch} placeholder="Search invoice no., customer or job" />} />
-          }
-          footer={!loading && total > 0 && <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} noun="invoices" />}
+          toolbar={<Toolbar search={<SearchField value={search} onChange={setSearch} placeholder={view === "to_invoice" ? "Search job title" : "Search invoice no., customer or job"} />} />}
+          footer={view === "to_invoice"
+            ? (!pendingLoading && pendingTotal > 0 && <Pagination page={page} pageSize={PAGE_SIZE} total={pendingTotal} onPageChange={setPage} noun="jobs" />)
+            : (!loading && total > 0 && <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} noun="invoices" />)}
         >
+          {view === "to_invoice" ? (
+            <DataTable
+              columns={[
+                { id: "job", header: "Job", cell: (j: PendingJob) => <EntityCell title={j.title} subtitle={`${j.items?.length || 0} item${j.items?.length === 1 ? "" : "s"}`} />, sortValue: (j: PendingJob) => j.title },
+                { id: "customer", header: "Customer", cell: (j: PendingJob) => j.customerId?.name || "—", sortValue: (j: PendingJob) => j.customerId?.name || "" },
+                { id: "created", header: "Created", cell: (j: PendingJob) => fmtDate(j.createdAt), hideBelow: "md" as const },
+                { id: "action", header: "", cell: (j: PendingJob) => <Button size="sm" variant="outline" onClick={(event) => { event.stopPropagation(); invoiceJob(j); }}>Create invoice</Button> }
+              ]}
+              rows={pendingJobs}
+              rowKey={(j) => j._id}
+              loading={pendingLoading}
+              onRowClick={invoiceJob}
+              mobile={(j) => <div className="flex items-center justify-between gap-3"><span className="truncate font-medium">{j.title}</span><span className="text-xs text-muted-foreground">{j.customerId?.name || "—"}</span></div>}
+              empty={<EmptyState icon={FileText} title={q ? "No matching jobs" : "No jobs awaiting invoice"} description={q ? undefined : "Jobs you skip at creation appear here until an invoice is raised."} />}
+            />
+          ) : (
           <DataTable
             columns={columns}
             rows={rows}
@@ -390,10 +449,11 @@ export function InvoicesView() {
               )
             }
           />
+          )}
         </DataCard>
       </div>
 
-      <AdvancedCreateInvoiceDialog open={createOpen} onOpenChange={setCreateOpen} onInvoiceCreated={refresh} />
+      <AdvancedCreateInvoiceDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (!open) setPendingJob(null); }} preselectedJob={pendingJob} onInvoiceCreated={refresh} />
       <ViewInvoiceDialog
         open={!!viewing}
         onOpenChange={(o) => {

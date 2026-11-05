@@ -33,6 +33,36 @@ beforeAll(async () => {
 });
 afterAll(disconnectTestDb);
 
+test('a job skipped at invoice creation appears on the Invoices page until it is billed', async () => {
+  const created = await admin().post('/api/jobs', {
+    title: 'Invoice later job',
+    customerId: String(cust._id),
+    items: [{ itemName: 'Printed cards', quantity: 100, unitPrice: 2.5, gstRate: 18 }]
+  });
+  expect(created.status).toBe(201);
+  const jobId = created.body.data.job._id;
+  const emptyJob = await admin().post('/api/jobs', {
+    title: 'Invoice later without items', customerId: String(cust._id)
+  });
+  expect(emptyJob.status).toBe(201);
+
+  const pending = await admin().get('/api/invoices/pending-jobs?search=Invoice%20later');
+  expect(pending.status).toBe(200);
+  expect(pending.body.data.jobs).toEqual(expect.arrayContaining([
+    expect.objectContaining({ _id: jobId, title: 'Invoice later job' })
+  ]));
+  expect(pending.body.data.jobs.find((job) => job._id === jobId).items).toHaveLength(1);
+  expect(pending.body.data.jobs.some((job) => job._id === emptyJob.body.data.job._id)).toBe(true);
+
+  const invoice = await admin().post('/api/invoices', {
+    customerId: String(cust._id), jobId, items: [cardLine]
+  });
+  expect(invoice.status).toBe(201);
+  const after = await admin().get('/api/invoices/pending-jobs?search=Invoice%20later');
+  expect(after.body.data.jobs.some((job) => job._id === jobId)).toBe(false);
+  expect(after.body.data.jobs.some((job) => job._id === emptyJob.body.data.job._id)).toBe(true);
+});
+
 describe('creating an invoice', () => {
   let invoice;
 

@@ -706,6 +706,10 @@ class ApiClient {
     return this.get(`/invoices${queryString}`);
   }
 
+  async getJobsAwaitingInvoice(params?: { page?: number; limit?: number; search?: string }) {
+    return this.get<{ jobs: any[]; pagination: { current: number; totalJobs: number } }>('/invoices/pending-jobs', params);
+  }
+
   async getInvoice(id: string) {
     return this.get(`/invoices/${id}`);
   }

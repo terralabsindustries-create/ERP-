@@ -19,6 +19,7 @@ const { parseDesignCharge, parseGstRate, priceInvoiceDocument, HSN_PATTERN } = r
 // "Invoicing (View No GST)".
 const noGstVisibility = (user) => (userCan(user, 'Invoicing (View No GST)') ? {} : { noGst: { $ne: true } });
 const { staffScopeQuery } = require('../utils/dataScopeHelper');
+const { orgScope } = require('../utils/accessScope');
 const { sendWhatsAppMessage, buildTemplateVariables } = require('../utils/metaWhatsApp');
 
 const router = express.Router();
@@ -131,6 +132,43 @@ const idOf = (value) => (value && typeof value === 'object' ? value._id || value
  * at. See utils/billing.js priceInvoiceDocument.
  */
 const priceInvoice = (input) => priceInvoiceDocument(input);
+
+// A skipped invoice leaves a job ticket, not an invoice document. List those
+// jobs on the Invoices page so they can be billed later without inventing an
+// empty draft invoice. Any non-cancelled invoice in this business counts, even
+// if another staff member created it or this login cannot view No GST bills.
+router.get('/pending-jobs', protect, requirePermission('Invoicing: Create & Edit'), async (req, res) => {
+  try {
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 25));
+    const invoicedJobIds = await Invoice.distinct('jobId', {
+      ...orgScope(req.user),
+      jobId: { $ne: null },
+      status: { $ne: 'cancelled' }
+    });
+    const filter = {
+      ...orgScope(req.user),
+      _id: { $nin: invoicedJobIds },
+      status: { $ne: 'cancelled' }
+    };
+    const search = String(req.query.search || '').trim();
+    if (search) filter.title = { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+
+    const [jobs, totalJobs] = await Promise.all([
+      Job.find(filter)
+        .select('title status customerId items designCharge dueDate estimatedCost createdAt')
+        .populate('customerId', 'name')
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit),
+      Job.countDocuments(filter)
+    ]);
+    res.json({ status: 'success', data: { jobs, pagination: { current: page, totalJobs } } });
+  } catch (error) {
+    console.error('Get jobs awaiting invoice error:', error);
+    res.status(500).json({ status: 'error', message: 'Could not load jobs awaiting invoice' });
+  }
+});
 
 // @route   GET /api/invoices
 // @desc    Get all invoices for the authenticated user

@@ -20,6 +20,16 @@ import { HSN_PATTERN, draftTotals, lineDraftFromJobItem } from "../billing/lineD
 import { localDate } from "@/lib/format";
 
 const AREA_UNITS = ['sqft', 'sqm'];
+// Square-foot dimensions are stored in feet throughout jobs, billing and stock.
+// Inches are an input/display choice, converted at the form boundary.
+const shownDimension = (feet: number | undefined, unit: 'ft' | 'in') =>
+  feet ? Math.round(feet * (unit === 'in' ? 12 : 1) * 10000) / 10000 : '';
+const storedDimension = (value: string, unit: 'ft' | 'in') => {
+  const number = Number(value);
+  return value !== '' && Number.isFinite(number) && number > 0
+    ? number / (unit === 'in' ? 12 : 1)
+    : undefined;
+};
 
 interface CreateJobDialogProps {
   open: boolean;
@@ -44,6 +54,9 @@ interface InvoiceItem {
   length?: number;
   width?: number;
   totalSquareFeet?: number;
+  dimensionUnit?: 'ft' | 'in';
+  lengthInput?: string;
+  widthInput?: string;
 }
 
 // Saved on the job as `printSpecs` (backend/src/models/Job.js)
@@ -232,7 +245,8 @@ export function CreateJobDialog({
           unit: 'pieces',
           length: undefined,
           width: undefined,
-          totalSquareFeet: 0
+          totalSquareFeet: 0,
+          dimensionUnit: 'ft'
         }
       ]
     }));
@@ -286,9 +300,21 @@ export function CreateJobDialog({
 
     updateItem(index, 'unit', unit);
     updateItem(index, 'itemType', isAreaUnit ? 'Square Feet' : 'Numbers');
+    if (unit !== formData.items[index].unit) changeDimensionUnit(index, 'ft');
     if (!isAreaUnit && !formData.items[index].quantity) {
       updateItem(index, 'quantity', 1);
     }
+  };
+
+  const changeDimensionUnit = (index: number, unit: 'ft' | 'in') => {
+    updateItem(index, 'dimensionUnit', unit);
+    updateItem(index, 'lengthInput', undefined);
+    updateItem(index, 'widthInput', undefined);
+  };
+
+  const updateDimension = (index: number, field: 'length' | 'width', value: string, unit: 'ft' | 'in') => {
+    updateItem(index, field, storedDimension(value, unit));
+    updateItem(index, field === 'length' ? 'lengthInput' : 'widthInput', value);
   };
 
   const handleCustomerSelect = (customer: any) => {
@@ -609,6 +635,9 @@ export function CreateJobDialog({
         // was switched must not multiply it on the invoice.
         items: formData.items.map((item) => ({
           ...item,
+          dimensionUnit: undefined,
+          lengthInput: undefined,
+          widthInput: undefined,
           itemName: item.itemName.trim(),
           description: (item.description || '').trim(),
           ...(item.itemType === 'Square Feet' ? { quantity: 1 } : {})
@@ -1260,24 +1289,35 @@ export function CreateJobDialog({
                     {item.itemType === 'Square Feet' ? (
                       <>
                         <div className="space-y-1">
-                          <Label className="text-xs">Length</Label>
+                          <div className="flex items-center justify-between gap-1">
+                            <Label className="text-xs">Length ({item.unit === 'sqm' ? 'm' : item.dimensionUnit || 'ft'})</Label>
+                            {item.unit === 'sqft' && (
+                              <Select value={item.dimensionUnit || 'ft'} onValueChange={(value: 'ft' | 'in') => changeDimensionUnit(index, value)}>
+                                <SelectTrigger aria-label="Dimension unit" className="h-7 w-[76px] px-2 text-xs"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="ft">Feet</SelectItem>
+                                  <SelectItem value="in">Inches</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            )}
+                          </div>
                           <Input
                             type="number"
-                            step="0.01"
-                            value={item.length || ''}
-                            onChange={(e) => updateItem(index, 'length', parseFloat(e.target.value) || undefined)}
+                            step="any"
+                            value={item.unit === 'sqft' ? item.lengthInput ?? shownDimension(item.length, item.dimensionUnit || 'ft') : item.length || ''}
+                            onChange={(e) => item.unit === 'sqft' ? updateDimension(index, 'length', e.target.value, item.dimensionUnit || 'ft') : updateItem(index, 'length', parseFloat(e.target.value) || undefined)}
                             placeholder="Enter length"
                             min="0"
                           />
                         </div>
 
                         <div className="space-y-1">
-                          <Label className="text-xs">Width</Label>
+                          <Label className="text-xs">Width ({item.unit === 'sqm' ? 'm' : item.dimensionUnit || 'ft'})</Label>
                           <Input
                             type="number"
-                            step="0.01"
-                            value={item.width || ''}
-                            onChange={(e) => updateItem(index, 'width', parseFloat(e.target.value) || undefined)}
+                            step="any"
+                            value={item.unit === 'sqft' ? item.widthInput ?? shownDimension(item.width, item.dimensionUnit || 'ft') : item.width || ''}
+                            onChange={(e) => item.unit === 'sqft' ? updateDimension(index, 'width', e.target.value, item.dimensionUnit || 'ft') : updateItem(index, 'width', parseFloat(e.target.value) || undefined)}
                             placeholder="Enter width"
                             min="0"
                           />
@@ -1367,7 +1407,7 @@ export function CreateJobDialog({
                         {item.itemType === 'Square Feet' && (
                           <span className="text-xs text-muted-foreground">
                             {item.length && item.width
-                              ? `${item.totalSquareFeet?.toFixed(2)} ${item.unit === 'sqm' ? 'sq m' : 'sq ft'} (${item.length} × ${item.width})`
+                              ? `${item.totalSquareFeet?.toFixed(2)} ${item.unit === 'sqm' ? 'sq m' : 'sq ft'} (${item.unit === 'sqm' ? item.length : shownDimension(item.length, item.dimensionUnit || 'ft')} × ${item.unit === 'sqm' ? item.width : shownDimension(item.width, item.dimensionUnit || 'ft')} ${item.unit === 'sqm' ? 'm' : item.dimensionUnit || 'ft'})`
                               : 'Set L & W'}
                           </span>
                         )}
@@ -1634,7 +1674,7 @@ export function CreateJobDialog({
           </DialogHeader>
           <div className="py-4">
             <p className="text-sm text-muted-foreground">
-              You can create an invoice now with all the job items or skip for now.
+              Create an invoice now, or find this job later under To invoice on the Invoices page.
             </p>
           </div>
           <DialogFooter className="flex flex-col sm:flex-row gap-2 sm:gap-0 sm:justify-end">
@@ -1642,6 +1682,7 @@ export function CreateJobDialog({
               type="button"
               variant="outline"
               onClick={() => {
+                toast({ title: "Job saved for later", description: "Find it under To invoice on the Invoices page." });
                 setShowInvoiceQuestion(false);
                 onOpenChange(false);
                 setCreatedJob(null);
