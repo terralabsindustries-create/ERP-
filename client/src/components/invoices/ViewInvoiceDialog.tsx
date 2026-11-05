@@ -21,9 +21,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  ChevronDown,
   Download,
   Mail,
   MessageSquare,
+  Printer,
   Edit,
   FileText,
   Calendar,
@@ -39,6 +47,7 @@ import {
   AlertTriangle
 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
+import { printOutcomeMessage } from "@/lib/printPdf";
 import { getTemplateBodyText, getTemplateVariableNumbers } from "@/lib/whatsappTemplates";
 import { useToast } from "@/hooks/use-toast";
 import { EditInvoiceDialog } from "./EditInvoiceDialog";
@@ -109,15 +118,20 @@ interface Invoice {
   updatedAt: string;
 }
 
+export type InvoiceSendChannel = "email" | "whatsapp";
+
 interface ViewInvoiceDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   invoice: Invoice | null;
   onInvoiceUpdated: () => void;
+  /** Opened from a list's "Send" action: go straight to that channel's form. */
+  sendVia?: InvoiceSendChannel | null;
 }
 
-export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdated }: ViewInvoiceDialogProps) {
+export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdated, sendVia }: ViewInvoiceDialogProps) {
   const [loading, setLoading] = useState(false);
+  const [printing, setPrinting] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showEmailDialog, setShowEmailDialog] = useState(false);
   const [showWhatsAppDialog, setShowWhatsAppDialog] = useState(false);
@@ -165,7 +179,51 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
     };
   }, [showWhatsAppDialog]);
 
+  const startSend = (channel: InvoiceSendChannel) => {
+    if (!invoice) return;
+    if (channel === "email") {
+      setEmail(invoice.customerId?.email || "");
+      setShowEmailDialog(true);
+    } else {
+      setPhone(invoice.customerId?.phone || "");
+      setSelectedTemplate("");
+      setTemplateMapping({});
+      setShowWhatsAppDialog(true);
+    }
+  };
+
+  const invoiceKey = invoice?._id || invoice?.id;
+  useEffect(() => {
+    if (open && invoiceKey && sendVia) startSend(sendVia);
+    // Only when the dialog opens on an invoice with a channel asked for.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, invoiceKey, sendVia]);
+
   if (!invoice) return null;
+
+  // The invoice PDF could not be made: either the business has no company
+  // details yet (send them to Settings), or something else went wrong.
+  const pdfFailed = (error: unknown, fallback: string) => {
+    const message = error instanceof Error ? error.message : "";
+    if (message.includes("Company details not configured")) {
+      setShowCompanySettingsDialog(true);
+    } else {
+      toast({ title: "Error", description: message || fallback, variant: "destructive" });
+    }
+  };
+
+  // Prints the same PDF that Download saves (see lib/printPdf).
+  const handlePrint = async () => {
+    setPrinting(true);
+    try {
+      const note = printOutcomeMessage(await apiClient.printInvoicePDF(invoice._id || invoice.id), invoice.invoiceNumber);
+      if (note) toast(note);
+    } catch (error) {
+      pdfFailed(error, "Failed to prepare the invoice for printing");
+    } finally {
+      setPrinting(false);
+    }
+  };
 
   const handleDownloadPDF = async () => {
     try {
@@ -176,18 +234,8 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
         title: "Success",
         description: "Invoice PDF downloaded successfully",
       });
-    } catch (error: any) {
-      console.error('Error downloading PDF:', error);
-      // Check if error is about company settings not configured
-      if (error.message?.includes('Company details not configured')) {
-        setShowCompanySettingsDialog(true);
-      } else {
-        toast({
-          title: "Error",
-          description: error.message || "Failed to download invoice PDF",
-          variant: "destructive",
-        });
-      }
+    } catch (error) {
+      pdfFailed(error, "Failed to download invoice PDF");
     } finally {
       setLoading(false);
     }
@@ -589,42 +637,44 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
           </div>
 
           <DialogFooter className="flex-col sm:flex-row gap-2">
-            <div className="flex flex-1 gap-2">
+            <div className="flex flex-1 flex-wrap gap-2">
+              <Button
+                variant="outline"
+                onClick={handlePrint}
+                disabled={loading || printing}
+                className="gap-2"
+              >
+                <Printer className="h-4 w-4" />
+                {printing ? "Preparing…" : "Print"}
+              </Button>
               <Button
                 variant="outline"
                 onClick={handleDownloadPDF}
-                disabled={loading}
+                disabled={loading || printing}
                 className="gap-2"
               >
                 <Download className="h-4 w-4" />
                 Download PDF
               </Button>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setEmail(invoice.customerId.email || "");
-                  setShowEmailDialog(true);
-                }}
-                disabled={loading}
-                className="gap-2"
-              >
-                <Mail className="h-4 w-4" />
-                Email
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setPhone(invoice.customerId.phone || "");
-                  setSelectedTemplate("");
-                  setTemplateMapping({});
-                  setShowWhatsAppDialog(true);
-                }}
-                disabled={loading}
-                className="gap-2"
-              >
-                <MessageSquare className="h-4 w-4" />
-                WhatsApp
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" disabled={loading || printing} className="gap-2">
+                    <Mail className="h-4 w-4" />
+                    Send
+                    <ChevronDown className="h-4 w-4 opacity-60" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuItem onSelect={() => startSend("email")}>
+                    <Mail className="h-4 w-4" />
+                    By email
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => startSend("whatsapp")}>
+                    <MessageSquare className="h-4 w-4" />
+                    On WhatsApp
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
             <div className="flex gap-2">
               <Button

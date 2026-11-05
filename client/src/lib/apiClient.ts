@@ -1,3 +1,5 @@
+import { printPdf, saveFile, type PdfFile, type PrintOutcome } from "./printPdf";
+
 // In the Electron app the backend runs on this machine on a port picked at
 // startup, so the preload hands us the address. In a browser `serpyDesktop` does
 // not exist and this falls straight through to the build-time value.
@@ -775,74 +777,45 @@ class ApiClient {
     return this.delete(`/purchase-orders/${id}`);
   }
 
-  // Invoice PDF and Email
-  async downloadInvoicePDF(invoiceId: string) {
-    try {
-      const token = localStorage.getItem('token');
-      console.log('📥 Starting PDF download for invoice:', invoiceId);
+  // Invoice PDF: one file, from the server, for download, print and sending.
+  async getInvoicePdfFile(invoiceId: string): Promise<PdfFile> {
+    const token = localStorage.getItem('token');
+    const response = await fetch(`${this.baseURL}/invoices/${invoiceId}/pdf`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    });
 
-      const response = await fetch(`${this.baseURL}/invoices/${invoiceId}/pdf`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-
-      console.log('📥 Response status:', response.status);
-      console.log('📥 Response headers:', response.headers.get('content-type'));
-
-      if (!response.ok) {
-        // Try to parse JSON error response
-        const contentType = response.headers.get('content-type');
-        if (contentType && contentType.includes('application/json')) {
-          const errorData = await response.json();
-          console.error('📥 Error response:', errorData);
-          throw new Error(errorData.message || `Failed to download PDF: ${response.status}`);
-        }
-        const errorText = await response.text();
-        console.error('📥 Error response:', errorText);
-        throw new Error(`Failed to download PDF: ${response.status} ${response.statusText}`);
+    if (!response.ok) {
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `Failed to get the invoice PDF: ${response.status}`);
       }
-
-      const blob = await response.blob();
-      console.log('📥 Blob size:', blob.size, 'bytes');
-
-      if (blob.size === 0) {
-        throw new Error('PDF is empty - generation may have failed');
-      }
-
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-
-      // Get filename from Content-Disposition header or use default
-      const contentDisposition = response.headers.get('content-disposition');
-      let filename = `Invoice_${invoiceId}.pdf`;
-
-      if (contentDisposition) {
-        const filenameMatch = contentDisposition.match(/filename="(.+)"/);
-        if (filenameMatch && filenameMatch[1]) {
-          filename = filenameMatch[1];
-          console.log('📥 Using filename from server:', filename);
-        }
-      }
-
-      link.download = filename;
-      document.body.appendChild(link);
-
-      console.log('📥 Triggering download for:', link.download);
-      link.click();
-
-      // Wait a bit before removing to ensure download starts
-      setTimeout(() => {
-        document.body.removeChild(link);
-        window.URL.revokeObjectURL(url);
-        console.log('📥 Download completed and cleanup done');
-      }, 100);
-    } catch (error) {
-      console.error('❌ PDF download error:', error);
-      throw error;
+      throw new Error(`Failed to get the invoice PDF: ${response.status} ${response.statusText}`);
     }
+
+    const blob = await response.blob();
+    if (blob.size === 0) {
+      throw new Error('PDF is empty - generation may have failed');
+    }
+
+    // The server names the file after the invoice number, when the header is readable.
+    const match = response.headers.get('content-disposition')?.match(/filename="(.+)"/);
+    return { blob, filename: match?.[1] || `Invoice_${invoiceId}.pdf` };
+  }
+
+  async downloadInvoicePDF(invoiceId: string) {
+    saveFile(await this.getInvoicePdfFile(invoiceId));
+  }
+
+  /**
+   * Opens the browser's print dialog on the invoice PDF — the same file Download
+   * saves. Call it directly from a click handler (see printPdf).
+   */
+  printInvoicePDF(invoiceId: string): Promise<PrintOutcome> {
+    return printPdf(() => this.getInvoicePdfFile(invoiceId));
   }
 
   async sendInvoiceEmail(invoiceId: string, email: string, message?: string) {

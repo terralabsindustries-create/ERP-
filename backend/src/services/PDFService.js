@@ -465,6 +465,8 @@ class PDFService {
     const custLines = [];
     const custGst = invoice.customerGstNumber || customer.gstNumber;
     if (custGst) custLines.push('GSTIN: ' + custGst);
+    if (customer.phone) custLines.push('Phone: ' + customer.phone);
+    if (customer.email) custLines.push('Email: ' + customer.email);
 
     const billing = this.splitAddress(invoice.customerAddress || customer.address);
 
@@ -521,14 +523,15 @@ class PDFService {
     summary.push({ label: 'Total', value: money(total), bold: true });
     if (paid > 0 && paid < total) {
       summary.push({ label: 'Paid', value: money(paid) });
-      summary.push({ label: 'Balance', value: money(total - paid) });
+      summary.push({ label: 'Balance Due', value: money(round2(total - paid)), strong: true });
     }
 
     return {
       type: 'INVOICE',
+      numberLabel: 'Invoice No.',
       number: invoice.invoiceNumber || '',
       meta: [
-        { label: 'Date', value: new Date(invoice.invoiceDate || Date.now()).toLocaleDateString('en-GB') },
+        { label: 'Invoice Date', value: new Date(invoice.invoiceDate || Date.now()).toLocaleDateString('en-GB') },
         ...(invoice.dueDate ? [{ label: 'Due Date', value: new Date(invoice.dueDate).toLocaleDateString('en-GB') }] : [])
       ],
       badge: total > 0 && paid >= total ? { text: 'FULLY PAID', color: '#2e7d32' } : null,
@@ -556,6 +559,8 @@ class PDFService {
 
     const custLines = [];
     if (customer.gstNumber) custLines.push('GSTIN: ' + customer.gstNumber);
+    if (customer.phone) custLines.push('Phone: ' + customer.phone);
+    if (customer.email) custLines.push('Email: ' + customer.email);
 
     const items = (quotation.items || []).map((item) =>
       this.itemRow({
@@ -596,6 +601,7 @@ class PDFService {
     const billing = this.splitAddress(customer.address);
     return {
       type: 'QUOTATION',
+      numberLabel: 'Quotation No.',
       number: quotation.quotationNumber || '',
       meta: [
         { label: 'Date', value: new Date(quotation.createdAt || Date.now()).toLocaleDateString('en-GB') },
@@ -627,213 +633,359 @@ class PDFService {
     return this.renderSynxDocument(doc, this.quotationDocument(quotation, companyInfo));
   }
 
+  // ==================== The invoice / quotation page ====================
+  //
+  // One A4 layout for both documents, drawn with PDFKit at fixed point sizes.
+  // The PDF it makes is the document itself: it is what is downloaded, emailed,
+  // sent on WhatsApp and printed (the app prints this file's pages — see
+  // client/src/lib/printPdf.ts), so there is a single rendering of an invoice
+  // and nothing that can drift from it.
+  //
+  // Sizes are chosen for paper, not the screen: 10.5 pt lines, nothing under
+  // 9 pt but small-capital labels and page numbers, dark ink, and a 100 pt
+  // (≈ 35 mm) payment QR.
+  // Columns are only drawn when a line uses them, so an invoice without sized
+  // items gives the width to its descriptions. Every block is measured before it
+  // is drawn: a page breaks only when the next item row, totals or sign-off
+  // would not fit, the table heading repeats on each page, and an item row is
+  // never split.
+
+  static get PAGE_LAYOUT() {
+    return {
+      margin: 36, // 12.7 mm sides and top: clear of any printer's unprintable edge
+      contentBottom: 46, // the body stops this far above the bottom edge…
+      footer: 28, // …and the page numbers sit here, below it
+      size: { title: 24, company: 16, detail: 10, label: 8.5, party: 12, meta: 10.5, th: 9.5, cell: 10.5, sub: 9, sum: 10.5, total: 13, words: 10.5, terms: 9.5, sign: 10.5, footer: 8.5 },
+      qr: 100
+    };
+  }
+
   static renderSynxDocument(doc, d) {
-    const margin = 40;
-    const pageWidth = doc.page.width;
-    const pageHeight = doc.page.height;
-    const right = pageWidth - margin;
-    const contentWidth = right - margin;
-    const C = { ink: '#1a1a2e', text: '#2d3748', muted: '#555555', line: '#cccccc', light: '#f5f5f5' };
-    let y = margin;
+    const { margin: M, contentBottom, footer: FOOTER, size: S, qr: QR } = this.PAGE_LAYOUT;
+    const pageW = doc.page.width;
+    const pageH = doc.page.height;
+    const left = M;
+    const right = pageW - M;
+    const W = right - left;
+    const bottom = pageH - contentBottom;
+    const C = { ink: '#111111', text: '#262626', muted: '#4d4d4d', rule: '#8c8c8c', hair: '#d6d6d6', fill: '#eeeeee' };
+    const LINE_GAP = 1.5;
+    const docName = d.type.charAt(0) + d.type.slice(1).toLowerCase();
 
-    // ---------- LOGO ----------
-    const logoBuf = this.decodeLogo(d.company.logo);
-    if (logoBuf) {
-      try { doc.image(logoBuf, margin, y, { fit: [130, 46] }); y += 54; } catch (e) { /* ignore bad logo */ }
-    }
+    // Each position is set explicitly and each block measured before it is
+    // drawn, so PDFKit's own flowing page break must never fire. Without a
+    // bottom margin it cannot.
+    doc.page.margins.bottom = 0;
 
-    const headerTop = y;
-
-    // ---------- LEFT: company block ----------
-    doc.fontSize(15).font('Helvetica-Bold').fillColor(C.ink)
-       .text((d.company.name || 'COMPANY').toUpperCase(), margin, y, { width: 300 });
-    let ly = doc.y + 2;
-    doc.fontSize(9.5).font('Helvetica').fillColor(C.text);
-    (d.company.addressLines || []).forEach(line => { doc.text(line, margin, ly, { width: 290 }); ly = doc.y; });
-    if (d.company.email) { doc.text('Email: ' + d.company.email, margin, ly, { width: 290 }); ly = doc.y; }
-    if (d.company.phone) { doc.text('Mobile: ' + d.company.phone, margin, ly, { width: 290 }); ly = doc.y; }
-    if (d.company.gstNumber) { doc.text('GSTIN: ' + d.company.gstNumber, margin, ly, { width: 290 }); ly = doc.y; }
-
-    // ---------- RIGHT: doc type + meta ----------
-    doc.fontSize(20).font('Helvetica-Bold').fillColor(C.ink)
-       .text(d.type, margin, headerTop, { width: contentWidth, align: 'right' });
-    let ry = headerTop + 26;
-    doc.fontSize(10).font('Helvetica').fillColor(C.text);
-    doc.text('Number: ' + d.number, margin, ry, { width: contentWidth, align: 'right' }); ry += 15;
-    (d.meta || []).forEach(m => { doc.text(m.label + ': ' + m.value, margin, ry, { width: contentWidth, align: 'right' }); ry += 15; });
-
-    if (d.badge) {
-      const bw = 110, bh = 22, bx = right - bw, by = ry + 2;
-      doc.roundedRect(bx, by, bw, bh, 3).lineWidth(1).strokeColor(d.badge.color).stroke();
-      doc.fontSize(10).font('Helvetica-Bold').fillColor(d.badge.color)
-         .text(d.badge.text, bx, by + 7, { width: bw, align: 'center' });
-      ry = by + bh;
-    }
-
-    y = Math.max(ly, ry) + 12;
-
-    // separator
-    doc.moveTo(margin, y).lineTo(right, y).strokeColor(C.line).lineWidth(1).stroke();
-    y += 12;
-
-    // ---------- CUSTOMER / BILLING / SHIPPING ----------
-    const third = contentWidth / 3;
-    const colX = [margin, margin + third, margin + 2 * third];
-    const colW = third - 10;
-    doc.fontSize(11).font('Helvetica-Bold').fillColor(C.ink);
-    doc.text('Customer', colX[0], y);
-    doc.text('Billing Address', colX[1], y);
-    doc.text('Shipping Address', colX[2], y);
-    const blockTop = y + 17;
-
-    // Customer column
-    doc.fontSize(9.5).font('Helvetica-Bold').fillColor(C.text).text(d.customer.name || 'N/A', colX[0], blockTop, { width: colW });
-    let cy = doc.y;
-    doc.font('Helvetica').fillColor(C.muted);
-    (d.customer.lines || []).forEach(l => { doc.text(l, colX[0], cy, { width: colW }); cy = doc.y; });
-
-    // Billing column
-    doc.fontSize(9.5).font('Helvetica').fillColor(C.muted);
-    let byc = blockTop;
-    (d.billingLines && d.billingLines.length ? d.billingLines : ['N/A']).forEach(l => { doc.text(l, colX[1], byc, { width: colW }); byc = doc.y; });
-
-    // Shipping column
-    let bys = blockTop;
-    (d.shippingLines && d.shippingLines.length ? d.shippingLines : ['N/A']).forEach(l => { doc.text(l, colX[2], bys, { width: colW }); bys = doc.y; });
-
-    y = Math.max(cy, byc, bys) + 12;
-
-    // ---------- ITEMS TABLE ----------
-    // Size and Area are filled for lines priced by area (6 × 4 ft, 24 sq ft
-    // each, 240 sq ft for 10 pieces); other lines leave them blank.
-    const colsW = { sno: 24, desc: 165, size: 70, area: 64, qty: 52, rate: 62, total: 78 };
-    const cols = { sno: margin };
-    cols.desc = cols.sno + colsW.sno;
-    cols.size = cols.desc + colsW.desc;
-    cols.area = cols.size + colsW.size;
-    cols.qty = cols.area + colsW.area;
-    cols.rate = cols.qty + colsW.qty;
-    cols.total = cols.rate + colsW.rate;
-
-    const headerH = 24;
-    doc.rect(margin, y, contentWidth, headerH).fill(C.light);
-    doc.fillColor(C.ink).fontSize(9).font('Helvetica-Bold');
-    const headY = y + 8;
-    doc.text('Sl.', cols.sno + 2, headY, { width: colsW.sno - 2 });
-    doc.text('Description of Items', cols.desc, headY, { width: colsW.desc });
-    doc.text('Size (L × W)', cols.size, headY, { width: colsW.size - 4, align: 'right' });
-    doc.text('Area', cols.area, headY, { width: colsW.area - 4, align: 'right' });
-    doc.text('Qty', cols.qty, headY, { width: colsW.qty - 4, align: 'right' });
-    doc.text('Rate', cols.rate, headY, { width: colsW.rate - 4, align: 'right' });
-    doc.text('Amount', cols.total, headY, { width: colsW.total, align: 'right' });
-    y += headerH + 5;
-
-    // Draws a cell's value with an optional smaller line under it and returns
-    // the height used, so the row can be as tall as its tallest cell.
-    const cell = (x, w, main, sub, align = 'right', y0) => {
-      doc.font('Helvetica').fillColor(C.text).fontSize(9.5);
-      doc.text(main || '-', x, y0, { width: w, align });
-      let h = doc.heightOfString(main || '-', { width: w });
-      if (sub) {
-        doc.fontSize(8).font('Helvetica-Oblique').fillColor(C.muted);
-        doc.text(sub, x, y0 + h, { width: w, align });
-        h += doc.heightOfString(sub, { width: w });
-      }
-      return h;
+    const style = (size, bold, color) => doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(size).fillColor(color || C.text);
+    const measure = (text, size, width, bold = false) => {
+      if (text == null || text === '') return 0;
+      style(size, bold);
+      return doc.heightOfString(String(text), { width, lineGap: LINE_GAP });
+    };
+    // Draws text and returns the y just under it.
+    const write = (text, x, y, size, o = {}) => {
+      if (text == null || text === '') return y;
+      style(size, o.bold, o.color);
+      doc.text(String(text), x, y, { width: o.width, align: o.align || 'left', lineGap: LINE_GAP, characterSpacing: o.spacing || 0, link: o.link || null, underline: !!o.link });
+      return y + measure(text, size, o.width, o.bold);
+    };
+    const label = (text, x, y, width, align = 'left') =>
+      write(String(text).toUpperCase(), x, y, S.label, { bold: true, color: C.muted, width, align, spacing: 0.4 });
+    const rule = (y, color = C.hair, weight = 0.75) => {
+      doc.moveTo(left, y).lineTo(right, y).lineWidth(weight).strokeColor(color).stroke();
     };
 
-    d.items.forEach((it, idx) => {
-      if (y > pageHeight - 180) { doc.addPage(); y = margin; }
-      const startY = y;
-      const heights = [
-        cell(cols.sno + 2, colsW.sno - 2, String(idx + 1), '', 'left', startY),
-        cell(cols.desc, colsW.desc - 6, it.description, it.sub, 'left', startY),
-        cell(cols.size, colsW.size - 4, it.size, it.sizeSub, 'right', startY),
-        cell(cols.area, colsW.area - 4, it.area, '', 'right', startY),
-        cell(cols.qty, colsW.qty - 4, it.qty, '', 'right', startY),
-        cell(cols.rate, colsW.rate - 4, it.rate, it.rateSub, 'right', startY),
-        cell(cols.total, colsW.total, it.amount, '', 'right', startY)
-      ];
-      y = startY + Math.max(15, ...heights) + 6;
-      doc.moveTo(margin, y - 3).lineTo(right, y - 3).strokeColor('#eeeeee').lineWidth(0.5).stroke();
-    });
+    let y = M;
 
-    doc.moveTo(margin, y).lineTo(right, y).strokeColor(C.line).lineWidth(0.7).stroke();
-    y += 8;
-    if (y > pageHeight - 200) { doc.addPage(); y = margin; }
+    // A later page starts with what it continues, so a loose sheet is still
+    // identifiable.
+    const continuation = () => {
+      doc.addPage({ size: 'A4', margins: { top: M, left: M, right: M, bottom: 0 } });
+      y = M;
+      write(`${docName} ${d.number} (continued)`, left, y, 11, { bold: true, color: C.ink, width: W * 0.6 });
+      write(d.customer.name || '', left + W * 0.6, y + 1, S.detail, { color: C.muted, width: W * 0.4, align: 'right' });
+      y += 18;
+      rule(y, C.ink, 1);
+      y += 10;
+    };
 
-    // ---------- BANK (left) + SUMMARY (right) ----------
-    const sumLabelX = margin + 290, sumValueX = margin + 372;
-    let bankY = y, sumY = y;
-    if (d.bankLines && d.bankLines.length) {
-      doc.fontSize(9.5).font('Helvetica').fillColor(C.text);
-      d.bankLines.forEach(l => { doc.text(l, margin, bankY, { width: 290 }); bankY += 15; });
+    // ---------- HEADER: logo and business (left), the document (right) ----------
+    const headR = 160;
+    const headL = W - headR - 16;
+    write(d.type, right - headR, y - 3, S.title, { bold: true, color: C.ink, width: headR, align: 'right' });
+    let ry = y + 32;
+    if (d.badge) {
+      const bw = 104;
+      const bh = 21;
+      const bx = right - bw;
+      doc.roundedRect(bx, ry, bw, bh, 3).lineWidth(1.2).strokeColor(d.badge.color).stroke();
+      write(d.badge.text, bx, ry + 6, 9.5, { bold: true, color: d.badge.color, width: bw, align: 'center' });
+      ry += bh + 4;
     }
-    d.summary.forEach(s => {
-      doc.fontSize(s.bold ? 11.5 : 10).font(s.bold ? 'Helvetica-Bold' : 'Helvetica').fillColor(s.bold ? C.ink : C.text);
-      doc.text(s.label, sumLabelX, sumY, { width: sumValueX - sumLabelX - 4 });
-      doc.text(s.value, sumValueX, sumY, { width: right - sumValueX, align: 'right' });
-      sumY += s.bold ? 18 : 16;
-    });
-    y = Math.max(bankY, sumY) + 6;
 
-    // ---------- AMOUNT IN WORDS ----------
-    doc.moveTo(margin, y).lineTo(right, y).strokeColor(C.line).lineWidth(0.7).stroke();
-    y += 7;
-    doc.fontSize(10.5).font('Helvetica-Bold').fillColor(C.ink)
-       .text('Total in Words: ' + d.amountWords, margin, y, { width: contentWidth, align: 'right' });
-    y = doc.y + 6;
-    doc.moveTo(margin, y).lineTo(right, y).strokeColor(C.line).lineWidth(0.7).stroke();
-    y += 16;
-
-    // ---------- FOOTER ----------
-    const hasPayment = d.qrCode || d.paymentLink || d.upiId;
-    if (y > pageHeight - 160) { doc.addPage(); y = margin; }
-    const footY = y;
-
-    // Left: Terms & Conditions
-    doc.fontSize(10.5).font('Helvetica-Bold').fillColor(C.ink).text('Terms & Conditions', margin, footY, { width: 200 });
-    let ty = footY + 16;
-    if (d.footerNote) {
-      doc.fontSize(9.5).font('Helvetica').fillColor(C.muted).text(d.footerNote, margin, ty, { width: 200 });
-      ty = doc.y + 4;
+    // The logo sits beside the business's name and address, not above them.
+    let textX = left;
+    let logoBottom = y;
+    const logo = this.decodeLogo(d.company.logo);
+    if (logo) {
+      try {
+        const img = doc.openImage(logo);
+        const scale = Math.min(110 / img.width, 64 / img.height);
+        doc.image(img, left, y, { width: img.width * scale, height: img.height * scale });
+        textX = left + img.width * scale + 14;
+        logoBottom = y + img.height * scale;
+      } catch (e) {
+        /* an unreadable logo is left off */
+      }
     }
-    doc.fontSize(9.5).font('Helvetica').fillColor(C.muted).text(d.terms, margin, ty, { width: 200 });
+    const textW = left + headL - textX;
+    let ly = write((d.company.name || 'Company').toUpperCase(), textX, y, S.company, { bold: true, color: C.ink, width: textW }) + 2;
+    // Phone and email share a line when it fits; so do GSTIN and PAN.
+    const pair = (a, b) => {
+      if (!a || !b) return [a || b];
+      style(S.detail);
+      return doc.widthOfString(a + '    ' + b) <= textW ? [a + '    ' + b] : [a, b];
+    };
+    const companyLines = [
+      ...(d.company.addressLines || []),
+      ...pair(d.company.phone && 'Phone: ' + d.company.phone, d.company.email && 'Email: ' + d.company.email),
+      ...pair(d.company.gstNumber && 'GSTIN: ' + d.company.gstNumber, d.company.panNumber && 'PAN: ' + d.company.panNumber)
+    ].filter(Boolean);
+    for (const line of companyLines) ly = write(line, textX, ly, S.detail, { width: textW });
 
-    // Middle: Payment (QR code + UPI + link)
-    if (hasPayment) {
-      const payX = margin + 215;
-      const payW = 150;
-      let payY = footY;
-      doc.fontSize(10.5).font('Helvetica-Bold').fillColor(C.ink).text('Payment', payX, payY, { width: payW });
-      payY += 16;
+    y = Math.max(ly, ry, logoBottom) + 10;
+    rule(y, C.ink, 1.2);
+    y += 12;
 
-      const qrBuf = this.decodeLogo(d.qrCode);
-      if (qrBuf) {
+    // ---------- BILL TO (left), NUMBER AND DATES (right) ----------
+    const metaW = 220;
+    const metaX = right - metaW;
+    const partyW = W - metaW - 24;
+    const billing = d.billingLines || [];
+    const shipping = d.shippingLines || [];
+    const shipDiffers = shipping.length > 0 && shipping.join('\n') !== billing.join('\n');
+    const partyCol = shipDiffers ? (partyW - 16) / 2 : partyW;
+
+    let py = label('Bill To', left, y, partyCol) + 3;
+    py = write(d.customer.name || 'N/A', left, py, S.party, { bold: true, color: C.ink, width: partyCol }) + 1;
+    for (const line of [...billing, ...(d.customer.lines || [])]) py = write(line, left, py, S.detail, { width: partyCol });
+    if (shipDiffers) {
+      const sx = left + partyCol + 16;
+      let sy = label('Ship To', sx, y, partyCol) + 3;
+      for (const line of shipping) sy = write(line, sx, sy, S.detail, { width: partyCol });
+      py = Math.max(py, sy);
+    }
+
+    let my = y;
+    const metaLabelW = 96;
+    for (const row of [{ label: d.numberLabel || 'Number', value: d.number }, ...(d.meta || [])]) {
+      const h = Math.max(measure(row.label, S.detail, metaLabelW), measure(row.value, S.meta, metaW - metaLabelW, true));
+      write(row.label, metaX, my + 0.5, S.detail, { color: C.muted, width: metaLabelW });
+      write(row.value, metaX + metaLabelW, my, S.meta, { bold: true, color: C.ink, width: metaW - metaLabelW, align: 'right' });
+      my += h + 4;
+    }
+    y = Math.max(py, my) + 14;
+
+    // ---------- ITEMS ----------
+    // Size and Area appear when a line is priced by area (6 × 4 ft, 24 sq ft
+    // each, 240 sq ft for 10 pieces); otherwise their width goes to Description.
+    const hasArea = d.items.some((it) => it.size || it.area);
+    const cols = hasArea
+      ? [{ key: 'sno', head: '#', w: 22 }, { key: 'desc', head: 'Item & Description' }, { key: 'size', head: 'Size (L × W)', w: 76 }, { key: 'area', head: 'Area', w: 62 }, { key: 'qty', head: 'Qty', w: 52 }, { key: 'rate', head: 'Rate', w: 70 }, { key: 'amount', head: 'Amount', w: 88 }]
+      : [{ key: 'sno', head: '#', w: 22 }, { key: 'desc', head: 'Item & Description' }, { key: 'qty', head: 'Qty', w: 76 }, { key: 'rate', head: 'Rate', w: 86 }, { key: 'amount', head: 'Amount', w: 96 }];
+    const fixedW = cols.reduce((sum, c) => sum + (c.w || 0), 0);
+    let cx = left;
+    for (const c of cols) {
+      c.w = c.w || W - fixedW;
+      c.x = cx;
+      c.align = c.key === 'sno' || c.key === 'desc' ? 'left' : 'right';
+      cx += c.w;
+    }
+    const PAD = 5;
+    const ROW_PAD = 5;
+    const TH_H = 22;
+    const cellsOf = (it, i) => ({
+      sno: [String(i + 1)],
+      desc: [it.description, it.sub],
+      size: [it.size || '–', it.sizeSub],
+      area: [it.area || '–'],
+      qty: [it.qty],
+      rate: [it.rate, it.rateSub],
+      amount: [it.amount]
+    });
+    const rowHeight = (cells) =>
+      Math.max(
+        ...cols.map((c) => {
+          const [main, sub] = cells[c.key];
+          const w = c.w - PAD * 2;
+          return measure(main || ' ', S.cell, w) + (sub ? 1.5 + measure(sub, S.sub, w) : 0);
+        })
+      ) + ROW_PAD * 2;
+    const tableHead = () => {
+      doc.rect(left, y, W, TH_H).fill(C.fill);
+      for (const c of cols) write(c.head, c.x + PAD, y + 6.5, S.th, { bold: true, color: C.ink, width: c.w - PAD * 2, align: c.align });
+      y += TH_H;
+    };
+    const drawRow = (cells, h) => {
+      for (const c of cols) {
+        const [main, sub] = cells[c.key];
+        const w = c.w - PAD * 2;
+        const under = write(main, c.x + PAD, y + ROW_PAD, S.cell, { width: w, align: c.align, color: C.ink });
+        if (sub) write(sub, c.x + PAD, under + 1.5, S.sub, { width: w, align: c.align, color: C.muted });
+      }
+      y += h;
+      rule(y, C.hair, 0.6);
+    };
+
+    const rows = d.items.map((it, i) => {
+      const cells = cellsOf(it, i);
+      return { cells, h: rowHeight(cells) };
+    });
+    // The heading never sits alone at the foot of a page.
+    if (rows.length && y + TH_H + rows[0].h > bottom) continuation();
+    tableHead();
+    let rowsOnPage = 0;
+    for (const row of rows) {
+      if (y + row.h > bottom && rowsOnPage > 0) {
+        continuation();
+        tableHead();
+        rowsOnPage = 0;
+      }
+      drawRow(row.cells, row.h);
+      rowsOnPage += 1;
+    }
+    rule(y, C.rule, 0.9);
+
+    // ---------- CLOSING BLOCK, in three columns kept together ----------
+    // Left: amount in words, bank details, terms. Middle: the payment QR and
+    // UPI ID. Right: the totals, then the signature. Side by side rather than
+    // stacked, so an invoice of a few described lines still fits one page.
+    const qr = this.decodeLogo(d.qrCode);
+    const hasPay = !!(qr || d.upiId || d.paymentLink);
+    const GAP = 18;
+    const sumW = 206;
+    const payW = hasPay ? QR : 0;
+    const sideW = W - sumW - GAP - (hasPay ? payW + GAP : 0);
+    const sumX = right - sumW;
+    const payX = left + sideW + GAP;
+    const SUM_ROW = 16;
+    const TOTAL_ROW = 26;
+    const SIGN_SPACE = 40;
+    const LABEL_H = 12 + 3;
+    const BLOCK_GAP = 14;
+
+    const BANK_LABELS = { 'Bank Name': 'Bank', 'Account Name': 'A/c Name', 'Account Number': 'A/c No.', 'IFSC Code': 'IFSC' };
+    const bank = (d.bankLines || []).map((line) => {
+      const at = line.indexOf(': ');
+      if (at < 0) return { label: '', value: line };
+      const name = line.slice(0, at);
+      return { label: BANK_LABELS[name] || name, value: line.slice(at + 2) };
+    });
+    const bankLabelW = 58;
+    const bankRowH = (r) => Math.max(measure(r.label, S.detail, bankLabelW), measure(r.value, S.detail, sideW - bankLabelW, true)) + 2;
+    const termsText = [d.footerNote, d.terms].filter(Boolean).join('\n');
+    const sideH =
+      LABEL_H + measure(d.amountWords, S.words, sideW, true) +
+      (bank.length ? BLOCK_GAP + LABEL_H + bank.reduce((h, r) => h + bankRowH(r), 0) : 0) +
+      (termsText ? BLOCK_GAP + LABEL_H + measure(termsText, S.terms, sideW) : 0);
+    // A UPI ID has no spaces to wrap at. It is set small enough to fit on one
+    // line (it may run into the gutter); one too long for that even at 8.5 pt
+    // goes onto two lines at its "@", never broken at an arbitrary letter.
+    const upiW = payW + GAP - 4;
+    let upiText = d.upiId || '';
+    let upiSize = 9.5;
+    if (upiText) {
+      const fit = (text) => {
+        style(9.5, true);
+        const widest = Math.max(...text.split('\n').map((part) => doc.widthOfString(part)));
+        return Math.min(9.5, (9.5 * upiW) / widest);
+      };
+      if (fit(upiText) < 8.5 && upiText.includes('@')) upiText = upiText.replace('@', '\n@');
+      upiSize = Math.max(8.5, fit(upiText));
+    }
+    const upiH = upiText ? measure('UPI ID', S.label, payW, true) + measure(upiText, upiSize, upiW, true) : 0;
+    const payH = hasPay ? LABEL_H + (qr ? QR + 4 : 0) + upiH + (d.paymentLink ? 2 + measure(d.paymentLink, 9, payW) : 0) : 0;
+    const signer = 'For ' + (d.company.name || 'Company');
+    const sumH =
+      d.summary.reduce((h, s) => h + (s.bold ? TOTAL_ROW + 4 : SUM_ROW), 0) +
+      22 + measure(signer, S.sign, sumW, true) + SIGN_SPACE + 4 + 13;
+
+    y += 12;
+    if (y + Math.max(sideH, payH, sumH) > bottom) continuation();
+    const blockTop = y;
+
+    // Right: totals, then the signature under them.
+    let sy = blockTop;
+    for (const s of d.summary) {
+      if (s.bold) {
+        sy += 2;
+        doc.rect(sumX, sy, sumW, TOTAL_ROW).fill(C.fill);
+        write(s.label, sumX + 8, sy + 6.5, S.total, { bold: true, color: C.ink, width: 70 });
+        write(s.value, sumX + 78, sy + 6.5, S.total, { bold: true, color: C.ink, width: sumW - 86, align: 'right' });
+        sy += TOTAL_ROW + 2;
+      } else {
+        const color = s.strong ? C.ink : C.text;
+        write(s.label, sumX + 8, sy, S.sum, { bold: !!s.strong, color, width: sumW * 0.5 - 8 });
+        write(s.value, sumX + sumW * 0.5, sy, S.sum, { bold: !!s.strong, color, width: sumW * 0.5 - 8, align: 'right' });
+        sy += SUM_ROW;
+      }
+    }
+    sy = write(signer, sumX, sy + 22, S.sign, { bold: true, color: C.ink, width: sumW, align: 'right' }) + SIGN_SPACE;
+    doc.moveTo(sumX + 30, sy).lineTo(right, sy).lineWidth(0.75).strokeColor(C.rule).stroke();
+    sy = write('Authorised Signatory', sumX, sy + 4, S.terms, { color: C.muted, width: sumW, align: 'right' });
+
+    // Middle: how to pay.
+    let qy = blockTop;
+    if (hasPay) {
+      qy = label(qr ? 'Scan to pay' : 'Payment', payX, qy, payW) + 3;
+      if (qr) {
         try {
-          doc.image(qrBuf, payX, payY, { fit: [72, 72] });
-          doc.fontSize(8.5).font('Helvetica').fillColor(C.muted).text('Scan to Pay', payX, payY + 74, { width: 72, align: 'center' });
-          payY += 88;
-        } catch (e) { /* ignore bad QR */ }
+          doc.image(qr, payX, qy, { fit: [QR, QR] });
+          qy += QR + 4;
+        } catch (e) {
+          /* an unreadable QR image is left off */
+        }
       }
       if (d.upiId) {
-        doc.fontSize(9.5).font('Helvetica').fillColor(C.text).text('UPI: ' + d.upiId, payX, payY, { width: payW });
-        payY = doc.y + 2;
+        qy = label('UPI ID', payX, qy, payW);
+        qy = write(upiText, payX, qy, upiSize, { bold: true, color: C.ink, width: upiW });
       }
-      if (d.paymentLink) {
-        doc.fontSize(9.5).font('Helvetica-Bold').fillColor(C.ink).text('Payment Link:', payX, payY, { width: payW });
-        payY = doc.y;
-        doc.fontSize(8.5).font('Helvetica').fillColor('#8b2fc9')
-           .text(d.paymentLink, payX, payY, { width: payW, link: d.paymentLink, underline: true });
-      }
+      if (d.paymentLink) qy = write(d.paymentLink, payX, qy + 2, 9, { color: '#1d4ed8', width: payW, link: d.paymentLink });
     }
 
-    // Right: signatory
-    const sigX = margin + 375;
-    doc.fontSize(10.5).font('Helvetica-Bold').fillColor(C.ink)
-       .text('For ' + (d.company.name || 'Company'), sigX, footY, { width: right - sigX, align: 'right' });
-    doc.fontSize(9.5).font('Helvetica').fillColor(C.muted)
-       .text('Authorised Signatory', sigX, footY + 60, { width: right - sigX, align: 'right' });
+    // Left: the amount in words, where to pay, and the terms.
+    let wy = label('Amount in words', left, blockTop, sideW) + 3;
+    wy = write(d.amountWords, left, wy, S.words, { bold: true, color: C.ink, width: sideW });
+    if (bank.length) {
+      wy = label('Bank details', left, wy + BLOCK_GAP, sideW) + 3;
+      for (const r of bank) {
+        const h = bankRowH(r);
+        write(r.label, left, wy, S.detail, { color: C.muted, width: bankLabelW });
+        write(r.value, left + bankLabelW, wy, S.detail, { bold: true, color: C.ink, width: sideW - bankLabelW });
+        wy += h;
+      }
+    }
+    if (termsText) {
+      wy = label('Terms & Conditions', left, wy + BLOCK_GAP, sideW) + 3;
+      wy = write(termsText, left, wy, S.terms, { width: sideW });
+    }
+    y = Math.max(sy, qy, wy);
+
+    // ---------- PAGE NUMBERS, once the page count is known ----------
+    if (doc.options.bufferPages) {
+      const range = doc.bufferedPageRange();
+      if (range.count > 1) {
+        for (let i = 0; i < range.count; i += 1) {
+          doc.switchToPage(range.start + i);
+          doc.page.margins.bottom = 0;
+          const fy = pageH - FOOTER;
+          rule(fy - 6, C.hair, 0.6);
+          write(`${docName} ${d.number}`, left, fy, S.footer, { color: C.muted, width: W / 2 });
+          write(`Page ${i + 1} of ${range.count}`, left + W / 2, fy, S.footer, { color: C.muted, width: W / 2, align: 'right' });
+        }
+      }
+    }
   }
 
   static numberToWords(num) {

@@ -38,7 +38,10 @@ app.use(cors({
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Portal-Session']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Portal-Session'],
+  // Lets the app read a file's name (Invoice_INV-2026-11-0041.pdf) from a
+  // download on another origin, instead of falling back to the record's id.
+  exposedHeaders: ['Content-Disposition']
 }));
 
 

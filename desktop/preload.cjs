@@ -13,5 +13,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('serpyDesktop', {
   isDesktop: true,
   platform: process.platform,
-  apiBaseUrl: ipcRenderer.sendSync('serpy:api-base')
+  apiBaseUrl: ipcRenderer.sendSync('serpy:api-base'),
+  // Opens a PDF (the invoice the app would download) in a print window.
+  printPdf: (bytes, title) => ipcRenderer.invoke('carbon:print-pdf', { bytes, title })
 });

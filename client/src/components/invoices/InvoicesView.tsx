@@ -1,19 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Download, Eye, FileText, IndianRupee, Pencil, Plus, Trash2 } from "lucide-react";
+import { Download, Eye, FileText, IndianRupee, Mail, MessageSquare, Pencil, Plus, Printer, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { PageShell } from "@/components/layout/PageShell";
 import { ConfirmDialog, DataCard, DataTable, EntityCell, MetricBar, Pagination, SearchField, Stack, StatusPill, Toolbar, ViewTabs, type Column } from "@/components/data";
 import { AdvancedCreateInvoiceDialog } from "@/components/invoices/AdvancedCreateInvoiceDialog";
-import { ViewInvoiceDialog } from "@/components/invoices/ViewInvoiceDialog";
+import { ViewInvoiceDialog, type InvoiceSendChannel } from "@/components/invoices/ViewInvoiceDialog";
 import { EditInvoiceDialog } from "@/components/invoices/EditInvoiceDialog";
 import { InvoicePaymentDialog } from "@/components/invoices/InvoicePaymentDialog";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useDebounced } from "@/hooks/useDebounced";
 import apiClient from "@/lib/apiClient";
+import { printOutcomeMessage } from "@/lib/printPdf";
 import { dueLabel, fmtDate, formatINR } from "@/lib/format";
 import { invoiceState, isInvoiceOverdue as isOverdue } from "@/lib/invoiceStatus";
 
@@ -86,6 +87,8 @@ export function InvoicesView() {
   const [page, setPage] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
   const [viewing, setViewing] = useState<InvoiceRow | null>(null);
+  // Set when the invoice was opened to send it: the view goes straight to that form.
+  const [sendVia, setSendVia] = useState<InvoiceSendChannel | null>(null);
   const [editing, setEditing] = useState<InvoiceRow | null>(null);
   const [paying, setPaying] = useState<InvoiceRow | null>(null);
   const [deleting, setDeleting] = useState<InvoiceRow | null>(null);
@@ -94,6 +97,8 @@ export function InvoicesView() {
   const canDelete = hasPermission("Invoicing: Delete");
   const canPay = hasPermission("Invoicing: Record Payment");
   const canPdf = hasPermission("Invoicing: Download PDF");
+  const canEmail = hasPermission("Invoicing: Send Email");
+  const canWhatsApp = hasPermission("WhatsApp: Send Messages");
 
   const loadStats = useCallback(async () => {
     try {
@@ -150,6 +155,21 @@ export function InvoicesView() {
     } catch (error) {
       toast({ title: "Download failed", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     }
+  };
+
+  // The same PDF as Download, straight to the print dialog (see lib/printPdf).
+  const print = async (i: InvoiceRow) => {
+    try {
+      const note = printOutcomeMessage(await apiClient.printInvoicePDF(i._id), i.invoiceNumber);
+      if (note) toast(note);
+    } catch (error) {
+      toast({ title: "Could not print", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+    }
+  };
+
+  const send = (i: InvoiceRow, channel: InvoiceSendChannel) => {
+    setSendVia(channel);
+    setViewing(i);
   };
 
   const remove = async () => {
@@ -302,12 +322,18 @@ export function InvoicesView() {
             rows={rows}
             rowKey={(i) => i._id}
             loading={loading}
-            onRowClick={(i) => setViewing(i)}
+            onRowClick={(i) => {
+              setSendVia(null);
+              setViewing(i);
+            }}
             actions={(i) => [
-              { label: "Open invoice", icon: Eye, onClick: () => setViewing(i) },
+              { label: "Open invoice", icon: Eye, onClick: () => { setSendVia(null); setViewing(i); } },
               { label: "Edit invoice", icon: Pencil, onClick: () => setEditing(i), hidden: !canCreate || i.status === "cancelled" },
               { label: "Update payment", icon: IndianRupee, onClick: () => setPaying(i), hidden: !canPay || ["draft", "cancelled"].includes(i.status) },
+              { label: "Print", icon: Printer, onClick: () => print(i), hidden: !canPdf, separated: true },
               { label: "Download PDF", icon: Download, onClick: () => download(i), hidden: !canPdf },
+              { label: "Send by email", icon: Mail, onClick: () => send(i, "email"), hidden: !canEmail },
+              { label: "Send on WhatsApp", icon: MessageSquare, onClick: () => send(i, "whatsapp"), hidden: !canWhatsApp },
               { label: "Delete invoice", icon: Trash2, destructive: true, separated: true, onClick: () => setDeleting(i), hidden: !canDelete }
             ]}
             actionsLabel={(i) => `Actions for ${i.invoiceNumber}`}
@@ -368,7 +394,17 @@ export function InvoicesView() {
       </div>
 
       <AdvancedCreateInvoiceDialog open={createOpen} onOpenChange={setCreateOpen} onInvoiceCreated={refresh} />
-      <ViewInvoiceDialog open={!!viewing} onOpenChange={(o) => !o && setViewing(null)} invoice={viewing as never} onInvoiceUpdated={refreshViewing} />
+      <ViewInvoiceDialog
+        open={!!viewing}
+        onOpenChange={(o) => {
+          if (o) return;
+          setViewing(null);
+          setSendVia(null);
+        }}
+        invoice={viewing as never}
+        sendVia={sendVia}
+        onInvoiceUpdated={refreshViewing}
+      />
       <EditInvoiceDialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)} invoice={editing as never} onInvoiceUpdated={refresh} />
       <InvoicePaymentDialog invoice={paying} onOpenChange={(o) => !o && setPaying(null)} onSaved={refresh} />
       <ConfirmDialog

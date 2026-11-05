@@ -240,6 +240,32 @@ if (!app.requestSingleInstanceLock()) {
     event.returnValue = apiBase;
   });
 
+  // Print: the renderer hands over an invoice PDF (the same file it downloads)
+  // and it opens in a window with Chromium's PDF viewer, whose Print button
+  // opens the system print dialog. The main window keeps the viewer off
+  // (plugins are disabled there), so it cannot print a PDF itself.
+  ipcMain.handle('carbon:print-pdf', async (event, { bytes, title } = {}) => {
+    const name = String(title || 'document').replace(/[^\w.-]+/g, '_').replace(/\.pdf$/i, '').slice(0, 80) || 'document';
+    const dir = await fs.promises.mkdtemp(path.join(app.getPath('temp'), 'carbon-print-'));
+    const file = path.join(dir, `${name}.pdf`);
+    await fs.promises.writeFile(file, Buffer.from(bytes));
+
+    const viewer = new BrowserWindow({
+      width: 900,
+      height: 1100,
+      title: name,
+      parent: BrowserWindow.fromWebContents(event.sender) || undefined,
+      autoHideMenuBar: true,
+      webPreferences: { plugins: true, sandbox: true, contextIsolation: true, nodeIntegration: false }
+    });
+    viewer.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    viewer.on('closed', () => {
+      fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
+    });
+    await viewer.loadURL(pathToFileURL(file).href);
+    return 'window';
+  });
+
   app.whenReady().then(async () => {
     registerAppProtocol();
     Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenu()));

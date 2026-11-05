@@ -10,6 +10,7 @@ import {
   Phone,
   Play,
   Plus,
+  Printer,
   Receipt,
   RotateCcw,
   Store,
@@ -47,6 +48,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useDebounced } from "@/hooks/useDebounced";
 import apiClient from "@/lib/apiClient";
+import { printOutcomeMessage } from "@/lib/printPdf";
 import { counterJobsApi, type CounterJob, type CounterListParams, type CounterListResponse, type CounterStats, type CounterStatus, type Operator } from "@/lib/api/walkIn";
 import { formatINR, plural } from "@/lib/format";
 
@@ -164,6 +166,18 @@ export default function WalkInJobs() {
     }
   };
 
+  // The counter bill straight to the printer: the same PDF as Download.
+  const printInvoice = async (job: CounterJob) => {
+    const id = job.billing?.invoice?._id;
+    if (!id) return;
+    try {
+      const note = printOutcomeMessage(await apiClient.printInvoicePDF(id), job.billing?.invoice?.invoiceNumber || "Invoice");
+      if (note) toast(note);
+    } catch (error) {
+      toast({ title: "Invoice could not be printed", description: errorText(error), variant: "destructive" });
+    }
+  };
+
   const primary = (job: CounterJob): PrimaryAction | null => {
     if (!canEdit) return null;
     const bill = { label: "Bill", icon: Receipt, run: () => setBilling(job), variant: "default" as const };
@@ -203,6 +217,7 @@ export default function WalkInJobs() {
       { label: "WhatsApp customer", icon: MessageCircle, onClick: () => window.open(readyWhatsAppLink(job, businessName), "_blank", "noopener,noreferrer"), hidden: s !== "ready", separated: true },
       { label: "Call customer", icon: Phone, onClick: () => window.location.assign(telLink(job.customerPhone)), separated: s !== "ready" },
       { label: "Assign operator", icon: UserRoundCog, onClick: () => setAssigning(job), hidden: !canEdit || !open },
+      { label: "Print invoice", icon: Printer, onClick: () => printInvoice(job), hidden: !canSeeInvoices || !job.billing?.invoice },
       { label: "Download invoice", icon: Download, onClick: () => downloadInvoice(job), hidden: !canSeeInvoices || !job.billing?.invoice },
       { label: "Cancel job", icon: Ban, destructive: true, separated: true, onClick: () => setCancelling(job), hidden: !canEdit || !open || billed },
       { label: "Delete", icon: Trash2, destructive: true, separated: !open || billed, onClick: () => setDeleting(job), hidden: !canEdit || billed }
