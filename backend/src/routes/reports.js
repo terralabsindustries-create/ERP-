@@ -20,17 +20,16 @@ const router = express.Router();
   their invoice permissions cover: their own, or the whole business for the
   admin and "view all staff data" logins.
 
-  Invoices are issued without GST now. The GST figures below only come from
-  invoices issued before that, so a past month can still be reported to the
-  accountant; for later months they are all 0.
+  Each line and the design charge carry their own GST rate. Invoices raised
+  while invoicing carried no GST (Oct–Nov 2026) simply report 0 tax.
 
   Figures:
-    totalRevenue     sum of invoice totals
-    taxableAmount    sum of net values (lines + design charge − discount)
+    totalRevenue     sum of invoice totals (including GST)
+    taxableAmount    sum of taxable values (lines + design charge − discount)
     totalDiscounts   sum of invoice-level discounts
-    totalTaxPayable  sum of CGST + SGST + IGST on older GST invoices
-    gstBreakdown     per GST rate: invoices containing that rate, line value
-                     and tax, from the invoice lines
+    totalTaxPayable  sum of CGST + SGST + IGST
+    gstBreakdown     per GST rate: invoices containing that rate, taxable
+                     value and tax, from the lines and the design charge
 */
 
 const STANDARD_RATES = [0, 5, 12, 18, 28, 40];
@@ -68,12 +67,37 @@ async function buildMonthlyReport(user, month) {
     ]),
     Invoice.aggregate([
       { $match: { ...base, noGst: { $ne: true } } },
-      { $unwind: '$items' },
+      // The design charge is taxed like a line, at its own rate.
+      {
+        $project: {
+          parts: {
+            $concatArrays: [
+              '$items',
+              {
+                $cond: [
+                  { $gt: [{ $ifNull: ['$designCharge', 0] }, 0] },
+                  [{
+                    gstRate: { $ifNull: ['$designChargeGstRate', 0] },
+                    taxableValue: { $ifNull: ['$designChargeTaxableValue', '$designCharge'] },
+                    cgstAmount: '$designChargeCgstAmount',
+                    sgstAmount: '$designChargeSgstAmount',
+                    igstAmount: '$designChargeIgstAmount'
+                  }],
+                  []
+                ]
+              }
+            ]
+          }
+        }
+      },
+      { $unwind: '$parts' },
       {
         $group: {
-          _id: { rate: '$items.gstRate', invoice: '$_id' },
-          amount: { $sum: '$items.totalAmount' },
-          tax: { $sum: { $add: [{ $ifNull: ['$items.cgstAmount', 0] }, { $ifNull: ['$items.sgstAmount', 0] }, { $ifNull: ['$items.igstAmount', 0] }] } }
+          _id: { rate: { $ifNull: ['$parts.gstRate', 0] }, invoice: '$_id' },
+          // A line's value after its share of the discount; older lines only
+          // have their value before it.
+          amount: { $sum: { $ifNull: ['$parts.taxableValue', '$parts.totalAmount'] } },
+          tax: { $sum: { $add: [{ $ifNull: ['$parts.cgstAmount', 0] }, { $ifNull: ['$parts.sgstAmount', 0] }, { $ifNull: ['$parts.igstAmount', 0] }] } }
         }
       },
       { $group: { _id: '$_id.rate', count: { $sum: 1 }, amount: { $sum: '$amount' }, tax: { $sum: '$tax' } } }
@@ -123,14 +147,14 @@ function reportCsv(report, notes) {
     [],
     ['Summary'],
     ['Invoices', report.totalInvoices],
-    ['Net value', report.taxableAmount],
+    ['Taxable value', report.taxableAmount],
     ['Discounts', report.totalDiscounts],
-    ...(hasGst ? [['GST on older invoices', report.totalTaxPayable]] : []),
+    ...(hasGst ? [['GST', report.totalTaxPayable]] : []),
     ['Total invoiced', report.totalRevenue],
     ...(hasGst
       ? [
           [],
-          ['GST rate (older invoices)', 'Invoices', 'Taxable value', 'GST'],
+          ['GST rate', 'Invoices', 'Taxable value', 'GST'],
           ...Object.entries(report.gstBreakdown).map(([k, s]) => [`${k.replace('gst', '')}%`, s.count, s.amount, s.tax]),
           [],
           ['CGST', report.cgstAmount],
@@ -344,9 +368,9 @@ router.post('/revenue/email', protect, requirePermission('Reports: Export'), [
       message,
       '',
       `Invoices: ${report.totalInvoices}`,
-      `Net value: ${money(report.taxableAmount)}`,
+      `Taxable value: ${money(report.taxableAmount)}`,
       report.totalTaxPayable > 0
-        ? `GST on older invoices: ${money(report.totalTaxPayable)} (CGST ${money(report.cgstAmount)}, SGST ${money(report.sgstAmount)}, IGST ${money(report.igstAmount)})`
+        ? `GST: ${money(report.totalTaxPayable)} (CGST ${money(report.cgstAmount)}, SGST ${money(report.sgstAmount)}, IGST ${money(report.igstAmount)})`
         : '',
       `Total invoiced: ${money(report.totalRevenue)}`,
       report.excludedNoGst.count ? `Older No GST bills not included: ${report.excludedNoGst.count} (${money(report.excludedNoGst.amount)})` : '',

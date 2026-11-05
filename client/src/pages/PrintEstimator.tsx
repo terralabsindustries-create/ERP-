@@ -330,6 +330,7 @@ export default function PrintEstimator() {
           quantity: input.quantity,
           unit: "pieces",
           unit_price: quotedRate,
+          tax_rate: input.gstPercent,
         },
       ];
 
@@ -629,7 +630,7 @@ export default function PrintEstimator() {
                 )}
                 {hasPermission("Quotations: Create & Edit") && !result.error && (
                   <p className="col-span-2 -mt-0.5 text-center text-[11px] text-muted-foreground">
-                    Quoted at ₹{quotedRate.toFixed(2)}/pc × {input.quantity.toLocaleString("en-IN")} pcs (quotations carry no GST)
+                    Quoted at ₹{quotedRate.toFixed(2)}/pc × {input.quantity.toLocaleString("en-IN")} pcs + {input.gstPercent}% GST
                   </p>
                 )}
                 <Button variant="outline" className="gap-1.5" onClick={copySummary} disabled={!!result.error}>

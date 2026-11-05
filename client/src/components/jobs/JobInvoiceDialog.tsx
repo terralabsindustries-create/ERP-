@@ -22,8 +22,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
 import { Receipt } from "lucide-react";
-import { lineDraftFrom, lineInput } from "@/components/billing/lineDraft";
-import { describeArea, documentTotals, priceLine } from "@/lib/billing";
+import { Checkbox } from "@/components/ui/checkbox";
+import { draftTotals, lineDraftFromJobItem, lineInput } from "@/components/billing/lineDraft";
+import { describeArea, gstByRate, priceLine } from "@/lib/billing";
 import { formatINR } from "@/lib/format";
 
 interface JobInvoiceDialogProps {
@@ -43,15 +44,19 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
     payment_terms: "Immediate",
     notes: "",
     po_reference: "",
-    terms_conditions: ""
+    terms_conditions: "",
+    isInterState: false
   });
 
   // The job's lines as the invoice will price them (lib/billing.ts, the same
-  // as the server): area lines are length × width × pieces × rate. The design
-  // charge comes across before tax; invoices carry no GST.
-  const lines = (job.items || []).map((item: any, i: number) => lineInput(lineDraftFrom(i, item)));
+  // as the server): prices before tax, each at the job ticket's GST rate, and
+  // the design charge at its own — so the invoice total is the job ticket's.
+  const drafts = (job.items || []).map((item: any, i: number) => lineDraftFromJobItem(i, item));
+  const lines = drafts.map(lineInput);
   const designCharge = job.designCharge?.amount || 0;
-  const totals = documentTotals(lines.map((l: ReturnType<typeof lineInput>) => priceLine(l).amount), designCharge);
+  const designChargeGstRate = designCharge > 0 ? job.designCharge?.gstRate || 0 : 0;
+  const totals = draftTotals(drafts, { amount: designCharge, gstRate: designChargeGstRate }, 0, formData.isInterState);
+  const rates = gstByRate([...totals.lines, totals.design]);
 
   // Fetch customers when dialog opens
   const fetchCustomers = async () => {
@@ -102,6 +107,8 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
         customerId: formData.customer_id,
         items: items,
         designCharge,
+        designChargeGstRate,
+        isInterState: formData.isInterState,
         paymentTerms: formData.payment_terms,
         notes: [formData.notes, formData.po_reference ? `PO: ${formData.po_reference}` : ''].filter(Boolean).join('\n'),
         termsAndConditions: formData.terms_conditions
@@ -280,6 +287,7 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
                             <div className="font-medium">{item.itemName}</div>
                             <div className="text-xs text-muted-foreground">
                               {area ? `${area} × ${formatINR(line.unitPrice)}` : `Qty: ${line.quantity} × ${formatINR(line.unitPrice)}`}
+                              {` · GST ${line.gstRate}%`}
                             </div>
                           </div>
                           <div className="text-right font-medium">{formatINR(priceLine(line).amount)}</div>
@@ -300,12 +308,39 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
                 </div>
                 {designCharge > 0 && (
                   <div className="flex justify-between text-sm">
-                    <span>Design charge:</span>
+                    <span>Design charge (GST {designChargeGstRate}%):</span>
                     <span>{formatINR(designCharge)}</span>
                   </div>
                 )}
+                <div className="flex justify-between text-sm">
+                  <span>Taxable amount:</span>
+                  <span>{formatINR(totals.taxableAmount)}</span>
+                </div>
+                {rates.map((r) =>
+                  formData.isInterState ? (
+                    <div key={r.rate} className="flex justify-between text-sm">
+                      <span>IGST @ {r.rate}%:</span>
+                      <span>{formatINR(r.igst)}</span>
+                    </div>
+                  ) : (
+                    <div key={r.rate} className="flex justify-between text-sm">
+                      <span>CGST + SGST @ {r.rate / 2}% + {r.rate / 2}%:</span>
+                      <span>{formatINR(r.gst)}</span>
+                    </div>
+                  )
+                )}
+                <div className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    id="job-invoice-interstate"
+                    checked={formData.isInterState}
+                    onCheckedChange={(v) => setFormData((prev) => ({ ...prev, isInterState: v === true }))}
+                  />
+                  <Label htmlFor="job-invoice-interstate" className="font-normal text-muted-foreground">
+                    Supply to another state (IGST)
+                  </Label>
+                </div>
                 <div className="flex justify-between font-semibold text-base pt-2 border-t">
-                  <span>Total:</span>
+                  <span>Total (incl. GST):</span>
                   <span className="text-success-strong">{formatINR(totals.total)}</span>
                 </div>
               </div>

@@ -5,22 +5,8 @@ process.env.TZ = process.env.TZ || 'Asia/Kolkata';
 const mongoose = require('mongoose');
 const app = require('./app');
 
-// Database connection
-let mongoUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/print_arts_flow';
-// Force IPv4 connection by replacing localhost with 127.0.0.1
-mongoUri = mongoUri.replace('localhost', '127.0.0.1');
-mongoose.connect(mongoUri)
-  .then(() => {
-    console.log('✅ MongoDB connected successfully');
-    // Starter roles from an older release pick up what the current one adds.
-    require('./utils/upgradePresetRoles').upgradePresetRoles()
-      .then(({ upgraded }) => upgraded && console.log(`🔐 Updated ${upgraded} starter role(s) to the current permissions`))
-      .catch((err) => console.error('Starter role upgrade failed:', err.message));
-  })
-  .catch(err => {
-    console.error('❌ MongoDB connection error:', err);
-    process.exit(1);
-  });
+// Database connection is awaited in startServer below. Listening before it
+// resolves lets login queries sit in Mongoose's buffer and time out.
 
 // Auto-check for overdue invoices and send reminders (runs every hour)
 const PaymentReminder = require('./models/PaymentReminder');
@@ -97,9 +83,6 @@ async function autoCheckPaymentReminders() {
 }
 
 // Run auto-check every hour (3600000ms)
-setInterval(autoCheckPaymentReminders, 3600000);
-// Also run once after a short delay on startup
-setTimeout(autoCheckPaymentReminders, 30000);
 
 const PORT = process.env.PORT || 4001;
 
@@ -109,14 +92,38 @@ const PORT = process.env.PORT || 4001;
 const maskSecret = (value) =>
   !value ? '❌ MISSING' : `✅ set (${value.length} chars, ends ${value.slice(-4)})`;
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log('🔧 Integration config loaded from .env:');
-  console.log(`   FACEBOOK_APP_ID     ${process.env.FACEBOOK_APP_ID || '❌ MISSING'}`);
-  console.log(`   FACEBOOK_APP_SECRET ${maskSecret(process.env.FACEBOOK_APP_SECRET)}`);
-  console.log(`   EMAIL_USER          ${process.env.EMAIL_USER || '❌ MISSING'}`);
-  console.log(`   MONGODB_URI         ${process.env.MONGODB_URI ? '✅ set' : '❌ MISSING'}`);
-});
+async function startServer() {
+  const mongoUri = (process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/print_arts_flow')
+    .replace('localhost', '127.0.0.1');
+  try {
+    await mongoose.connect(mongoUri, { serverSelectionTimeoutMS: 15000 });
+    console.log('✅ MongoDB connected successfully');
+  } catch (error) {
+    console.error('❌ MongoDB connection failed:', error.message);
+    process.exitCode = 1;
+    return;
+  }
+
+  // Starter roles from an older release pick up what the current one adds.
+  require('./utils/upgradePresetRoles').upgradePresetRoles()
+    .then(({ upgraded }) => upgraded && console.log(`🔐 Updated ${upgraded} starter role(s) to the current permissions`))
+    .catch((err) => console.error('Starter role upgrade failed:', err.message));
+
+  setInterval(autoCheckPaymentReminders, 3600000);
+  setTimeout(autoCheckPaymentReminders, 30000);
+
+  return app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log('🔧 Integration config loaded from .env:');
+    console.log(`   FACEBOOK_APP_ID     ${process.env.FACEBOOK_APP_ID || '❌ MISSING'}`);
+    console.log(`   FACEBOOK_APP_SECRET ${maskSecret(process.env.FACEBOOK_APP_SECRET)}`);
+    console.log(`   EMAIL_USER          ${process.env.EMAIL_USER || '❌ MISSING'}`);
+    console.log(`   MONGODB_URI         ${process.env.MONGODB_URI ? '✅ set' : '❌ MISSING'}`);
+  });
+}
+
+if (require.main === module) startServer();
 
 module.exports = app;
+module.exports.startServer = startServer;

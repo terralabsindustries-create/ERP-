@@ -1,7 +1,7 @@
 /**
- * Invoices and quotations without GST: dimensions and the design charge on
- * create and edit, quotation → invoice conversion, the PDF contents, and the
- * design charge report.
+ * Invoices and quotations: dimensions, the design charge and GST on create and
+ * edit, quotation → invoice conversion, the PDF contents, and the design
+ * charge report. The job ticket → invoice flow has its own file.
  */
 const request = require('supertest');
 const app = require('../src/app');
@@ -36,7 +36,7 @@ afterAll(disconnectTestDb);
 describe('creating an invoice', () => {
   let invoice;
 
-  test('prices dimension lines by area × quantity, adds the design charge, and charges no GST', async () => {
+  test('prices dimension lines by area × quantity, adds the design charge, and charges GST on the discounted value', async () => {
     const res = await admin().post('/api/invoices', {
       customerId: String(cust._id),
       items: [{ ...flexLine, gstRate: 18, hsnCode: '4911' }, { ...cardLine, gstRate: 12 }],
@@ -50,27 +50,37 @@ describe('creating an invoice', () => {
     });
     expect(res.status).toBe(201);
     invoice = res.body.data.invoice;
+    // 3,630 − 30 = 3,600 taxable; the discount is shared 23.80 / 2.07 / 4.13.
+    // 18% of 2,856.20 = 514.12 and 12% of 247.93 = 29.75, all IGST.
     expect(invoice).toMatchObject({
       subtotal: 3130,
       designCharge: 500,
       discountAmount: 30,
       taxableAmount: 3600,
-      totalGstAmount: 0,
+      totalGstAmount: 543.87,
       totalCgstAmount: 0,
-      totalIgstAmount: 0,
-      totalAmount: 3600,
-      balanceAmount: 3600,
-      isInterState: false,
+      totalSgstAmount: 0,
+      totalIgstAmount: 543.87,
+      totalAmount: 4143.87,
+      balanceAmount: 4143.87,
+      isInterState: true,
       noGst: false
     });
-    expect(invoice.items[0]).toMatchObject({ unit: 'sqft', itemType: 'Square Feet', length: 6, width: 4, areaPerPiece: 24, totalSquareFeet: 240, quantity: 10, unitPrice: 12, totalAmount: 2880, gstRate: 0, gstAmount: 0, hsnCode: '4911' });
-    expect(invoice.items[1]).toMatchObject({ itemType: 'Numbers', quantity: 100, totalAmount: 250, gstRate: 0 });
+    expect(invoice.items[0]).toMatchObject({ unit: 'sqft', itemType: 'Square Feet', length: 6, width: 4, areaPerPiece: 24, totalSquareFeet: 240, quantity: 10, unitPrice: 12, totalAmount: 2880, taxableValue: 2856.2, gstRate: 18, gstAmount: 514.12, igstAmount: 514.12, hsnCode: '4911' });
+    expect(invoice.items[1]).toMatchObject({ itemType: 'Numbers', quantity: 100, totalAmount: 250, taxableValue: 247.93, gstRate: 12, gstAmount: 29.75 });
   });
 
-  test("takes a job ticket's design charge object, using its amount before tax", async () => {
+  test("takes a job ticket's design charge object with its GST rate", async () => {
     const res = await admin().post('/api/invoices', { customerId: String(cust._id), items: [cardLine], designCharge: { amount: 750, gstRate: 18, totalAmount: 885 } });
     expect(res.status).toBe(201);
-    expect(res.body.data.invoice).toMatchObject({ designCharge: 750, totalAmount: 1000 });
+    expect(res.body.data.invoice).toMatchObject({ designCharge: 750, designChargeGstRate: 18, designChargeGstAmount: 135, totalGstAmount: 135, totalAmount: 1135 });
+  });
+
+  test('refuses a GST rate outside 0–100%', async () => {
+    const res = await admin().post('/api/invoices', { customerId: String(cust._id), items: [{ ...cardLine, gstRate: 118 }] });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/GST rate/);
+    expect((await admin().post('/api/invoices', { customerId: String(cust._id), items: [cardLine], designCharge: 10, designChargeGstRate: -5 })).status).toBe(400);
   });
 
   test('refuses a negative design charge and a discount larger than the invoice', async () => {
@@ -95,15 +105,20 @@ describe('creating an invoice', () => {
     expect((await request(app).patch(`/api/invoices/${invoice._id}/no-gst`).set(auth(org.tokens.admin)).send({ noGst: true })).status).toBe(404);
   });
 
-  test('the PDF shows the size, area, pieces and rate per sq ft, and the design charge as its own line', async () => {
+  test('the PDF shows the size, area, pieces and rate per sq ft, the design charge, and the GST by rate', async () => {
     const stored = await Invoice.findById(invoice._id);
     const d = PDFService.invoiceDocument(stored.toObject({ virtuals: true }), company);
-    // The line's note and its HSN code print under the item name.
-    expect(d.items[0]).toMatchObject({ description: 'Flex banner', sub: 'Star flex, eyelets\nHSN: 4911', size: '6 × 4 ft', sizeSub: '24 sq ft each', area: '240 sq ft', qty: '10', rate: '12.00', rateSub: 'per sq ft', amount: '2,880.00' });
-    expect(d.items[1]).toMatchObject({ size: '', area: '', qty: '100', amount: '250.00' });
-    expect(d.summary.map((s) => s.label)).toEqual(['Subtotal', 'Design Charge', 'Discount', 'Total']);
-    expect(d.summary.find((s) => s.label === 'Design Charge').value).toBe('INR 500.00');
-    expect(d.summary.find((s) => s.label === 'Total').value).toBe('INR 3,600.00');
+    // The line's note, HSN code and GST rate print under the item name.
+    expect(d.items[0]).toMatchObject({ description: 'Flex banner', sub: 'Star flex, eyelets\nHSN: 4911 · GST 18%', size: '6 × 4 ft', sizeSub: '24 sq ft each', area: '240 sq ft', qty: '10', rate: '12.00', rateSub: 'per sq ft', amount: '2,880.00' });
+    expect(d.items[1]).toMatchObject({ sub: 'GST 12%', size: '', area: '', qty: '100', amount: '250.00' });
+    expect(d.summary.map((s) => s.label)).toEqual(['Subtotal', 'Design Charge', 'Discount', 'Taxable Amount', 'IGST @ 12%', 'IGST @ 18%', 'Total GST', 'Total']);
+    const value = (label) => d.summary.find((s) => s.label === label).value;
+    expect(value('Design Charge')).toBe('INR 500.00');
+    expect(value('Taxable Amount')).toBe('INR 3,600.00');
+    expect(value('IGST @ 18%')).toBe('INR 514.12');
+    expect(value('Total GST')).toBe('INR 543.87');
+    expect(value('Total')).toBe('INR 4,143.87');
+    expect(d.amountWords).toMatch(/Four Thousand One Hundred Forty Three/i);
 
     const pdf = await PDFService.generateInvoicePDF(stored, company);
     expect(pdf.subarray(0, 4).toString()).toBe('%PDF');
@@ -152,7 +167,7 @@ describe('editing an invoice', () => {
   });
 });
 
-describe('invoices issued with GST before it was removed', () => {
+describe('invoices issued with GST before October 2026', () => {
   let legacy;
   beforeAll(async () => {
     legacy = await make.invoice(org.admin, cust, { lines: [{ amount: 1000, rate: 18 }] });
@@ -164,23 +179,24 @@ describe('invoices issued with GST before it was removed', () => {
     const after = await Invoice.findById(legacy._id);
     expect(after).toMatchObject({ totalGstAmount: 180, totalAmount: 1180, balanceAmount: 1000 });
     const d = PDFService.invoiceDocument(after.toObject({ virtuals: true }), company);
-    expect(d.summary.find((s) => s.label === 'GST').value).toBe('INR 180.00');
+    expect(d.summary.find((s) => s.label === 'CGST @ 9%').value).toBe('INR 90.00');
+    expect(d.summary.find((s) => s.label === 'SGST @ 9%').value).toBe('INR 90.00');
     expect(d.items[0].amount).toBe('1,000.00');
   });
 
-  test('a notes-only edit keeps the GST; re-pricing the lines drops it', async () => {
+  test('a notes-only edit keeps the GST, and so does re-pricing a line at its rate', async () => {
     const notes = await admin().put(`/api/invoices/${legacy._id}`, { notes: 'Checked' });
     expect(notes.body.data.invoice.totalAmount).toBe(1180);
-    const repriced = await admin().put(`/api/invoices/${legacy._id}`, { items: [{ itemName: 'Line 1', quantity: 1, unitPrice: 1000 }] });
+    const repriced = await admin().put(`/api/invoices/${legacy._id}`, { items: [{ itemName: 'Line 1', quantity: 1, unitPrice: 1000, gstRate: 18 }] });
     expect(repriced.status).toBe(200);
-    expect(repriced.body.data.invoice).toMatchObject({ totalGstAmount: 0, totalCgstAmount: 0, totalAmount: 1000, balanceAmount: 820 });
+    expect(repriced.body.data.invoice).toMatchObject({ totalGstAmount: 180, totalCgstAmount: 90, totalSgstAmount: 90, totalAmount: 1180, balanceAmount: 1000 });
   });
 });
 
 describe('quotations', () => {
   let quotation;
 
-  test('are priced like invoices: area × quantity, a separate design charge, no GST', async () => {
+  test('are priced like invoices: area × quantity, a separate design charge, GST per line', async () => {
     const res = await admin().post('/api/quotations', {
       customer_id: String(cust._id),
       gst_type: 'gst',
@@ -193,8 +209,10 @@ describe('quotations', () => {
     });
     expect(res.status).toBe(201);
     quotation = res.body.data.quotation;
-    expect(quotation).toMatchObject({ gst_type: 'non_gst', subtotal: 3780, design_charge: 600, tax_amount: 0, total_amount: 4380 });
-    expect(quotation.items[0]).toMatchObject({ length: 6, width: 4, area_per_piece: 24, total_area: 240, total_amount: 2880, tax_rate: 0, tax_amount: 0 });
+    // 18% of 2,880 on the flex, interstate: IGST 518.40.
+    expect(quotation).toMatchObject({ gst_type: 'gst', is_interstate: true, subtotal: 3780, design_charge: 600, tax_amount: 518.4, igst_amount: 518.4, cgst_amount: 0, total_amount: 4898.4 });
+    expect(quotation.items[0]).toMatchObject({ length: 6, width: 4, area_per_piece: 24, total_area: 240, total_amount: 3398.4, tax_rate: 18, tax_amount: 518.4 });
+    expect(quotation.items[1]).toMatchObject({ total_amount: 900, tax_rate: 0, tax_amount: 0 });
   });
 
   test('refuse a negative design charge', async () => {
@@ -206,19 +224,20 @@ describe('quotations', () => {
     const stored = await Quotation.findById(quotation._id).populate('customer_id');
     const d = PDFService.quotationDocument(stored, company);
     expect(d.items[0]).toMatchObject({ size: '6 × 4 ft', sizeSub: '24 sq ft each', area: '240 sq ft', qty: '10', rateSub: 'per sq ft', amount: '2,880.00' });
-    expect(d.summary.map((s) => s.label)).toEqual(['Subtotal', 'Design Charge', 'Total']);
+    expect(d.summary.map((s) => s.label)).toEqual(['Subtotal', 'Design Charge', 'Taxable Amount', 'IGST @ 18%', 'Total']);
+    expect(d.summary.find((s) => s.label === 'Total').value).toBe('INR 4,898.40');
     expect(d.customer.lines.join(' ')).not.toMatch(/GST:|Non-GST/);
     const pdf = await PDFService.generateQuotationPDF(stored, company);
     expect(pdf.subarray(0, 4).toString()).toBe('%PDF');
   });
 
-  test('convert to an invoice with the same lines, dimensions, design charge and total', async () => {
+  test('convert to an invoice with the same lines, dimensions, design charge, GST and total', async () => {
     const res = await admin().post(`/api/quotations/${quotation._id}/convert-to-invoice`, {});
     expect(res.status).toBe(201);
     const inv = res.body.data.invoice;
-    expect(inv).toMatchObject({ designCharge: 600, subtotal: 3780, totalAmount: 4380, totalGstAmount: 0, status: 'draft', noGst: false });
+    expect(inv).toMatchObject({ designCharge: 600, subtotal: 3780, totalGstAmount: 518.4, totalIgstAmount: 518.4, totalAmount: 4898.4, isInterState: true, status: 'draft', noGst: false });
     expect(inv.items).toHaveLength(2);
-    expect(inv.items[0]).toMatchObject({ itemName: 'Flex banner', description: 'Star flex', unit: 'sqft', itemType: 'Square Feet', length: 6, width: 4, areaPerPiece: 24, totalSquareFeet: 240, quantity: 10, unitPrice: 12, totalAmount: 2880 });
+    expect(inv.items[0]).toMatchObject({ itemName: 'Flex banner', description: 'Star flex', unit: 'sqft', itemType: 'Square Feet', length: 6, width: 4, areaPerPiece: 24, totalSquareFeet: 240, quantity: 10, unitPrice: 12, totalAmount: 2880, gstRate: 18, gstAmount: 518.4 });
     expect(inv.items[1]).toMatchObject({ itemName: 'Standee', quantity: 2, totalAmount: 900 });
     expect(res.body.data.quotation).toMatchObject({ status: 'converted', convertedInvoiceNumber: inv.invoiceNumber });
 
@@ -226,7 +245,7 @@ describe('quotations', () => {
     expect(again.status).toBe(409);
   });
 
-  test('one written with GST converts at its prices before tax', async () => {
+  test('one written with GST before October 2026 converts with its GST', async () => {
     const old = await Quotation.create({
       quotationNumber: 'QUO-OLD-1',
       customer_id: cust._id,
@@ -241,11 +260,11 @@ describe('quotations', () => {
     });
     const d = PDFService.quotationDocument(old, company);
     expect(d.items[0].amount).toBe('1,000.00');
-    expect(d.summary.find((s) => s.label === 'GST').value).toBe('INR 180.00');
+    expect(d.summary.find((s) => s.label === 'CGST @ 9%').value).toBe('INR 90.00');
 
     const res = await admin().post(`/api/quotations/${old._id}/convert-to-invoice`, {});
     expect(res.status).toBe(201);
-    expect(res.body.data.invoice).toMatchObject({ subtotal: 1000, designCharge: 0, totalGstAmount: 0, totalAmount: 1000 });
+    expect(res.body.data.invoice).toMatchObject({ subtotal: 1000, designCharge: 0, totalGstAmount: 180, totalCgstAmount: 90, totalAmount: 1180 });
   });
 });
 

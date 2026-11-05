@@ -10,7 +10,8 @@ const PER_UNIT = UNITS_OF_MEASUREMENT.filter((u) => !isAreaUnit(u.value));
 
 /**
  * The pricing half of a line: per unit (quantity, unit, rate) or by area
- * (length × width in ft or m, pieces, rate per sq ft / sq m), and the amount.
+ * (length × width in ft or m, pieces, rate per sq ft / sq m), the GST %, and
+ * the amount before GST.
  * Item name and description stay with each dialog, which has its own
  * inventory picker.
  */
@@ -25,7 +26,7 @@ export function LinePricingFields({ line, onChange, idPrefix }: { line: LineDraf
 
   return (
     <div className="space-y-2">
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6 lg:items-end">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-7 lg:items-end">
         <div className="col-span-2 space-y-1 sm:col-span-1 lg:col-span-1">
           <Label htmlFor={id("pricing")} className="text-xs">
             Priced
@@ -97,8 +98,14 @@ export function LinePricingFields({ line, onChange, idPrefix }: { line: LineDraf
           </Label>
           <Input id={id("rate")} type="number" inputMode="decimal" min="0" step="0.01" value={line.unitPrice} placeholder="0.00" onChange={(e) => onChange({ unitPrice: e.target.value })} />
         </div>
+        <div className="space-y-1">
+          <Label htmlFor={id("gst")} className="text-xs">
+            GST %
+          </Label>
+          <Input id={id("gst")} type="number" inputMode="decimal" min="0" max="100" step="any" value={line.gstRate} placeholder="18" onChange={(e) => onChange({ gstRate: e.target.value })} />
+        </div>
         <div className="space-y-1 text-right">
-          <span className="block text-xs text-muted-foreground">Amount</span>
+          <span className="block text-xs text-muted-foreground">Amount (excl. GST)</span>
           <span className="num block py-2 text-sm font-medium">{formatINR(amount)}</span>
         </div>
       </div>

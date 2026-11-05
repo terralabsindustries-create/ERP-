@@ -13,10 +13,10 @@ const PDFService = require('../services/PDFService');
 const InventoryService = require('../services/InventoryService');
 const { protect } = require('../middleware/auth');
 const { requirePermission, userCan } = require('../middleware/requirePermission');
-const { round2, parseDesignCharge, documentTotals, toInvoiceLine, HSN_PATTERN } = require('../utils/billing');
+const { parseDesignCharge, parseGstRate, priceInvoiceDocument, HSN_PATTERN } = require('../utils/billing');
 
-// Invoices are issued without GST. Bills marked "No GST" before that stay
-// visible only to logins granted "Invoicing (View No GST)".
+// Bills marked "No GST" stay visible only to logins granted
+// "Invoicing (View No GST)".
 const noGstVisibility = (user) => (userCan(user, 'Invoicing (View No GST)') ? {} : { noGst: { $ne: true } });
 const { staffScopeQuery } = require('../utils/dataScopeHelper');
 const { sendWhatsAppMessage, buildTemplateVariables } = require('../utils/metaWhatsApp');
@@ -106,8 +106,12 @@ const lineValidation = [
   body('items.*.unit').optional({ values: 'falsy' }).isIn(INVOICE_UNITS).withMessage('Invalid unit'),
   body('items.*.length').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Length cannot be negative'),
   body('items.*.width').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Width cannot be negative'),
+  body('items.*.gstRate').optional({ values: 'null' }).custom((v) => parseGstRate(v) !== null).withMessage('GST rate must be from 0 to 100%'),
   body('designCharge').optional({ values: 'falsy' }).custom((v) => parseDesignCharge(v) !== null).withMessage('Design charge must be an amount of 0 or more'),
-  body('discountAmount').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Discount cannot be negative')
+  body('designCharge.gstRate').optional({ values: 'null' }).custom((v) => parseGstRate(v) !== null).withMessage('The design charge GST rate must be from 0 to 100%'),
+  body('designChargeGstRate').optional({ values: 'null' }).custom((v) => parseGstRate(v) !== null).withMessage('The design charge GST rate must be from 0 to 100%'),
+  body('discountAmount').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Discount cannot be negative'),
+  body('isInterState').optional({ values: 'null' }).isBoolean().withMessage('isInterState must be true or false')
 ];
 const invoiceValidation = [
   body('customerId').notEmpty().withMessage('Customer ID is required'),
@@ -122,18 +126,11 @@ const invoiceValidation = [
 const idOf = (value) => (value && typeof value === 'object' ? value._id || value.id : value);
 
 /**
- * Lines, design charge and discount → the stored lines and the totals the
- * Invoice pre-save hook will arrive at. Returns { error } when the discount is
- * more than the invoice.
+ * Lines (with their GST rates), design charge and discount → the stored lines,
+ * the design charge's tax and the totals the Invoice pre-save hook will arrive
+ * at. See utils/billing.js priceInvoiceDocument.
  */
-function priceInvoice(items, designChargeInput, discountInput) {
-  const lines = items.map(toInvoiceLine);
-  const totals = documentTotals(lines.map((l) => l.totalAmount), parseDesignCharge(designChargeInput) || 0, discountInput);
-  if (totals.discount > totals.gross) {
-    return { error: `Discount (${totals.discount}) cannot be more than the invoice value (${totals.gross}).` };
-  }
-  return { lines, totals };
-}
+const priceInvoice = (input) => priceInvoiceDocument(input);
 
 // @route   GET /api/invoices
 // @desc    Get all invoices for the authenticated user
@@ -310,14 +307,22 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
       req.body.dueDate = defaultDueDate.toISOString().split('T')[0];
     }
 
-    // Every money figure is recomputed here from quantity, dimensions and unit
-    // price. The client sends its own totals for display, but they are never
-    // trusted, and no GST is charged whatever rate a line arrives with.
-    const priced = priceInvoice(req.body.items, req.body.designCharge, req.body.discountAmount);
+    // Every money figure is recomputed here from quantity, dimensions, unit
+    // price and each line's GST rate. The client sends its own totals for
+    // display, but they are never trusted. Line prices are before tax — a job
+    // ticket's GST-inclusive item totals are never taken, so GST is added once.
+    const isInterState = req.body.isInterState === true;
+    const priced = priceInvoice({
+      items: req.body.items,
+      designCharge: req.body.designCharge,
+      designChargeGstRate: req.body.designChargeGstRate,
+      discount: req.body.discountAmount,
+      isInterState
+    });
     if (priced.error) {
       return res.status(400).json({ status: 'error', message: priced.error });
     }
-    const { lines, totals } = priced;
+    const { lines, totals, design } = priced;
 
     // Check stock for the priced lines (an area line needs its total area).
     const stockCheck = await InventoryService.checkStockAvailability(lines, req.user);
@@ -356,14 +361,15 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
       invoiceDate: req.body.invoiceDate || new Date(),
       dueDate: req.body.dueDate,
       items: lines,
-      designCharge: totals.designCharge,
+      ...design,
       discountAmount: totals.discount,
       subtotal: totals.subtotal,
-      taxableAmount: totals.total,
-      totalGstAmount: 0,
+      // The pre-save hook arrives at the same figures from the lines.
+      taxableAmount: totals.taxableAmount,
+      totalGstAmount: totals.gst,
       totalAmount: totals.total,
       noGst: false,
-      isInterState: false,
+      isInterState,
       paymentTerms: req.body.paymentTerms || undefined,
       notes: req.body.notes,
       // Older job dialogs send terms_conditions.
@@ -446,9 +452,8 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
 // @route   PUT /api/invoices/:id
 // @desc    Update invoice
 // @access  Private
-// Lines, design charge and discount are priced again on the server, exactly as
-// on create; totals sent by the client are ignored. An invoice issued with GST
-// is re-priced without it once its lines are saved through here.
+// Lines, design charge, discount and GST are priced again on the server,
+// exactly as on create; totals sent by the client are ignored.
 router.put('/:id', protect, requirePermission('Invoicing: Create & Edit'), [
   body('items').optional().isArray({ min: 1 }).withMessage('At least one item is required'),
   body('invoiceDate').optional({ values: 'falsy' }).isISO8601().withMessage('Invoice date must be a valid date'),
@@ -468,28 +473,34 @@ router.put('/:id', protect, requirePermission('Invoicing: Create & Edit'), [
       });
     }
 
-    const pricingChanged = req.body.items !== undefined || req.body.designCharge !== undefined || req.body.discountAmount !== undefined;
+    const pricingChanged = ['items', 'designCharge', 'designChargeGstRate', 'discountAmount', 'isInterState']
+      .some((field) => req.body[field] !== undefined);
+    let newTotal = null;
     if (pricingChanged) {
+      // Whatever is not sent is kept: the stored lines keep their GST rates and
+      // the design charge its own.
       const items = req.body.items !== undefined ? req.body.items : invoice.items.map((i) => i.toObject());
       const designCharge = req.body.designCharge !== undefined ? req.body.designCharge : invoice.designCharge;
+      const designChargeGstRate = req.body.designChargeGstRate !== undefined
+        ? req.body.designChargeGstRate
+        : (req.body.designCharge && typeof req.body.designCharge === 'object' ? undefined : invoice.designChargeGstRate);
       const discount = req.body.discountAmount !== undefined ? req.body.discountAmount : invoice.discountAmount;
-      const priced = priceInvoice(items, designCharge, discount);
+      const isInterState = req.body.isInterState !== undefined ? req.body.isInterState === true : invoice.isInterState === true;
+      const priced = priceInvoice({ items, designCharge, designChargeGstRate, discount, isInterState, noGst: invoice.noGst === true });
       if (priced.error) {
         return res.status(400).json({ status: 'error', message: priced.error });
       }
-      if (priced.totals.total + 0.001 < (invoice.paidAmount || 0)) {
+      newTotal = invoice.noGst ? priced.totals.taxableAmount : priced.totals.total;
+      if (newTotal + 0.001 < (invoice.paidAmount || 0)) {
         return res.status(400).json({
           status: 'error',
-          message: `The new total (₹${priced.totals.total}) is less than the ₹${invoice.paidAmount} already paid on this invoice.`
+          message: `The new total (₹${newTotal}) is less than the ₹${invoice.paidAmount} already paid on this invoice.`
         });
       }
       invoice.items = priced.lines;
-      invoice.designCharge = priced.totals.designCharge;
+      invoice.set(priced.design);
       invoice.discountAmount = priced.totals.discount;
-      // Lines saved here carry no GST. Clearing the header figures too means an
-      // invoice issued with GST re-totals without it (the pre-save hook rolls
-      // tax up from the lines, which now have none).
-      invoice.isInterState = false;
+      invoice.isInterState = isInterState;
     }
 
     const customerId = idOf(req.body.customerId);
@@ -521,8 +532,7 @@ router.put('/:id', protect, requirePermission('Invoicing: Create & Edit'), [
     // whose total came down to what was paid is now settled, and a settled one
     // whose total went up is partly paid again.
     if (pricingChanged && (invoice.paidAmount || 0) > 0) {
-      const total = documentTotals(invoice.items.map((i) => i.totalAmount), invoice.designCharge, invoice.discountAmount).total;
-      const settled = invoice.paidAmount + 0.001 >= total;
+      const settled = invoice.paidAmount + 0.001 >= newTotal;
       invoice.paymentStatus = settled ? 'paid' : 'partial';
       if (settled && invoice.status !== 'cancelled') invoice.status = 'paid';
       else if (!settled && invoice.status === 'paid') invoice.status = 'sent';

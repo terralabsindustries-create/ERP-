@@ -663,6 +663,10 @@ class ApiClient {
     return this.post('/quotations', data);
   }
 
+  async updateQuotation(id: string, data: any) {
+    return this.put(`/quotations/${id}`, data);
+  }
+
   async updateQuotationStatus(id: string, status: string) {
     return this.patch(`/quotations/${id}/status`, { status });
   }

@@ -40,8 +40,14 @@ const invoiceItemSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
-  // GST is no longer charged. These per-line tax fields stay so invoices issued
-  // with GST keep their figures; new lines carry 0 in all of them.
+  // GST on this line (utils/billing.js gstTotals): the rate, the line's value
+  // after its share of the invoice discount, and the tax on that value — split
+  // into CGST + SGST within the state, or IGST between states. Lines saved
+  // while invoices carried no GST (Oct–Nov 2026) have 0 in all of them.
+  taxableValue: {
+    type: Number,
+    min: [0, 'Taxable value cannot be negative']
+  },
   gstRate: {
     type: Number,
     default: 0,
@@ -172,6 +178,13 @@ const invoiceSchema = new mongoose.Schema({
     default: 0,
     min: [0, 'Design charge cannot be negative']
   },
+  // The design charge's own GST, worked out like a line's (see items above).
+  designChargeGstRate: { type: Number, default: 0, min: [0, 'GST Rate cannot be negative'], max: [100, 'GST Rate cannot exceed 100%'] },
+  designChargeTaxableValue: { type: Number, default: 0, min: 0 },
+  designChargeGstAmount: { type: Number, default: 0, min: 0 },
+  designChargeCgstAmount: { type: Number, default: 0, min: 0 },
+  designChargeSgstAmount: { type: Number, default: 0, min: 0 },
+  designChargeIgstAmount: { type: Number, default: 0, min: 0 },
   discountAmount: {
     type: Number,
     default: 0,
@@ -183,8 +196,8 @@ const invoiceSchema = new mongoose.Schema({
     min: [0, 'Discount percentage cannot be negative'],
     max: [100, 'Discount percentage cannot exceed 100%']
   },
-  // Lines + design charge − discount. Named for the GST it was once taxed on;
-  // with no GST it is the invoice's net value (what Cost & Profit counts).
+  // Lines + design charge − discount: the value GST is charged on, and the
+  // invoice's net value (what Cost & Profit counts).
   taxableAmount: {
     type: Number,
     required: [true, 'Taxable amount is required'],
@@ -252,9 +265,9 @@ const invoiceSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
-  // Kept for invoices issued before GST was removed. isInterState decided
-  // IGST vs CGST+SGST. noGst marked a "No GST" bill; those stay visible only to
-  // logins with "Invoicing (View No GST)". New invoices set neither.
+  // isInterState: the supply is to another state, so GST is IGST rather than
+  // CGST + SGST. noGst marked an older "No GST" bill; those stay visible only
+  // to logins with "Invoicing (View No GST)", and new invoices never set it.
   isInterState: {
     type: Boolean,
     default: false
@@ -365,15 +378,15 @@ invoiceSchema.pre('save', function(next) {
     this.totalGstAmount = 0;
     this.totalAmount = this.taxableAmount;
   } else {
-    // Roll the per-item tax up to the header. New lines carry none, so this
-    // only matters for invoices issued with GST: recording a payment re-saves
-    // them, and their total must not lose the tax they were billed with.
-    // Interstate ones carry IGST only; intrastate split it into CGST + SGST.
+    // Roll the tax worked out for each line and the design charge (routes
+    // price them through utils/billing.js) up to the header. Recording a
+    // payment re-saves the invoice, so this must keep the tax it was billed
+    // with. Interstate invoices carry IGST only; intrastate CGST + SGST.
     const sum = (field) => this.items.reduce((t, item) => t + (item[field] || 0), 0);
 
-    this.totalCgstAmount = round2(sum('cgstAmount'));
-    this.totalSgstAmount = round2(sum('sgstAmount'));
-    this.totalIgstAmount = round2(sum('igstAmount'));
+    this.totalCgstAmount = round2(sum('cgstAmount') + (this.designChargeCgstAmount || 0));
+    this.totalSgstAmount = round2(sum('sgstAmount') + (this.designChargeSgstAmount || 0));
+    this.totalIgstAmount = round2(sum('igstAmount') + (this.designChargeIgstAmount || 0));
     this.totalGstAmount = round2(
       this.totalCgstAmount + this.totalSgstAmount + this.totalIgstAmount
     );

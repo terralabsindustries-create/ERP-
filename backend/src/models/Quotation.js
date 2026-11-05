@@ -19,10 +19,11 @@ const quotationItemSchema = new mongoose.Schema({
   width: { type: Number, default: 0, min: 0 },
   area_per_piece: { type: Number, default: 0 },
   total_area: { type: Number, default: 0 },
-  // GST is no longer charged; kept for quotations written with it (0 on new ones).
+  // GST on the line at its rate (utils/billing.js gstTotals).
   tax_rate: { type: Number, default: 0, min: 0, max: 100 },
   tax_amount: { type: Number, default: 0 },
-  // The line amount: quantity (or total area) × unit price.
+  // The line amount — quantity (or total area) × unit price — plus its GST.
+  // Quotations written without GST (Oct–Nov 2026) have no tax in it.
   total_amount: { type: Number, required: true, min: 0 }
 });
 
@@ -40,8 +41,8 @@ const quotationSchema = new mongoose.Schema({
     ref: 'Customer',
     required: [true, 'Customer is required']
   },
-  // Quotations written before GST was removed say whether they carried it.
-  // New ones are always 'non_gst'.
+  // 'gst' when the quotation carries any GST. is_interstate: the GST is IGST
+  // (supply to another state) rather than CGST + SGST.
   gst_type: {
     type: String,
     enum: ['gst', 'non_gst'],
@@ -60,8 +61,17 @@ const quotationSchema = new mongoose.Schema({
   // Design & pre-press work, shown as its own line in the totals. Carried onto
   // the invoice unchanged when the quotation is converted.
   design_charge: { type: Number, default: 0, min: [0, 'Design charge cannot be negative'] },
+  design_charge_tax_rate: { type: Number, default: 0, min: 0, max: 100 },
+  design_charge_tax_amount: { type: Number, default: 0 },
+  // Taken off before tax, shared across the lines and design charge by value
+  // (utils/billing.js applyGst); carried onto the invoice.
+  discount_amount: { type: Number, default: 0, min: [0, 'Discount cannot be negative'] },
+  // All the GST on the quotation (lines and design charge), and its split.
   tax_amount: { type: Number, default: 0 },
-  // subtotal + design_charge (+ tax_amount on older GST quotations).
+  cgst_amount: { type: Number, default: 0 },
+  sgst_amount: { type: Number, default: 0 },
+  igst_amount: { type: Number, default: 0 },
+  // subtotal + design_charge − discount_amount + tax_amount.
   total_amount: { type: Number, default: 0 },
   status: {
     type: String,

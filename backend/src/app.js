@@ -11,6 +11,7 @@ const morgan = require('morgan');
 const mongoSanitize = require('express-mongo-sanitize');
 const xss = require('xss-clean');
 const path = require('path');
+const mongoose = require('mongoose');
 
 
 const app = express();
@@ -85,6 +86,17 @@ const ITEM_READERS = ['Inventory', 'Jobs', 'Quotations', 'Invoicing', 'Purchase 
 const TAX_CODE_READERS = ['Invoicing', 'Quotations', 'Jobs', 'Inventory', 'Purchase Bills'];
 
 const guarded = (mount, router, guard) => app.use(mount, protect, moduleGuard(guard), router);
+
+// Fail promptly if an established connection drops. Otherwise Mongoose buffers
+// requests for ten seconds and auth misleadingly reports a generic 500.
+app.use('/api', (req, res, next) => {
+  if (req.path === '/health' || mongoose.connection.readyState === 1) return next();
+  return res.status(503).json({
+    status: 'error',
+    code: 'DATABASE_UNAVAILABLE',
+    message: 'Database connection is unavailable. Please try again shortly.'
+  });
+});
 
 app.use('/api/auth', require('./routes/auth'));
 
@@ -259,9 +271,11 @@ guarded('/api/payment-reminders', require('./routes/paymentReminders'), {
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
-  res.status(200).json({
-    status: 'success',
-    message: 'Carbon API is running',
+  const databaseReady = mongoose.connection.readyState === 1;
+  res.status(databaseReady ? 200 : 503).json({
+    status: databaseReady ? 'success' : 'error',
+    message: databaseReady ? 'Carbon API is running' : 'Database connection is unavailable',
+    database: databaseReady ? 'connected' : 'unavailable',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development'
   });

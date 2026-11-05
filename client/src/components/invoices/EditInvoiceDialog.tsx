@@ -22,11 +22,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertTriangle, Plus, Trash2, Calculator } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
-import { documentTotals } from "@/lib/billing";
-import { formatINR, localDate } from "@/lib/format";
+import { localDate } from "@/lib/format";
 import { BillingTotals } from "@/components/billing/BillingTotals";
 import { LinePricingFields } from "@/components/billing/LinePricingFields";
-import { lineAmount, lineDraftFrom, lineInput, lineProblem, newLineDraft, type LineDraft } from "@/components/billing/lineDraft";
+import { draftTotals, gstRateProblem, lineDraftFrom, lineInput, lineProblem, newLineDraft, type LineDraft } from "@/components/billing/lineDraft";
 
 interface InvoiceItem {
   itemName: string;
@@ -56,9 +55,11 @@ interface Invoice {
   dueDate: string;
   items: InvoiceItem[];
   designCharge?: number;
+  designChargeGstRate?: number;
   discountAmount: number;
   totalGstAmount?: number;
   totalAmount: number;
+  isInterState?: boolean;
   noGst?: boolean;
   notes: string;
   termsAndConditions: string;
@@ -84,7 +85,9 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
     dueDate: "",
     items: [] as LineDraft[],
     designCharge: "",
+    designChargeGstRate: "",
     discountAmount: "",
+    isInterState: false,
     notes: "",
     termsAndConditions: ""
   });
@@ -107,7 +110,9 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
         dueDate: toDateInput(invoice.dueDate),
         items: invoice.items.map((item) => lineDraftFrom(nextKey.current++, item)),
         designCharge: asText(invoice.designCharge),
+        designChargeGstRate: invoice.designCharge ? String(invoice.designChargeGstRate ?? 0) : "",
         discountAmount: asText(invoice.discountAmount),
+        isInterState: invoice.isInterState === true,
         notes: invoice.notes || "",
         termsAndConditions: invoice.termsAndConditions || ""
       });
@@ -139,8 +144,9 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
     }
   };
 
+  // A new line starts at the rate of the line above it.
   const addItem = () => {
-    setFormData(prev => ({ ...prev, items: [...prev.items, newLineDraft(nextKey.current++)] }));
+    setFormData(prev => ({ ...prev, items: [...prev.items, newLineDraft(nextKey.current++, { gstRate: prev.items[prev.items.length - 1]?.gstRate || "" })] }));
   };
 
   const removeItem = (index: number) => {
@@ -157,13 +163,17 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
     }));
   };
 
+  // An older "No GST" bill stays without GST; the server keeps it that way.
+  const noGst = invoice?.noGst === true;
+
   // The same arithmetic the server applies when this is saved; it recomputes
   // every figure itself and ignores totals sent from here.
-  const totals = documentTotals(formData.items.map(lineAmount), Number(formData.designCharge) || 0, Number(formData.discountAmount) || 0);
-
-  // Invoices issued before GST was removed still carry it. Saving the lines
-  // here re-prices the invoice without GST.
-  const legacyGst = invoice && !invoice.noGst ? invoice.totalGstAmount || 0 : 0;
+  const totals = draftTotals(
+    noGst ? formData.items.map((l) => ({ ...l, gstRate: "0" })) : formData.items,
+    { amount: formData.designCharge, gstRate: noGst ? 0 : formData.designChargeGstRate },
+    formData.discountAmount,
+    formData.isInterState
+  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -171,7 +181,8 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
 
     const problem = formData.items.length === 0
       ? "Add at least one item."
-      : formData.items.map((l, i) => lineProblem(l, i + 1)).find(Boolean) ||
+      : formData.items.map((l, i) => lineProblem(noGst ? { ...l, gstRate: "0" } : l, i + 1)).find(Boolean) ||
+        (!noGst && Number(formData.designCharge) > 0 ? gstRateProblem(formData.designChargeGstRate, "The design charge") : "") ||
         (totals.discount > totals.gross ? "The discount is more than the invoice." : "");
     if (problem) {
       toast({ title: "Check the invoice", description: problem, variant: "destructive" });
@@ -188,7 +199,9 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
         dueDate: formData.dueDate,
         items: formData.items.map((l) => ({ itemName: l.itemName.trim(), description: l.description.trim(), hsnCode: l.hsnCode.trim(), ...lineInput(l) })),
         designCharge: Number(formData.designCharge) || 0,
+        designChargeGstRate: Number(formData.designChargeGstRate) || 0,
         discountAmount: Number(formData.discountAmount) || 0,
+        isInterState: formData.isInterState,
         notes: formData.notes,
         termsAndConditions: formData.termsAndConditions
       });
@@ -222,13 +235,10 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
           </DialogDescription>
         </DialogHeader>
 
-        {legacyGst > 0 && (
+        {noGst && (
           <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning-soft px-3 py-2 text-sm text-warning-strong">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>
-              This invoice was issued with GST of {formatINR(legacyGst)} (total {formatINR(invoice?.totalAmount || 0)}). Saving it here re-prices it
-              without GST, at the total shown below.
-            </span>
+            <span>This is an older No GST bill. It stays without GST when it is saved, whatever rates the lines show.</span>
           </div>
         )}
 
@@ -402,6 +412,10 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
                 idPrefix="edit-invoice"
                 designCharge={formData.designCharge}
                 onDesignChargeChange={(v) => setFormData((prev) => ({ ...prev, designCharge: v }))}
+                designChargeGstRate={formData.designChargeGstRate}
+                onDesignChargeGstRateChange={(v) => setFormData((prev) => ({ ...prev, designChargeGstRate: v }))}
+                isInterState={formData.isInterState}
+                onInterStateChange={(v) => setFormData((prev) => ({ ...prev, isInterState: v }))}
                 discount={formData.discountAmount}
                 onDiscountChange={(v) => setFormData((prev) => ({ ...prev, discountAmount: v }))}
                 totalLabel="Invoice total"

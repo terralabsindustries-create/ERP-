@@ -24,8 +24,8 @@ interface Slab {
 
 /**
  * GET /api/reports/revenue — see backend/src/routes/reports.js for how each
- * figure is counted. GST figures only come from invoices issued before GST was
- * removed, so they are 0 for later months.
+ * figure is counted. GST comes from each invoice's lines and design charge;
+ * invoices raised while invoicing carried no GST (Oct–Nov 2026) report 0.
  */
 interface MonthlyReportData {
   month: string;
@@ -138,7 +138,7 @@ export default function Reports() {
   const slabs = reportData
     ? Object.entries(reportData.gstBreakdown).sort(([a], [b]) => rateOf(a) - rateOf(b))
     : [];
-  // Invoices are issued without GST; only a month with older GST invoices has any.
+  // A month whose invoices carried no GST shows no GST section.
   const hasGst = !!reportData && reportData.totalTaxPayable > 0;
 
   const exportToCSV = () => {
@@ -149,9 +149,9 @@ export default function Reports() {
       [],
       ["Summary"],
       ["Invoices", reportData.totalInvoices],
-      ["Net value", reportData.taxableAmount],
+      ["Taxable value", reportData.taxableAmount],
       ["Discounts", reportData.totalDiscounts],
-      ...(hasGst ? [["GST on older invoices", reportData.totalTaxPayable]] : []),
+      ...(hasGst ? [["GST", reportData.totalTaxPayable]] : []),
       ["Total invoiced", reportData.totalRevenue],
       ...(designMonth
         ? [
@@ -164,7 +164,7 @@ export default function Reports() {
       ...(hasGst
         ? [
             [],
-            ["GST rate (older invoices)", "Invoices", "Taxable value", "GST"],
+            ["GST rate", "Invoices", "Taxable value", "GST"],
             ...slabs.map(([key, s]) => [`${rateOf(key)}%`, s.count, s.amount, s.tax]),
             [],
             ["CGST", reportData.cgstAmount],
@@ -273,9 +273,9 @@ export default function Reports() {
         <>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <StatCard label="Invoices" value={reportData.totalInvoices} hint={`Issued in ${reportData.month}`} />
-            <StatCard label="Net value" value={formatINR(reportData.taxableAmount)} hint="Lines and design charges, after discounts" />
+            <StatCard label="Taxable value" value={formatINR(reportData.taxableAmount)} hint="Lines and design charges, after discounts" />
             <StatCard label="Discounts" value={formatINR(reportData.totalDiscounts)} hint="Invoice-level discounts" />
-            <StatCard label="Total invoiced" value={formatINR(reportData.totalRevenue)} hint={hasGst ? `Includes ${formatINR(reportData.totalTaxPayable)} GST on older invoices` : "Invoices carry no GST"} />
+            <StatCard label="Total invoiced" value={formatINR(reportData.totalRevenue)} hint={hasGst ? `Includes ${formatINR(reportData.totalTaxPayable)} GST` : "No GST was charged this month"} />
           </div>
 
           {reportData.totalInvoices === 0 && (
@@ -411,8 +411,8 @@ export default function Reports() {
           <>
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">GST on older invoices, by rate</CardTitle>
-              <p className="text-sm text-muted-foreground">From invoices issued with GST before it was removed. New invoices carry none.</p>
+              <CardTitle className="text-base">GST by rate</CardTitle>
+              <p className="text-sm text-muted-foreground">From the invoice lines and design charges, on their value after discounts.</p>
             </CardHeader>
             <CardContent className="p-0">
               <div className="overflow-x-auto">

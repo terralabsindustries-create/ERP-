@@ -1,6 +1,6 @@
 const PDFDocument = require('pdfkit');
 const { createTransporter } = require('../utils/mailer');
-const { AREA_UNITS, round4, sizeLabel, areaLabel } = require('../utils/billing');
+const { AREA_UNITS, round2, round4, sizeLabel, areaLabel, splitGstAll, gstByRate } = require('../utils/billing');
 
 // Puppeteer ships as ES-module only. require() of ESM is unsupported on Node 20
 // (which is what Electron bundles), so it is imported on demand instead. That
@@ -419,9 +419,10 @@ class PDFService {
     const size = sizeLabel(line);
     const areaUnit = AREA_UNITS[line.unit];
     const showArea = !!areaUnit && (line.totalArea || 0) > 0;
+    const hsnGst = [line.hsn ? 'HSN: ' + line.hsn : '', line.gstRate > 0 ? `GST ${this.fmtQty(line.gstRate)}%` : ''].filter(Boolean).join(' · ');
     return {
       description: line.name || '',
-      sub: [line.description, line.hsn ? 'HSN: ' + line.hsn : ''].filter(Boolean).join('\n'),
+      sub: [line.description, hsnGst].filter(Boolean).join('\n'),
       size,
       sizeSub: size && line.areaPerPiece > 0 ? `${areaLabel(line.areaPerPiece, line.unit)} each` : '',
       area: showArea ? areaLabel(line.totalArea, line.unit) : '',
@@ -430,6 +431,28 @@ class PDFService {
       rateSub: showArea ? `per ${areaUnit.label}` : '',
       amount: this.fmtNum(line.amount)
     };
+  }
+
+  /**
+   * The tax rows of a document's summary, from its taxed parts (lines and the
+   * design charge): "Taxable Amount", then CGST and SGST at half of each rate
+   * (or IGST at the full rate between states), and a GST total when there is
+   * more than one rate. Nothing when the document carries no tax.
+   */
+  static taxRows(parts, taxableAmount, money) {
+    const rates = gstByRate(parts);
+    if (!rates.length) return [];
+    const pct = (n) => this.fmtQty(n) + '%';
+    const rows = [{ label: 'Taxable Amount', value: money(taxableAmount) }];
+    for (const r of rates) {
+      if (r.cgst + r.sgst > 0) {
+        rows.push({ label: `CGST @ ${pct(r.rate / 2)}`, value: money(r.cgst) });
+        rows.push({ label: `SGST @ ${pct(r.rate / 2)}`, value: money(r.sgst) });
+      }
+      if (r.igst > 0) rows.push({ label: `IGST @ ${pct(r.rate)}`, value: money(r.igst) });
+    }
+    if (rates.length > 1) rows.push({ label: 'Total GST', value: money(rates.reduce((t, r) => t + r.gst, 0)) });
+    return rows;
   }
 
   /** Everything the invoice PDF shows, before any drawing. */
@@ -454,6 +477,7 @@ class PDFService {
         name: item.itemName,
         description: item.description,
         hsn: item.hsnCode,
+        gstRate: invoice.noGst ? 0 : item.gstRate || 0,
         quantity: item.quantity,
         unit,
         rate: item.unitPrice || 0,
@@ -468,15 +492,32 @@ class PDFService {
     const subtotal = invoice.subtotal != null ? invoice.subtotal : (invoice.items || []).reduce((s, i) => s + (i.totalAmount || 0), 0);
     const designCharge = invoice.designCharge || 0;
     const discount = invoice.discountAmount || 0;
-    // Only an invoice issued before GST was removed carries any.
-    const legacyGst = invoice.noGst ? 0 : invoice.totalGstAmount || 0;
     const total = invoice.totalAmount || 0;
     const paid = invoice.amountPaid != null ? invoice.amountPaid : (invoice.paidAmount || 0);
+
+    // The tax each line and the design charge carry, as stored when priced.
+    const taxParts = invoice.noGst ? [] : [
+      ...(invoice.items || []).map((i) => ({
+        gstRate: i.gstRate,
+        taxableValue: i.taxableValue != null ? i.taxableValue : i.totalAmount,
+        cgstAmount: i.cgstAmount,
+        sgstAmount: i.sgstAmount,
+        igstAmount: i.igstAmount
+      })),
+      {
+        gstRate: invoice.designChargeGstRate,
+        taxableValue: invoice.designChargeTaxableValue,
+        cgstAmount: invoice.designChargeCgstAmount,
+        sgstAmount: invoice.designChargeSgstAmount,
+        igstAmount: invoice.designChargeIgstAmount
+      }
+    ];
+    const taxableAmount = invoice.taxableAmount != null ? invoice.taxableAmount : round2(subtotal + designCharge - discount);
 
     const summary = [{ label: 'Subtotal', value: money(subtotal) }];
     if (designCharge > 0) summary.push({ label: 'Design Charge', value: money(designCharge) });
     if (discount > 0) summary.push({ label: 'Discount', value: '- ' + money(discount) });
-    if (legacyGst > 0) summary.push({ label: 'GST', value: money(legacyGst) });
+    summary.push(...this.taxRows(taxParts, taxableAmount, money));
     summary.push({ label: 'Total', value: money(total), bold: true });
     if (paid > 0 && paid < total) {
       summary.push({ label: 'Paid', value: money(paid) });
@@ -521,10 +562,11 @@ class PDFService {
         name: item.item_name,
         description: item.description,
         hsn: item.hsn_code,
+        gstRate: item.tax_amount > 0 ? item.tax_rate || 0 : 0,
         quantity: item.quantity,
         unit: item.unit,
         rate: item.unit_price || 0,
-        // A line written with GST kept the tax inside total_amount.
+        // A line keeps its tax inside total_amount.
         amount: item.total_amount != null ? item.total_amount - (item.tax_amount || 0) : (item.quantity || 0) * (item.unit_price || 0),
         length: item.length,
         width: item.width,
@@ -534,11 +576,21 @@ class PDFService {
     );
 
     const designCharge = quotation.design_charge || 0;
-    const legacyGst = quotation.gst_type === 'gst' ? quotation.tax_amount || 0 : 0;
     const total = quotation.total_amount || 0;
+    // Quotation lines store only their tax; it splits the way it was charged
+    // (lines, then the design charge — utils/billing.js applyGst).
+    const interstate = quotation.is_interstate === true;
+    const rawParts = [
+      ...(quotation.items || []).map((i) => ({ gstRate: i.tax_rate, taxableValue: (i.total_amount || 0) - (i.tax_amount || 0), gstAmount: round2(i.tax_amount || 0) })),
+      { gstRate: quotation.design_charge_tax_rate, taxableValue: designCharge, gstAmount: round2(quotation.design_charge_tax_amount || 0) }
+    ];
+    const splits = splitGstAll(rawParts.map((p) => p.gstAmount), interstate);
+    const taxParts = rawParts.map((p, i) => ({ ...p, ...splits[i] }));
+    const discount = quotation.discount_amount || 0;
     const summary = [{ label: 'Subtotal', value: money(quotation.subtotal || 0) }];
     if (designCharge > 0) summary.push({ label: 'Design Charge', value: money(designCharge) });
-    if (legacyGst > 0) summary.push({ label: 'GST', value: money(legacyGst) });
+    if (discount > 0) summary.push({ label: 'Discount', value: '- ' + money(discount) });
+    summary.push(...this.taxRows(taxParts, round2((quotation.subtotal || 0) + designCharge - discount), money));
     summary.push({ label: 'Total', value: money(total), bold: true });
 
     const billing = this.splitAddress(customer.address);

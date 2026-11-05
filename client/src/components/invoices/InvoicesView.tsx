@@ -59,9 +59,9 @@ const customerOf = (i: InvoiceRow) => i.customerId?.name || i.customerName || "�
 const balanceOf = (i: InvoiceRow) => i.balanceAmount ?? Math.max(0, i.totalAmount - (i.paidAmount ?? i.amountPaid ?? 0));
 
 /**
- * The invoice list. There is one kind of invoice — issued without GST — so one
- * list. Views, totals and the list itself come from the server, so every
- * invoice is reachable however many there are.
+ * The invoice list. Amounts are invoice totals, including GST. Views, totals
+ * and the list itself come from the server, so every invoice is reachable
+ * however many there are.
  */
 export function InvoicesView() {
   const { hasPermission } = useAuth();

@@ -245,14 +245,14 @@ describe('billing a counter job', () => {
     customer = await make.customer(a.admin, { name: 'Anil Thomas', phone: '9847012345' });
   });
 
-  /** The invoice the billing dialog creates: one line, no GST (a stray rate is ignored). */
+  /** The invoice the billing dialog creates: one line, no GST rate (counter bills carry none). */
   const invoiceBody = (customerId) => ({
     customerId,
     invoiceDate: new Date().toISOString().slice(0, 10),
     dueDate: new Date().toISOString().slice(0, 10),
     status: 'sent',
     paymentTerms: 'Due on receipt',
-    items: [{ itemName: `Counter job ${job.jobNumber}`, description: 'A5 · 300 GSM', quantity: 200, unit: 'nos', unitPrice: 7.5, hsnCode: '998912', gstRate: 18, itemType: 'Numbers' }],
+    items: [{ itemName: `Counter job ${job.jobNumber}`, description: 'A5 · 300 GSM', quantity: 200, unit: 'nos', unitPrice: 7.5, hsnCode: '998912', itemType: 'Numbers' }],
     discountAmount: 0,
     isInterState: false,
     noGst: false,

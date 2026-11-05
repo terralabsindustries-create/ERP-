@@ -86,7 +86,7 @@ describe('Email to Accountant', () => {
     expect(sendMail).toHaveBeenCalledTimes(1);
     const mail = sendMail.mock.calls[0][0];
     expect(mail.to).toBe('accounts@example.test');
-    expect(mail.text).toMatch(/GST on older invoices: ₹565\.00/);
+    expect(mail.text).toMatch(/GST: ₹565\.00/);
     expect(mail.attachments[0].filename).toBe(`monthly-report-${month}.csv`);
     expect(mail.attachments[0].content).toMatch(/18%,2,3000,540/);
     expect(mail.attachments[0].content).toMatch(/Two interstate jobs this month/);

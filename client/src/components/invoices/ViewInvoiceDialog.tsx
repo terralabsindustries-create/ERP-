@@ -43,7 +43,7 @@ import { getTemplateBodyText, getTemplateVariableNumbers } from "@/lib/whatsappT
 import { useToast } from "@/hooks/use-toast";
 import { EditInvoiceDialog } from "./EditInvoiceDialog";
 import { useNavigate } from "react-router-dom";
-import { AREA_UNITS, areaText, isAreaUnit, sizeLabel } from "@/lib/billing";
+import { AREA_UNITS, areaText, gstByRate, isAreaUnit, sizeLabel } from "@/lib/billing";
 import { formatINR } from "@/lib/format";
 
 interface InvoiceItem {
@@ -59,6 +59,12 @@ interface InvoiceItem {
   width?: number;
   areaPerPiece?: number;
   totalSquareFeet?: number;
+  taxableValue?: number;
+  gstRate?: number;
+  gstAmount?: number;
+  cgstAmount?: number;
+  sgstAmount?: number;
+  igstAmount?: number;
 }
 
 interface Invoice {
@@ -82,9 +88,16 @@ interface Invoice {
   items: InvoiceItem[];
   subtotal: number;
   designCharge?: number;
+  designChargeGstRate?: number;
+  designChargeTaxableValue?: number;
+  designChargeCgstAmount?: number;
+  designChargeSgstAmount?: number;
+  designChargeIgstAmount?: number;
   discountAmount: number;
+  taxableAmount?: number;
   totalGstAmount: number;
   totalAmount: number;
+  isInterState?: boolean;
   amountPaid: number;
   balanceDue: number;
   status: 'draft' | 'sent' | 'paid' | 'overdue' | 'cancelled' | 'refunded';
@@ -432,7 +445,13 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
                             {item.description && (
                               <p className="text-sm text-muted-foreground">{item.description}</p>
                             )}
-                            {item.hsnCode && <p className="font-mono text-xs text-muted-foreground">HSN {item.hsnCode}</p>}
+                            {(item.hsnCode || (!invoice.noGst && (item.gstRate || 0) > 0)) && (
+                              <p className="text-xs text-muted-foreground">
+                                {item.hsnCode && <span className="font-mono">HSN {item.hsnCode}</span>}
+                                {item.hsnCode && !invoice.noGst && (item.gstRate || 0) > 0 && " · "}
+                                {!invoice.noGst && (item.gstRate || 0) > 0 && `GST ${item.gstRate}%`}
+                              </p>
+                            )}
                           </div>
                           <span className="font-semibold">{formatINR(item.totalAmount || 0)}</span>
                         </div>
@@ -477,15 +496,60 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
                     <span className="text-destructive-strong">-{formatINR(invoice.discountAmount)}</span>
                   </div>
                 )}
-                {/* Only invoices issued before GST was removed carry any. */}
-                {!invoice.noGst && (invoice.totalGstAmount || 0) > 0 && (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">GST (issued before GST was removed):</span>
-                    <span>{formatINR(invoice.totalGstAmount)}</span>
-                  </div>
-                )}
+                {(() => {
+                  // The tax stored on each line and on the design charge, by rate.
+                  const rates = invoice.noGst
+                    ? []
+                    : gstByRate([
+                        ...invoice.items.map((i) => ({ ...i, taxableValue: i.taxableValue ?? i.totalAmount })),
+                        {
+                          gstRate: invoice.designChargeGstRate,
+                          taxableValue: invoice.designChargeTaxableValue,
+                          cgstAmount: invoice.designChargeCgstAmount,
+                          sgstAmount: invoice.designChargeSgstAmount,
+                          igstAmount: invoice.designChargeIgstAmount
+                        }
+                      ]);
+                  if (!rates.length) return null;
+                  return (
+                    <>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Taxable amount:</span>
+                        <span>{formatINR(invoice.taxableAmount ?? 0)}</span>
+                      </div>
+                      {rates.map((r) => (
+                        <div key={r.rate} className="space-y-1">
+                          {r.cgst + r.sgst > 0 && (
+                            <>
+                              <div className="flex justify-between text-sm">
+                                <span className="text-muted-foreground">CGST @ {r.rate / 2}%:</span>
+                                <span>{formatINR(r.cgst)}</span>
+                              </div>
+                              <div className="flex justify-between text-sm">
+                                <span className="text-muted-foreground">SGST @ {r.rate / 2}%:</span>
+                                <span>{formatINR(r.sgst)}</span>
+                              </div>
+                            </>
+                          )}
+                          {r.igst > 0 && (
+                            <div className="flex justify-between text-sm">
+                              <span className="text-muted-foreground">IGST @ {r.rate}%:</span>
+                              <span>{formatINR(r.igst)}</span>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      {rates.length > 1 && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-muted-foreground">Total GST:</span>
+                          <span>{formatINR(invoice.totalGstAmount || 0)}</span>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
                 <div className="border-t pt-2 flex justify-between font-semibold">
-                  <span>Total Amount:</span>
+                  <span>Total Amount{invoice.totalGstAmount > 0 ? " (incl. GST)" : ""}:</span>
                   <span className="text-lg">{formatINR(invoice.totalAmount || 0)}</span>
                 </div>
                 {invoice.amountPaid > 0 && (

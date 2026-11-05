@@ -16,7 +16,7 @@ import { UNITS_OF_MEASUREMENT } from "../inventory/CreateItemDialog";
 import { CustomerTypePicker } from "../customers/CustomerTypePicker";
 import { StockAvailability, StockCheckList } from "../billing/StockAvailability";
 import { stockItemNamed, stockNeeded, unitText, type StockItem } from "../billing/stock";
-import { HSN_PATTERN } from "../billing/lineDraft";
+import { HSN_PATTERN, draftTotals, lineDraftFromJobItem } from "../billing/lineDraft";
 import { localDate } from "@/lib/format";
 
 const AREA_UNITS = ['sqft', 'sqm'];
@@ -378,23 +378,36 @@ export function CreateJobDialog({
     }
   };
 
+  // The job ticket's totals, worked out exactly as the invoice raised from it
+  // will be (lib/billing.ts, the same as the server): each item before tax at
+  // its GST rate and the design charge at its own, rounded to the paisa per
+  // part. So the Grand Total here is the invoice total.
+  const jobTotals = draftTotals(
+    formData.items.map((item, i) => lineDraftFromJobItem(i, { ...item, gstRate: Number(item.gstRate) || 0 })),
+    { amount: formData.designCharge?.amount || 0, gstRate: formData.designCharge?.gstRate || 0 }
+  );
+  const jobItemsGst = jobTotals.lines.reduce((sum, line) => sum + line.gstAmount, 0);
+
   const handleGenerateInvoiceDirectly = async () => {
     if (!createdJob) return;
 
     setIsGeneratingInvoice(true);
     try {
-      // The server prices every line (area lines: length × width × pieces ×
-      // rate) and adds the design charge before tax. Invoices carry no GST.
+      // The server prices every line from its price before tax and the job
+      // ticket's GST rate, and the design charge at its own rate, so the
+      // invoice comes to the job ticket's total. An area item on a job ticket
+      // is one piece of length × width, as the ticket priced it.
       const items = (createdJob.items || []).map((item: any) => ({
         itemName: item.itemName,
         description: item.description || '',
         hsnCode: item.hsnCode || '',
         itemType: item.itemType || 'Numbers',
         unit: item.unit || 'pieces',
-        quantity: item.quantity || 0,
+        quantity: item.itemType === 'Square Feet' ? 1 : item.quantity || 0,
         length: item.length || 0,
         width: item.width || 0,
-        unitPrice: item.unitPrice
+        unitPrice: item.unitPrice,
+        gstRate: item.gstRate ?? 0
       }));
 
       // Set invoice date to today and due date to 30 days from today
@@ -408,6 +421,7 @@ export function CreateJobDialog({
         dueDate: dueDate,
         items: items,
         designCharge: createdJob.designCharge?.amount || 0,
+        designChargeGstRate: createdJob.designCharge?.amount ? createdJob.designCharge.gstRate ?? 0 : 0,
         paymentTerms: 'Immediate',
         notes: createdJob.notes || ''
       };
@@ -590,7 +604,15 @@ export function CreateJobDialog({
         estimatedCost: formData.estimatedCost ? parseFloat(formData.estimatedCost) : 0,
         dueDate: formData.dueDate || null,
         notes: formData.notes.trim(),
-        items: formData.items.map((item) => ({ ...item, itemName: item.itemName.trim(), description: (item.description || '').trim() })),
+        // An area item is priced as one piece of length × width (the form has
+        // no quantity for it), so a quantity left over from before the unit
+        // was switched must not multiply it on the invoice.
+        items: formData.items.map((item) => ({
+          ...item,
+          itemName: item.itemName.trim(),
+          description: (item.description || '').trim(),
+          ...(item.itemType === 'Square Feet' ? { quantity: 1 } : {})
+        })),
         designCharge: formData.designCharge,
         printSpecs: {
           ...formData.printSpecs,
@@ -1551,26 +1573,15 @@ export function CreateJobDialog({
                     <>
                       <div className="flex justify-between text-sm">
                         <span className="text-muted-foreground">Items Subtotal:</span>
-                        <span>₹{formData.items.reduce((sum, item) => {
-                          const itemSubtotal = item.itemType === 'Square Feet'
-                            ? (item.totalSquareFeet || 0) * item.unitPrice
-                            : item.quantity * item.unitPrice;
-                          return sum + itemSubtotal;
-                        }, 0).toFixed(2)}</span>
+                        <span>₹{jobTotals.subtotal.toFixed(2)}</span>
                       </div>
                       <div className="flex justify-between text-sm">
                         <span className="text-muted-foreground">Items Tax (GST):</span>
-                        <span>₹{formData.items.reduce((sum, item) => {
-                          const itemSubtotal = item.itemType === 'Square Feet'
-                            ? (item.totalSquareFeet || 0) * item.unitPrice
-                            : item.quantity * item.unitPrice;
-                          const gstAmount = (itemSubtotal * item.gstRate) / 100;
-                          return sum + gstAmount;
-                        }, 0).toFixed(2)}</span>
+                        <span>₹{jobItemsGst.toFixed(2)}</span>
                       </div>
                       <div className="flex justify-between font-semibold border-t pt-2">
                         <span>Items Total:</span>
-                        <span>₹{formData.items.reduce((sum, item) => sum + item.itemTotal, 0).toFixed(2)}</span>
+                        <span>₹{(jobTotals.subtotal + jobItemsGst).toFixed(2)}</span>
                       </div>
                     </>
                   )}
@@ -1578,17 +1589,14 @@ export function CreateJobDialog({
                   {formData.designCharge && (
                     <div className="flex justify-between font-semibold border-t pt-2">
                       <span>Design Charge Total:</span>
-                      <span>₹{formData.designCharge.totalAmount.toFixed(2)}</span>
+                      <span>₹{(jobTotals.designCharge + jobTotals.design.gstAmount).toFixed(2)}</span>
                     </div>
                   )}
 
                   {(formData.items.length > 0 || formData.designCharge) && (
                     <div className="flex justify-between text-lg font-bold border-t pt-3 text-primary">
                       <span>Grand Total:</span>
-                      <span>₹{(
-                        formData.items.reduce((sum, item) => sum + item.itemTotal, 0) +
-                        (formData.designCharge?.totalAmount || 0)
-                      ).toFixed(2)}</span>
+                      <span>₹{jobTotals.total.toFixed(2)}</span>
                     </div>
                   )}
                 </div>

@@ -13,10 +13,11 @@ import { CreateCustomerDialog } from "@/components/customers/CreateCustomerDialo
 import { QuickCreateJobDialog } from "@/components/jobs/QuickCreateJobDialog";
 import { BillingTotals } from "@/components/billing/BillingTotals";
 import { LinePricingFields } from "@/components/billing/LinePricingFields";
-import { lineAmount, lineDraftFrom, lineInput, lineProblem, newLineDraft, type LineDraft } from "@/components/billing/lineDraft";
+import { draftTotals, gstRateProblem, lineDraftFromJobItem, lineInput, lineProblem, newLineDraft, type LineDraft } from "@/components/billing/lineDraft";
+import { useHsnGstRates } from "@/components/billing/useHsnGstRates";
 import { StockAvailability } from "@/components/billing/StockAvailability";
 import { stockItemNamed, stockNeeded, unitText, type StockItem } from "@/components/billing/stock";
-import { documentTotals, isAreaUnit } from "@/lib/billing";
+import { isAreaUnit } from "@/lib/billing";
 import { localDate } from "@/lib/format";
 
 interface AdvancedCreateInvoiceDialogProps {
@@ -74,7 +75,9 @@ export function AdvancedCreateInvoiceDialog({
     items: [] as LineDraft[],
     // Typed text, so the fields can be cleared.
     designCharge: "",
+    designChargeGstRate: "",
     discountAmount: "",
+    isInterState: false,
     notes: "",
     termsAndConditions: ""
   });
@@ -121,9 +124,10 @@ export function AdvancedCreateInvoiceDialog({
 
       // The job already carries its priced items — bring them in so the
       // totals are filled in. Rows stay editable, and a job with no items
-      // still opens empty for manual entry. Its design charge comes across as
-      // the amount before tax; invoices carry no GST.
-      const items = (preselectedJob.items || []).map((item: any) => lineDraftFrom(key(), item));
+      // still opens empty for manual entry. Prices come across before tax with
+      // each item's GST rate, and the design charge with its own, so the
+      // invoice adds the GST once and comes to the job ticket's total.
+      const items = (preselectedJob.items || []).map((item: any) => lineDraftFromJobItem(key(), item));
 
       const newFormData = {
         customerId: preselectedJob.customerId?._id || preselectedJob.customerId || "",
@@ -132,7 +136,8 @@ export function AdvancedCreateInvoiceDialog({
         // falls back to the same 30-day default it starts with.
         dueDate: formatDateForInput(preselectedJob.dueDate) || getDefaultDueDate(),
         items,
-        designCharge: preselectedJob.designCharge?.amount ? String(preselectedJob.designCharge.amount) : ""
+        designCharge: preselectedJob.designCharge?.amount ? String(preselectedJob.designCharge.amount) : "",
+        designChargeGstRate: preselectedJob.designCharge?.amount ? String(preselectedJob.designCharge.gstRate ?? "") : ""
       };
 
       console.log('🔍 AdvancedCreateInvoiceDialog - pre-filled from job:', newFormData.jobId, 'items:', items.length);
@@ -187,13 +192,15 @@ export function AdvancedCreateInvoiceDialog({
     if (!job) return;
     const customerId = job.customerId?._id || job.customerId || "";
     const hasOwnLines = formData.items.some((l) => l.itemName.trim());
-    const jobLines = (job.items || []).map((item: any) => lineDraftFrom(key(), item));
+    const jobLines = (job.items || []).map((item: any) => lineDraftFromJobItem(key(), item));
+    const takeDesign = !formData.designCharge && !!job.designCharge?.amount;
     setFormData((prev) => ({
       ...prev,
       jobId,
       customerId: customerId || prev.customerId,
       items: hasOwnLines || !jobLines.length ? prev.items : jobLines,
-      designCharge: prev.designCharge || (job.designCharge?.amount ? String(job.designCharge.amount) : "")
+      designCharge: takeDesign ? String(job.designCharge.amount) : prev.designCharge,
+      designChargeGstRate: takeDesign ? String(job.designCharge.gstRate ?? "") : prev.designChargeGstRate
     }));
     if (!hasOwnLines && jobLines.length) {
       toast({ title: "Filled from the job ticket", description: `${jobLines.length} item${jobLines.length === 1 ? "" : "s"} from ${job.title}` });
@@ -220,9 +227,13 @@ export function AdvancedCreateInvoiceDialog({
     }
   };
 
+  // A new line starts at the rate of the line above it; most orders carry one rate.
   const addItem = () => {
-    setFormData(prev => ({ ...prev, items: [...prev.items, newLineDraft(key())] }));
+    setFormData(prev => ({ ...prev, items: [...prev.items, newLineDraft(key(), { gstRate: prev.items[prev.items.length - 1]?.gstRate || "" })] }));
   };
+
+  // A line given an HSN code from the HSN master starts at that code's rate.
+  const hsnRate = useHsnGstRates(open);
 
   const removeItem = (index: number) => {
     setFormData(prev => ({
@@ -239,9 +250,9 @@ export function AdvancedCreateInvoiceDialog({
   };
 
   // The same arithmetic as the server (lib/billing.ts ↔ backend utils/billing.js):
-  // lines, plus the design charge, less the discount. No GST.
+  // lines, plus the design charge, less the discount, plus GST at each rate.
   const calculateTotals = () =>
-    documentTotals(formData.items.map(lineAmount), Number(formData.designCharge) || 0, Number(formData.discountAmount) || 0);
+    draftTotals(formData.items, { amount: formData.designCharge, gstRate: formData.designChargeGstRate }, formData.discountAmount, formData.isInterState);
 
   // The invoice takes its stock items out of stock, and the server refuses a
   // line there isn't enough of; say so before sending.
@@ -269,6 +280,7 @@ export function AdvancedCreateInvoiceDialog({
         : formData.items.map((l, i) => lineProblem(l, i + 1)).find(Boolean) ||
           shortOfStock() ||
           (Number(formData.designCharge) < 0 ? "The design charge can't be negative." : "") ||
+          (Number(formData.designCharge) > 0 ? gstRateProblem(formData.designChargeGstRate, "The design charge") : "") ||
           (calculateTotals().discount > calculateTotals().gross ? "The discount is more than the invoice." : "") ||
           (calculateTotals().total <= 0 ? "The invoice total must be more than 0." : "");
     if (problem) {
@@ -285,7 +297,9 @@ export function AdvancedCreateInvoiceDialog({
         dueDate: formData.dueDate,
         items: formData.items.map((l) => ({ itemName: l.itemName.trim(), description: l.description.trim(), hsnCode: l.hsnCode.trim(), ...lineInput(l) })),
         designCharge: Number(formData.designCharge) || 0,
+        designChargeGstRate: Number(formData.designChargeGstRate) || 0,
         discountAmount: Number(formData.discountAmount) || 0,
+        isInterState: formData.isInterState,
         notes: formData.notes,
         termsAndConditions: formData.termsAndConditions
       };
@@ -563,13 +577,15 @@ export function AdvancedCreateInvoiceDialog({
                                     // Stock counted in sq ft / sq m is priced by size;
                                     // anything else per unit, in the stock's unit.
                                     const invUnit = selectedItem.unit || 'pieces';
+                                    const hsnCode = selectedItem.hsnCode || item.hsnCode;
                                     updateItem(index, {
                                       itemName: selectedItem.name,
                                       unitPrice: String(selectedItem.unitCost || 0),
                                       description: item.description || selectedItem.description || '',
-                                      hsnCode: selectedItem.hsnCode || item.hsnCode,
+                                      hsnCode,
                                       unit: invUnit,
-                                      pricing: isAreaUnit(invUnit) ? invUnit : 'unit'
+                                      pricing: isAreaUnit(invUnit) ? invUnit : 'unit',
+                                      gstRate: item.gstRate || hsnRate(hsnCode)
                                     });
                                     setShowSuggestions(prev => ({ ...prev, [index]: false }));
                                   }}
@@ -600,7 +616,10 @@ export function AdvancedCreateInvoiceDialog({
                       <Input
                         id={`inv-hsn-${item.key}`}
                         value={item.hsnCode}
-                        onChange={(e) => updateItem(index, { hsnCode: e.target.value.replace(/\D/g, '').slice(0, 8) })}
+                        onChange={(e) => {
+                          const hsnCode = e.target.value.replace(/\D/g, '').slice(0, 8);
+                          updateItem(index, { hsnCode, ...(item.gstRate ? {} : { gstRate: hsnRate(hsnCode) }) });
+                        }}
                         inputMode="numeric"
                         placeholder="Optional"
                       />
@@ -645,6 +664,10 @@ export function AdvancedCreateInvoiceDialog({
                 idPrefix="invoice"
                 designCharge={formData.designCharge}
                 onDesignChargeChange={(v) => setFormData((prev) => ({ ...prev, designCharge: v }))}
+                designChargeGstRate={formData.designChargeGstRate}
+                onDesignChargeGstRateChange={(v) => setFormData((prev) => ({ ...prev, designChargeGstRate: v }))}
+                isInterState={formData.isInterState}
+                onInterStateChange={(v) => setFormData((prev) => ({ ...prev, isInterState: v }))}
                 discount={formData.discountAmount}
                 onDiscountChange={(v) => setFormData((prev) => ({ ...prev, discountAmount: v }))}
                 totalLabel="Invoice total"

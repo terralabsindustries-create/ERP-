@@ -12,8 +12,11 @@ import { useToast } from "@/hooks/use-toast";
 import { CreateCustomerDialog } from "@/components/customers/CreateCustomerDialog";
 import { BillingTotals } from "@/components/billing/BillingTotals";
 import { LinePricingFields } from "@/components/billing/LinePricingFields";
-import { lineAmount, lineDraftFrom, lineInput, lineProblem, newLineDraft, type LineDraft } from "@/components/billing/lineDraft";
-import { documentTotals, isAreaUnit } from "@/lib/billing";
+import { draftTotals, gstRateProblem, lineDraftFrom, lineInput, lineProblem, newLineDraft, type LineDraft } from "@/components/billing/lineDraft";
+import { useHsnGstRates } from "@/components/billing/useHsnGstRates";
+import { isAreaUnit } from "@/lib/billing";
+import { localDate } from "@/lib/format";
+import { moveFocusOnEnter } from "@/lib/formKeys";
 
 /** A line to start a quotation with, in the quotation API's terms (e.g. from the print estimator). */
 export interface QuotationItem {
@@ -25,21 +28,66 @@ export interface QuotationItem {
   length?: number;
   width?: number;
   hsn_code?: string;
+  tax_rate?: number;
+}
+
+/** A saved quotation, as GET /api/quotations/:id returns it, to edit. */
+export interface QuotationRecord {
+  _id: string;
+  quotationNumber: string;
+  status?: string;
+  customer_id: { _id: string; name?: string } | string | null;
+  valid_until?: string | null;
+  payment_link?: string | null;
+  terms_conditions?: string;
+  notes?: string;
+  design_charge?: number;
+  design_charge_tax_rate?: number;
+  discount_amount?: number;
+  is_interstate?: boolean;
+  items: QuotationItem[];
 }
 
 export interface CreateQuotationDialogProps {
-  children: React.ReactNode;
+  /** The button that opens the dialog. Leave out when `open` is controlled. */
+  children?: React.ReactNode;
   onQuotationCreated?: () => void;
   /** Line items to start the quotation with, e.g. from the print estimator. */
   initialItems?: QuotationItem[];
+  /** Edit this quotation (PUT /api/quotations/:id) instead of creating one. */
+  quotation?: QuotationRecord | null;
+  /** Controlled open state, e.g. when editing from a row action. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** Called after an edit is saved. */
+  onQuotationUpdated?: () => void;
 }
+
+const idOf = (value: QuotationRecord["customer_id"]): string => {
+  if (!value) return "";
+  return typeof value === "object" ? value._id : value;
+};
 
 // A quotation does not use stock, so unlike a job ticket or an invoice it
 // does not show what is on hand.
 type QuoteLine = LineDraft;
 
-export const CreateQuotationDialog = ({ children, onQuotationCreated, initialItems }: CreateQuotationDialogProps) => {
-  const [open, setOpen] = useState(false);
+export const CreateQuotationDialog = ({
+  children,
+  onQuotationCreated,
+  initialItems,
+  quotation,
+  open: openProp,
+  onOpenChange,
+  onQuotationUpdated
+}: CreateQuotationDialogProps) => {
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = openProp ?? uncontrolledOpen;
+  const setOpen = (value: boolean) => {
+    if (openProp === undefined) setUncontrolledOpen(value);
+    onOpenChange?.(value);
+  };
+  const editing = !!quotation;
   const [loading, setLoading] = useState(false);
   const [customers, setCustomers] = useState<any[]>([]);
   const [showCreateCustomer, setShowCreateCustomer] = useState(false);
@@ -55,12 +103,51 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
     terms_conditions: "",
     notes: "",
     design_charge: "",
+    design_charge_tax_rate: "",
+    discount_amount: "",
+    is_interstate: false,
   };
   const [formData, setFormData] = useState(emptyForm);
   const nextKey = useRef(1);
   const [items, setItems] = useState<QuoteLine[]>(() => [newLineDraft(nextKey.current++)]);
 
   const { toast } = useToast();
+  // A line given an HSN code from the HSN master starts at that code's rate.
+  const hsnRate = useHsnGstRates(open);
+
+  // Editing: start from the saved quotation each time the dialog opens, so an
+  // abandoned edit is never carried into the next one.
+  const prefilledFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!open || !quotation) {
+      prefilledFor.current = null;
+      return;
+    }
+    if (prefilledFor.current === quotation._id) return;
+    prefilledFor.current = quotation._id;
+    fetchCustomers();
+    fetchInventoryItems();
+    setFormData({
+      customer_id: idOf(quotation.customer_id),
+      valid_until: quotation.valid_until ? localDate(quotation.valid_until) : "",
+      payment_link: quotation.payment_link || "",
+      terms_conditions: quotation.terms_conditions || "",
+      notes: quotation.notes || "",
+      design_charge: quotation.design_charge ? String(quotation.design_charge) : "",
+      design_charge_tax_rate: quotation.design_charge ? String(quotation.design_charge_tax_rate ?? 0) : "",
+      discount_amount: quotation.discount_amount ? String(quotation.discount_amount) : "",
+      is_interstate: quotation.is_interstate === true
+    });
+    setItems(
+      quotation.items.length
+        ? quotation.items.map((i) =>
+            lineDraftFrom(nextKey.current++, { itemName: i.item_name, description: i.description, hsnCode: i.hsn_code, quantity: i.quantity, unit: i.unit, unitPrice: i.unit_price, length: i.length, width: i.width, gstRate: i.tax_rate })
+          )
+        : [newLineDraft(nextKey.current++)]
+    );
+    // fetchCustomers / fetchInventoryItems only read setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, quotation]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -111,13 +198,15 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
     const inv = inventoryItems.find((i) => i.name === name);
     if (!inv) return;
     const unit = inv.unit || 'pieces';
+    const hsnCode = inv.hsnCode || items[index].hsnCode;
     updateItem(index, {
       itemName: inv.name,
       description: items[index].description || inv.description || '',
-      hsnCode: inv.hsnCode || items[index].hsnCode,
+      hsnCode,
       unitPrice: String(inv.unitCost || 0),
       unit,
       pricing: isAreaUnit(unit) ? unit : 'unit',
+      gstRate: items[index].gstRate || hsnRate(hsnCode),
     });
   };
 
@@ -131,8 +220,9 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
     setShowCreateCustomer(false);
   };
 
+  // A new line starts at the rate of the line above it.
   const addItem = () => {
-    setItems([...items, newLineDraft(nextKey.current++)]);
+    setItems([...items, newLineDraft(nextKey.current++, { gstRate: items[items.length - 1]?.gstRate || "" })]);
   };
 
   const removeItem = (index: number) => {
@@ -142,15 +232,17 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
   };
 
   // Same arithmetic as the server: lines (area × pieces × rate for sized
-  // lines) plus the design charge. No GST.
-  const totals = documentTotals(items.map(lineAmount), Number(formData.design_charge) || 0);
+  // lines) plus the design charge, less the discount, plus GST at each rate.
+  const totals = draftTotals(items, { amount: formData.design_charge, gstRate: formData.design_charge_tax_rate }, formData.discount_amount, formData.is_interstate);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     const problem = !formData.customer_id
       ? "Select a customer."
-      : items.map((l, i) => lineProblem(l, i + 1)).find(Boolean) || "";
+      : items.map((l, i) => lineProblem(l, i + 1)).find(Boolean) ||
+        (Number(formData.design_charge) > 0 ? gstRateProblem(formData.design_charge_tax_rate, "The design charge") : "") ||
+        (totals.discount > totals.gross ? "The discount is more than the quotation." : "");
     if (problem) {
       toast({ title: "Check the quotation", description: problem, variant: "destructive" });
       return;
@@ -158,13 +250,16 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
 
     setLoading(true);
     try {
-      await apiClient.createQuotation({
+      const payload = {
         customer_id: formData.customer_id,
         valid_until: formData.valid_until,
         payment_link: formData.payment_link,
         terms_conditions: formData.terms_conditions,
         notes: formData.notes,
         design_charge: Number(formData.design_charge) || 0,
+        design_charge_tax_rate: Number(formData.design_charge_tax_rate) || 0,
+        discount_amount: Number(formData.discount_amount) || 0,
+        is_interstate: formData.is_interstate,
         items: items.map((l) => {
           const p = lineInput(l);
           return {
@@ -175,10 +270,24 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
             unit: p.unit,
             unit_price: p.unitPrice,
             length: p.length,
-            width: p.width
+            width: p.width,
+            tax_rate: p.gstRate
           };
         }),
-      });
+      };
+
+      if (quotation) {
+        await apiClient.updateQuotation(quotation._id, payload);
+        toast({
+          title: `${quotation.quotationNumber} updated`,
+          description: quotation.status === "sent" ? "The customer has the earlier version — send it again so they see the changes." : undefined,
+        });
+        setOpen(false);
+        onQuotationUpdated?.();
+        return;
+      }
+
+      await apiClient.createQuotation(payload);
 
       toast({
         title: "Success",
@@ -190,10 +299,10 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
       setItems([newLineDraft(nextKey.current++)]);
       onQuotationCreated?.();
     } catch (error) {
-      console.error('Error creating quotation:', error);
+      console.error(quotation ? 'Error updating quotation:' : 'Error creating quotation:', error);
       toast({
-        title: "Error",
-        description: error instanceof Error ? error.message : "Failed to create quotation",
+        title: quotation ? "Quotation not saved" : "Error",
+        description: error instanceof Error ? error.message : quotation ? "Failed to save the quotation" : "Failed to create quotation",
         variant: "destructive",
       });
     } finally {
@@ -204,6 +313,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
   return (
     <>
     <Dialog open={open} onOpenChange={setOpen}>
+      {children && (
       <DialogTrigger
         asChild
         onClick={() => {
@@ -212,7 +322,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
           if (initialItems?.length) {
             setItems(
               initialItems.map((i) =>
-                lineDraftFrom(nextKey.current++, { itemName: i.item_name, description: i.description, hsnCode: i.hsn_code, quantity: i.quantity, unit: i.unit, unitPrice: i.unit_price, length: i.length, width: i.width })
+                lineDraftFrom(nextKey.current++, { itemName: i.item_name, description: i.description, hsnCode: i.hsn_code, quantity: i.quantity, unit: i.unit, unitPrice: i.unit_price, length: i.length, width: i.width, gstRate: i.tax_rate })
               )
             );
           }
@@ -220,15 +330,17 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
       >
         {children}
       </DialogTrigger>
+      )}
       <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileText className="w-5 h-5" />
-            Create Quotation
+            {quotation ? `Edit quotation ${quotation.quotationNumber}` : "Create Quotation"}
           </DialogTitle>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
+        {/* Enter moves between fields; only the button below saves. */}
+        <form onSubmit={handleSubmit} onKeyDown={moveFocusOnEnter} className="space-y-6">
           {/* Customer Selection */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -329,6 +441,10 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
                           setOpenItemSuggestion(index);
                         }}
                         onFocus={() => setOpenItemSuggestion(index)}
+                        onKeyDown={(e) => {
+                          // Leaving the field by keyboard closes its suggestions.
+                          if (e.key === "Enter" || e.key === "Tab") setOpenItemSuggestion(null);
+                        }}
                         placeholder="Type or pick an inventory item"
                         autoComplete="off"
                       />
@@ -382,7 +498,10 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
                       <Input
                         id={`quote-hsn-${item.key}`}
                         value={item.hsnCode}
-                        onChange={(e) => updateItem(index, { hsnCode: e.target.value.replace(/\D/g, '').slice(0, 8) })}
+                        onChange={(e) => {
+                          const hsnCode = e.target.value.replace(/\D/g, '').slice(0, 8);
+                          updateItem(index, { hsnCode, ...(item.gstRate ? {} : { gstRate: hsnRate(hsnCode) }) });
+                        }}
                         inputMode="numeric"
                         placeholder="Optional"
                       />
@@ -416,6 +535,12 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
                 idPrefix="quotation"
                 designCharge={formData.design_charge}
                 onDesignChargeChange={(v) => setFormData((prev) => ({ ...prev, design_charge: v }))}
+                designChargeGstRate={formData.design_charge_tax_rate}
+                onDesignChargeGstRateChange={(v) => setFormData((prev) => ({ ...prev, design_charge_tax_rate: v }))}
+                isInterState={formData.is_interstate}
+                onInterStateChange={(v) => setFormData((prev) => ({ ...prev, is_interstate: v }))}
+                discount={formData.discount_amount}
+                onDiscountChange={(v) => setFormData((prev) => ({ ...prev, discount_amount: v }))}
                 totalLabel="Quotation total"
               />
             </CardContent>
@@ -450,7 +575,7 @@ export const CreateQuotationDialog = ({ children, onQuotationCreated, initialIte
               Cancel
             </Button>
             <Button type="submit" disabled={loading}>
-              {loading ? "Creating..." : "Create Quotation"}
+              {loading ? (editing ? "Saving..." : "Creating...") : editing ? "Save changes" : "Create Quotation"}
             </Button>
           </div>
         </form>

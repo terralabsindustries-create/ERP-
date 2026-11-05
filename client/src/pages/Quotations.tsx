@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Ban, CheckCircle, ClipboardList, Download, Lock, Mail, MessageSquare, Plus, Receipt, RotateCcw, Send, TimerOff, Trash2, XCircle } from "lucide-react";
+import { Ban, CheckCircle, ClipboardList, Download, Lock, Mail, MessageSquare, Pencil, Plus, Receipt, RotateCcw, Send, TimerOff, Trash2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { PageShell } from "@/components/layout/PageShell";
 import { ConfirmDialog, DataCard, DataTable, EntityCell, MetricBar, SearchField, Stack, StatusPill, Toolbar, ViewTabs, type Column, type PillTone, type RowAction } from "@/components/data";
-import { CreateQuotationDialog } from "@/components/quotations/CreateQuotationDialog";
+import { CreateQuotationDialog, type QuotationRecord } from "@/components/quotations/CreateQuotationDialog";
 import { SendQuotationEmailDialog, SendQuotationWhatsAppDialog } from "@/components/quotations/SendQuotationDialogs";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -20,7 +20,7 @@ interface Quotation {
   _id: string;
   quotationNumber: string;
   customer_id: { _id: string; name: string; email?: string; phone?: string } | null;
-  /** Quotations written before GST was removed may say "gst" and carry tax_amount. */
+  /** "gst" when the quotation carries GST (tax_amount). */
   gst_type?: "gst" | "non_gst";
   valid_until: string;
   status: QuotationStatus;
@@ -47,6 +47,10 @@ const OPEN: QuotationStatus[] = ["draft", "sent", "approved"];
 const inView = (q: Quotation, v: View) =>
   v === "all" ? true : v === "open" ? OPEN.includes(q.status) : v === "lost" ? ["rejected", "expired", "closed"].includes(q.status) : q.status === v;
 const customerOf = (q: Quotation) => q.customer_id?.name || "—";
+// Matches the API (PUT /api/quotations/:id): a draft, or one sent and
+// awaiting a reply. Anything else is reopened as a draft first; an invoiced
+// one is changed on its invoice.
+const EDITABLE: QuotationStatus[] = ["draft", "sent"];
 // Draft, sent or approved but past its validity date.
 const lapsed = (q: Quotation) => OPEN.includes(q.status) && (daysUntil(q.valid_until) ?? 0) < 0;
 
@@ -63,6 +67,7 @@ export default function Quotations() {
   const [converting, setConverting] = useState<Quotation | null>(null);
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState<Quotation | null>(null);
+  const [editing, setEditing] = useState<QuotationRecord | null>(null);
 
   const canEdit = hasPermission("Quotations: Create & Edit");
   const canDelete = hasPermission("Quotations: Delete");
@@ -150,6 +155,16 @@ export default function Quotations() {
     }
   };
 
+  // Edit from the saved record, not the list row, so every line comes back.
+  const startEdit = async (q: Quotation) => {
+    try {
+      const res = (await apiClient.getQuotation(q._id)) as { quotation?: QuotationRecord };
+      if (res?.quotation) setEditing(res.quotation);
+    } catch (error) {
+      toast({ title: "Quotation could not be opened", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+    }
+  };
+
   const remove = async () => {
     if (!deleting) return;
     try {
@@ -166,6 +181,7 @@ export default function Quotations() {
   const actions = (q: Quotation): RowAction[] => {
     const finished = q.status === "converted" || q.status === "closed";
     return [
+      { label: "Edit quotation", icon: Pencil, onClick: () => startEdit(q), hidden: !canEdit || !EDITABLE.includes(q.status) },
       { label: "Download PDF", icon: Download, onClick: () => download(q) },
       { label: "Email to customer", icon: Mail, onClick: () => setEmailing(q), hidden: !canSend || finished },
       { label: "Send on WhatsApp", icon: MessageSquare, onClick: () => setWhatsapping(q), hidden: !canWhatsApp || finished },
@@ -188,7 +204,8 @@ export default function Quotations() {
       { label: "Mark rejected", icon: XCircle, onClick: () => setStatus(q, "rejected"), hidden: !canStatus || !OPEN.includes(q.status) },
       { label: "Mark expired", icon: TimerOff, onClick: () => setStatus(q, "expired"), hidden: !canStatus || !OPEN.includes(q.status) },
       { label: "Close", icon: Lock, onClick: () => setStatus(q, "closed"), hidden: !canStatus || finished },
-      { label: "Reopen as draft", icon: RotateCcw, onClick: () => setStatus(q, "draft"), hidden: !canStatus || !["rejected", "expired", "closed"].includes(q.status) },
+      // Reopening is how an approved, rejected, expired or closed quotation becomes editable again.
+      { label: "Reopen as draft", icon: RotateCcw, onClick: () => setStatus(q, "draft"), hidden: !canStatus || !["approved", "rejected", "expired", "closed"].includes(q.status) },
       { label: "Delete quotation", icon: Trash2, destructive: true, separated: true, onClick: () => setDeleting(q), hidden: !canDelete || q.status === "converted" }
     ];
   };
@@ -351,15 +368,22 @@ export default function Quotations() {
         </DataCard>
       </div>
 
+      <CreateQuotationDialog
+        quotation={editing}
+        open={!!editing}
+        onOpenChange={(o) => !o && setEditing(null)}
+        onQuotationUpdated={load}
+      />
+
       <Dialog open={!!converting} onOpenChange={(o) => !o && !busy && setConverting(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Convert to invoice</DialogTitle>
           </DialogHeader>
           {converting && (() => {
-            // An older quotation written with GST is invoiced at its prices before tax.
-            const legacyGst = converting.gst_type === "gst" ? converting.tax_amount || 0 : 0;
-            const invoiceTotal = converting.total_amount - legacyGst;
+            // The invoice takes the quotation's lines and GST rates, so it comes to the quoted total.
+            const gst = converting.tax_amount || 0;
+            const invoiceTotal = converting.total_amount;
             return (
             <div className="space-y-3 text-sm">
               <dl className="grid grid-cols-3 gap-px overflow-hidden rounded-lg border bg-border">
@@ -379,9 +403,9 @@ export default function Quotations() {
                   The design charge of <span className="font-medium">{formatINR(converting.design_charge || 0)}</span> carries over as its own line.
                 </p>
               )}
-              {legacyGst > 0 && (
-                <p className="rounded-md border border-warning/30 bg-warning-soft px-3 py-2 text-warning-strong">
-                  This quotation was written with GST of {formatINR(legacyGst)}. Invoices carry no GST, so the invoice is raised for {formatINR(invoiceTotal)}.
+              {gst > 0 && (
+                <p>
+                  GST of <span className="font-medium">{formatINR(gst)}</span> carries over at the quoted rates.
                 </p>
               )}
               <p className="text-muted-foreground">
