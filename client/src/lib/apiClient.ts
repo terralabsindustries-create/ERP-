@@ -5,10 +5,19 @@ import { printPdf, saveFile, type PdfFile, type PrintOutcome } from "./printPdf"
 // not exist and this falls straight through to the build-time value.
 const desktopApiBase = (globalThis as any).serpyDesktop?.apiBaseUrl;
 
-export const BASE_URL =
-  // TODO: switch back to production URL when done testing locally
-  // desktopApiBase || import.meta.env.VITE_API_URL || 'https://serpy.synxautomate.com/api';
-  desktopApiBase || import.meta.env.VITE_API_URL || 'http://localhost:4001/api';
+// The local backend, for `vite` (dev server) and `vite build --mode development`.
+// A production build without VITE_API_URL is refused by vite.config.ts, so the
+// hosted app can never fall back to an API on the visitor's own machine.
+const LOCAL_API = 'http://localhost:4001/api';
+
+export const BASE_URL: string =
+  desktopApiBase ||
+  import.meta.env.VITE_API_URL ||
+  (import.meta.env.MODE === 'production'
+    ? (() => {
+        throw new Error('This build has no API address: set VITE_API_URL and build again.');
+      })()
+    : LOCAL_API);
 
 interface ApiResponse<T = any> {
   status: 'success' | 'error';
@@ -619,6 +628,15 @@ class ApiClient {
     return this.put(`/payments/${id}`, data);
   }
 
+  /**
+   * Sets which invoices a payment pays. The list replaces the current one (an
+   * invoice left out goes back on account); `version` is the payment's __v as
+   * loaded, so a change made meanwhile by someone else is refused.
+   */
+  async setPaymentAllocations(id: string, allocations: { invoiceId: string; amount: number }[], version?: number) {
+    return this.put(`/payments/${id}/allocations`, { allocations, version });
+  }
+
   async deletePayment(id: string) {
     return this.delete(`/payments/${id}`);
   }
@@ -845,7 +863,13 @@ class ApiClient {
     return this.get(`/invoices/${invoiceId}/print-data`);
   }
 
-  async updateInvoicePaymentStatus(invoiceId: string, data: { paymentStatus: string; amountPaid?: number }) {
+  /**
+   * Balance correction: sets the amount recorded straight on an invoice,
+   * outside payments (money received before Carbon). Needs Invoicing: Correct
+   * Balance and a reason; it is written to the Activity Log. Money received now
+   * is recorded with createPayment instead.
+   */
+  async correctInvoiceBalance(invoiceId: string, data: { manualPaidAmount: number; reason: string }) {
     return this.patch(`/invoices/${invoiceId}/payment-status`, data);
   }
 

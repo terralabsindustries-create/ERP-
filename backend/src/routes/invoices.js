@@ -13,6 +13,7 @@ const ActivityLog = require('../models/ActivityLog');
 const PDFService = require('../services/PDFService');
 const InventoryService = require('../services/InventoryService');
 const { createInvoiceWithStock } = require('../services/invoiceCreation');
+const ledger = require('../services/paymentLedger');
 const { protect } = require('../middleware/auth');
 const { requirePermission, userCan } = require('../middleware/requirePermission');
 const { parseDesignCharge, parseGstRate, priceInvoiceDocument, HSN_PATTERN } = require('../utils/billing');
@@ -25,6 +26,31 @@ const { orgScope } = require('../utils/accessScope');
 const { sendWhatsAppMessage, buildTemplateVariables } = require('../utils/metaWhatsApp');
 
 const router = express.Router();
+
+const INVOICE_CHANGED = {
+  status: 'error',
+  message: 'This invoice changed while you were working on it (a payment may have been recorded). Reload it and try again.',
+  code: 'INVOICE_CHANGED'
+};
+
+/**
+ * Refuses to delete or cancel an invoice that payments are applied to: the
+ * money would be counted as received against an invoice that no longer
+ * counts. Taking the payments off it first (Payments → Allocate) puts that
+ * money back on the customer's account.
+ */
+async function paymentsBlock(invoice, action) {
+  const rows = await ledger.paymentsForInvoice(invoice._id);
+  const live = rows.filter(({ payment }) => ['completed', 'pending'].includes(payment.status));
+  if (!live.length) return null;
+  const applied = ledger.round2(live.reduce((sum, r) => sum + r.appliedAmount, 0));
+  return {
+    status: 'error',
+    message: `${live.length === 1 ? 'A payment' : `${live.length} payments`} (₹${applied.toLocaleString('en-IN')}) ${live.length === 1 ? 'is' : 'are'} applied to ${invoice.invoiceNumber}. Take ${live.length === 1 ? 'it' : 'them'} off the invoice in Payments before you ${action} it; the money then stays on the customer's account.`,
+    code: 'INVOICE_HAS_PAYMENTS',
+    details: { payments: live.map(({ payment, appliedAmount }) => ({ _id: payment._id, paymentId: payment.paymentId, appliedAmount })) }
+  };
+}
 
 const startOfToday = () => {
   const d = new Date();
@@ -336,15 +362,28 @@ router.get('/:id', protect, async (req, res) => {
       });
     }
 
-    const paymentHistory = await Payment.find({ invoiceId: invoice._id })
-      .select('paymentId paymentDate amount paymentMethod referenceNumber status')
-      .sort({ paymentDate: -1, createdAt: -1 });
-    
+    // Every payment applied to this invoice, with the part of it applied here
+    // (a payment can be split across invoices).
+    const rows = await ledger.paymentsForInvoice(invoice._id);
+    const paymentHistory = rows.map(({ payment, appliedAmount }) => ({
+      _id: payment._id,
+      paymentId: payment.paymentId,
+      paymentDate: payment.paymentDate,
+      paymentMethod: payment.paymentMethod,
+      referenceNumber: payment.referenceNumber,
+      status: payment.status,
+      amount: payment.amount,
+      appliedAmount
+    }));
+    const recordedAmount = ledger.round2(rows.filter(({ payment }) => payment.status === 'completed').reduce((sum, r) => sum + r.appliedAmount, 0));
+
     res.status(200).json({
       status: 'success',
       data: {
         invoice,
-        paymentHistory
+        paymentHistory,
+        // paidAmount = recordedAmount (payments) + manualPaidAmount (recorded on the invoice itself).
+        paymentSummary: { recordedAmount, manualPaidAmount: ledger.manualPaidOf(invoice, recordedAmount) }
       }
     });
     
@@ -611,7 +650,15 @@ router.put('/:id', protect, requirePermission('Invoicing: Create & Edit'), [
       else if (!settled && invoice.status === 'paid') invoice.status = 'sent';
     }
 
-    await invoice.save();
+    // Saved only over the version read above: a payment recorded meanwhile
+    // moved paidAmount, and the totals here were worked out without it.
+    invoice.increment();
+    try {
+      await invoice.save();
+    } catch (error) {
+      if (error.name === 'VersionError') return res.status(409).json(INVOICE_CHANGED);
+      throw error;
+    }
     await invoice.populate([
       { path: 'customerId', select: 'name email phone gstNumber' },
       { path: 'jobId', select: 'title status' }
@@ -668,8 +715,14 @@ router.delete('/:id', protect, requirePermission('Invoicing: Delete'), async (re
       });
     }
     
-    // Delete the invoice completely
-    await Invoice.deleteOne({ _id: req.params.id });
+    const blocked = await paymentsBlock(invoice, 'delete');
+    if (blocked) return res.status(409).json(blocked);
+
+    // Delete the invoice completely — the version read above, so a payment
+    // applied to it in the meantime stops the delete.
+    const versionFilter = invoice.__v === undefined ? { __v: { $exists: false } } : { __v: invoice.__v };
+    const { deletedCount } = await Invoice.deleteOne({ _id: invoice._id, ...versionFilter });
+    if (!deletedCount) return res.status(409).json(INVOICE_CHANGED);
 
     ActivityLog.logActivity({
       action: 'Invoice Deleted',
@@ -793,11 +846,21 @@ router.patch('/:id/cancel', protect, async (req, res) => {
       });
     }
     
-    // Update invoice status
+    const blocked = await paymentsBlock(invoice, 'cancel');
+    if (blocked) return res.status(409).json(blocked);
+
+    // Update invoice status — over the version read above, so a payment
+    // applied in the meantime stops the cancellation.
     invoice.status = 'cancelled';
     invoice.cancelledAt = new Date();
     invoice.cancellationReason = req.body.reason || 'Invoice cancelled';
-    await invoice.save();
+    invoice.increment();
+    try {
+      await invoice.save();
+    } catch (error) {
+      if (error.name === 'VersionError') return res.status(409).json(INVOICE_CHANGED);
+      throw error;
+    }
 
     ActivityLog.logActivity({
       action: 'Invoice Cancelled',
@@ -853,105 +916,79 @@ router.patch('/:id/cancel', protect, async (req, res) => {
 });
 
 // @route   PATCH /api/invoices/:id/payment-status
-// @desc    Update invoice payment status
-// @access  Private
-router.patch('/:id/payment-status', protect, requirePermission('Invoicing: Record Payment'), [
-  body('paymentStatus').isIn(['pending', 'partial', 'paid', 'overdue']).withMessage('Invalid payment status'),
-  body('amountPaid').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Amount paid must be greater than or equal to 0')
-], validate, async (req, res) => {
+// @desc    Balance correction: set the amount recorded straight on the invoice
+//          (money received before Carbon, or never entered as a payment):
+//          { manualPaidAmount, reason }. Payments applied to the invoice are
+//          untouched and still count. Money received now is recorded through
+//          POST /api/payments instead, so it has a date, method and reference.
+// @access  Private (Invoicing: Correct Balance) — every correction is logged
+router.patch('/:id/payment-status', protect, requirePermission('Invoicing: Correct Balance'), async (req, res) => {
   try {
-    const { amountPaid } = req.body;
-
-    const query = { _id: req.params.id, ...staffScopeQuery(req.user) };
-
-    const invoice = await Invoice.findOne(query);
-
-    if (!invoice) {
-      return res.status(404).json({
+    const { manualPaidAmount, reason } = req.body || {};
+    if (manualPaidAmount === undefined) {
+      return res.status(400).json({
         status: 'error',
-        message: 'Invoice not found'
+        message: 'Record money received with Record payment, so it has a date, method and reference. To correct an old balance, send manualPaidAmount and a reason.',
+        code: 'USE_PAYMENTS'
       });
     }
-
-    // Validate amount paid
-    if (amountPaid !== undefined) {
-      if (amountPaid < 0) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Amount paid cannot be negative. Please enter a valid amount.',
-          code: 'NEGATIVE_AMOUNT'
-        });
-      }
-
-      if (amountPaid > invoice.totalAmount) {
-        const excessAmount = amountPaid - invoice.totalAmount;
-        return res.status(400).json({
-          status: 'error',
-          message: `Amount paid (₹${amountPaid.toLocaleString()}) exceeds invoice total (₹${invoice.totalAmount.toLocaleString()}) by ₹${excessAmount.toLocaleString()}. Please enter an amount less than or equal to ₹${invoice.totalAmount.toLocaleString()}.`,
-          code: 'AMOUNT_EXCEEDS_TOTAL',
-          details: {
-            amountPaid,
-            invoiceTotal: invoice.totalAmount,
-            excessAmount
-          }
-        });
-      }
-
-      const allocated = await Payment.aggregate([
-        { $match: { invoiceId: invoice._id, status: 'completed' } },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
-      ]);
-      if (amountPaid + 0.001 < (allocated[0]?.total || 0)) {
-        return res.status(400).json({ status: 'error', message: 'Amount paid cannot be less than payments already allocated to this invoice.' });
-      }
-
-      invoice.paidAmount = amountPaid;
+    const manual = Number(manualPaidAmount);
+    if (!Number.isFinite(manual) || manual < 0) {
+      return res.status(400).json({ status: 'error', message: 'The amount recorded outside payments must be 0 or more.', code: 'INVALID_AMOUNT' });
+    }
+    const why = typeof reason === 'string' ? reason.trim() : '';
+    if (why.length < 3 || why.length > 500) {
+      return res.status(400).json({ status: 'error', message: 'Give a reason for the correction (3 to 500 characters).', code: 'REASON_REQUIRED' });
+    }
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(404).json({ status: 'error', message: 'Invoice not found' });
     }
 
-    // The amount is authoritative; a manual status must not contradict the balance.
-    invoice.paymentStatus = invoice.paidAmount >= invoice.totalAmount ? 'paid' : invoice.paidAmount > 0 ? 'partial' : 'pending';
-
-    // Auto-update invoice status based on payment status
-    if (invoice.paymentStatus === 'paid') {
-      invoice.status = 'paid';
-    } else if (invoice.status === 'paid') {
-      invoice.status = 'sent';
-    }
-
-    await invoice.save();
+    const { before, after, recorded, previousManual } = await ledger.correctManualPaid(
+      { _id: req.params.id, ...staffScopeQuery(req.user), ...noGstVisibility(req.user) },
+      manual
+    );
 
     ActivityLog.logActivity({
-      action: 'Invoice Payment Status Updated',
-      description: `Invoice ${invoice.invoiceNumber} payment status was changed to ${invoice.paymentStatus}`,
+      action: 'Invoice Balance Corrected',
+      description: `${after.invoiceNumber}: amount recorded outside payments ₹${previousManual} → ₹${after.manualPaidAmount} (paid ₹${before.paidAmount} → ₹${after.paidAmount}). Reason: ${why}`,
       entityType: 'invoice',
-      entityId: invoice._id,
-      entityName: invoice.invoiceNumber,
+      entityId: after._id,
+      entityName: after.invoiceNumber,
       performedBy: req.user._id,
       performedByName: req.user.fullName,
       actionType: 'update',
-      severity: 'medium',
+      changes: {
+        before: { manualPaidAmount: previousManual, paidAmount: before.paidAmount, balanceAmount: before.balanceAmount, paymentStatus: before.paymentStatus },
+        after: { manualPaidAmount: after.manualPaidAmount, paidAmount: after.paidAmount, balanceAmount: after.balanceAmount, paymentStatus: after.paymentStatus, reason: why },
+        fields: ['manualPaidAmount', 'paidAmount', 'balanceAmount', 'paymentStatus']
+      },
+      metadata: { reason: why, recordedPayments: recorded },
+      severity: 'high',
       userId: req.user._id,
       dataScope: req.user.dataScope
-    }).catch(err => console.error('Activity log (invoice payment status update) failed:', err.message));
+    }).catch(err => console.error('Activity log (invoice balance correction) failed:', err.message));
 
-    // Populate and return updated invoice
-    const updatedInvoice = await Invoice.findById(req.params.id)
+    const updatedInvoice = await Invoice.findById(after._id)
       .populate('customerId', 'name email phone gstNumber')
       .populate('jobId', 'title status');
 
     res.status(200).json({
       status: 'success',
-      message: 'Invoice payment status updated successfully',
+      message: 'Balance corrected',
       data: {
-        invoice: updatedInvoice
+        invoice: updatedInvoice,
+        paymentSummary: { recordedAmount: recorded, manualPaidAmount: after.manualPaidAmount }
       }
     });
-
   } catch (error) {
-    console.error('Update payment status error:', error);
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({ status: 'error', message: error.message, code: error.code });
+    }
+    console.error('Balance correction error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Server error while updating payment status'
+      message: 'Server error while correcting the balance'
     });
   }
 });

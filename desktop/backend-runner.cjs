@@ -110,6 +110,11 @@ async function startBackend({ backendDir, configFile, execPath, onLog = () => {}
       // The desktop client is served from this origin; without it every API
       // call would be refused by the backend's CORS allow-list.
       FRONTEND_URL: fileEnv.FRONTEND_URL || 'app://serpy',
+      // `npm run dev` loads the renderer from the Vite dev server; this
+      // production-mode backend only answers localhost origins it is told about.
+      ...(process.env.VITE_DEV_SERVER_URL
+        ? { CORS_ORIGINS: [fileEnv.CORS_ORIGINS || process.env.CORS_ORIGINS, process.env.VITE_DEV_SERVER_URL].filter(Boolean).join(',') }
+        : {}),
       ...(chromium ? { PUPPETEER_EXECUTABLE_PATH: chromium } : {})
     },
     stdio: ['ignore', 'pipe', 'pipe']

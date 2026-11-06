@@ -29,25 +29,32 @@ if (process.env.TRUST_PROXY) {
 app.use(helmet());
 app.use(compression());
 
-// CORS configuration
+// CORS: the hosted web app, the desktop app, and any origins in FRONTEND_URL or
+// CORS_ORIGINS (comma-separated). The local Vite dev servers are allowed only
+// outside production — a production API does not answer pages served from
+// someone's localhost unless an operator lists that origin explicitly.
+const listedOrigins = (value) => (value || '').split(',').map((origin) => origin.trim()).filter(Boolean);
+const LOCAL_DEV_ORIGINS = ['http://localhost:8080', 'http://localhost:8081'];
+const corsOrigins = [...new Set([
+  ...listedOrigins(process.env.FRONTEND_URL),
+  ...listedOrigins(process.env.CORS_ORIGINS),
+  'https://erp-delta-one-83.vercel.app',
+  'https://api.carbonprintflow.com',
+  // Earlier deployments, kept while they may still be in use.
+  'https://serpy-silk.vercel.app',
+  'https://app.serpy.in',
+  // The Electron desktop app serves the same bundle over its own scheme, so
+  // its requests arrive from this fixed origin (see desktop/main.cjs).
+  'app://serpy',
+  ...(process.env.NODE_ENV === 'production' ? [] : LOCAL_DEV_ORIGINS)
+])];
+app.set('corsOrigins', corsOrigins);
+
 app.use(cors({
-  origin: [
-    // TODO: switch back to production URL when done testing locally
-    // process.env.FRONTEND_URL || 'https://serpy.synxautomate.com',
-    process.env.FRONTEND_URL || 'http://localhost:8080',
-    'https://serpy-silk.vercel.app',
-    'https://erp-delta-one-83.vercel.app',
-    'https://api.carbonprintflow.com',
-    'http://localhost:8081',
-    'http://localhost:8080',
-    'https://app.serpy.in',
-    // The Electron desktop app serves the same bundle over its own scheme, so
-    // its requests arrive from this fixed origin (see desktop/main.cjs).
-    'app://serpy'
-  ],
+  origin: corsOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Portal-Session'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Portal-Session', 'Idempotency-Key'],
   // Lets the app read a file's name (Invoice_INV-2026-11-0041.pdf) from a
   // download on another origin, instead of falling back to the record's id.
   exposedHeaders: ['Content-Disposition']
@@ -146,12 +153,20 @@ guarded('/api/invoices', require('./routes/invoices'), {
   write: 'Invoicing: Create & Edit',
   remove: 'Invoicing: Delete',
   rules: [
-    { method: 'PATCH', path: /^\/[^/]+\/payment-status$/, allow: 'Invoicing: Record Payment' },
+    // Balance correction (amounts recorded outside payments); receipts go through /api/payments.
+    { method: 'PATCH', path: /^\/[^/]+\/payment-status$/, allow: 'Invoicing: Correct Balance' },
     { method: 'POST', path: /^\/[^/]+\/send-email$/, allow: 'Invoicing: Send Email' },
     { method: 'POST', path: /^\/[^/]+\/send-whatsapp$/, allow: 'WhatsApp: Send Messages' }
   ]
 });
-guarded('/api/payments', require('./routes/payments'), { read: 'Payments', write: 'Payments: Record Payment', remove: 'Payments: Delete' });
+guarded('/api/payments', require('./routes/payments'), {
+  read: 'Payments',
+  write: 'Payments: Record Payment',
+  remove: 'Payments: Delete',
+  // Invoice logins may record a payment applied in full to invoices (the
+  // route refuses them money on account).
+  rules: [{ method: 'POST', path: /^\/?$/, allow: ['Payments: Record Payment', 'Invoicing: Record Payment'] }]
+});
 guarded('/api/inventory', require('./routes/inventory'), {
   read: ITEM_READERS,
   write: 'Inventory: Create & Edit',

@@ -109,7 +109,9 @@ export function InvoicesView() {
 
   const canCreate = hasPermission("Invoicing: Create & Edit");
   const canDelete = hasPermission("Invoicing: Delete");
-  const canPay = hasPermission("Invoicing: Record Payment");
+  // Receipts are payments (POST /payments); either grant may record one against an invoice.
+  const canPay = hasPermission("Payments: Record Payment") || hasPermission("Invoicing: Record Payment");
+  const canCorrect = hasPermission("Invoicing: Correct Balance");
   const canPdf = hasPermission("Invoicing: Download PDF");
   const canEmail = hasPermission("Invoicing: Send Email");
   const canWhatsApp = hasPermission("WhatsApp: Send Messages");
@@ -388,7 +390,12 @@ export function InvoicesView() {
             actions={(i) => [
               { label: "Open invoice", icon: Eye, onClick: () => { setSendVia(null); setViewing(i); } },
               { label: "Edit invoice", icon: Pencil, onClick: () => setEditing(i), hidden: !canCreate || i.status === "cancelled" },
-              { label: "Update payment", icon: IndianRupee, onClick: () => setPaying(i), hidden: !canPay || ["draft", "cancelled"].includes(i.status) },
+              {
+                label: balanceOf(i) > 0 && canPay ? "Record payment" : "Correct balance",
+                icon: IndianRupee,
+                onClick: () => setPaying(i),
+                hidden: ["draft", "cancelled"].includes(i.status) || !((canPay && balanceOf(i) > 0) || canCorrect)
+              },
               { label: "Print", icon: Printer, onClick: () => print(i), hidden: !canPdf, separated: true },
               { label: "Download PDF", icon: Download, onClick: () => download(i), hidden: !canPdf },
               { label: "Send by email", icon: Mail, onClick: () => send(i, "email"), hidden: !canEmail },
@@ -466,7 +473,12 @@ export function InvoicesView() {
         onInvoiceUpdated={refreshViewing}
       />
       <EditInvoiceDialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)} invoice={editing as never} onInvoiceUpdated={refresh} />
-      <InvoicePaymentDialog invoice={paying} onOpenChange={(o) => !o && setPaying(null)} onSaved={refresh} />
+      <InvoicePaymentDialog
+        invoice={paying}
+        startWith={paying && !(canPay && balanceOf(paying) > 0) ? "correct" : "record"}
+        onOpenChange={(o) => !o && setPaying(null)}
+        onSaved={refresh}
+      />
       <ConfirmDialog
         open={!!deleting}
         onOpenChange={(o) => !o && setDeleting(null)}

@@ -396,7 +396,9 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice: listedInvoice, 
 
   const paidAmount = invoice.paidAmount ?? invoice.amountPaid ?? 0;
   const balanceAmount = invoice.balanceAmount ?? Math.max(0, invoice.totalAmount - paidAmount);
-  const recordedAmount = paymentHistory.filter((payment) => payment.status === "completed").reduce((sum, payment) => sum + payment.amount, 0);
+  // A payment can be split across invoices: count only the part applied here.
+  const appliedOf = (payment: PaymentRecord) => payment.appliedAmount ?? payment.amount;
+  const recordedAmount = paymentHistory.filter((payment) => payment.status === "completed").reduce((sum, payment) => sum + appliedOf(payment), 0);
   const paymentStatusConfig = getPaymentStatusConfig(balanceAmount <= 0 ? "paid" : paidAmount > 0 ? "partial" : "pending");
 
   return (
@@ -656,10 +658,13 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice: listedInvoice, 
                       <li key={payment._id} className="flex flex-col gap-1 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between">
                         <div>
                           <div className="font-medium">{fmtDate(payment.paymentDate)} · {METHOD_LABELS[payment.paymentMethod] || payment.paymentMethod}</div>
-                          <div className="text-xs text-muted-foreground">Reference: {payment.referenceNumber || "—"}</div>
+                          <div className="text-xs text-muted-foreground">
+                            Reference: {payment.referenceNumber || "—"}
+                            {appliedOf(payment) < payment.amount - 0.005 && ` · part of a ${formatINR(payment.amount)} payment`}
+                          </div>
                         </div>
                         <div className="flex items-center gap-2 sm:justify-end">
-                          <span className="font-semibold tabular-nums">{formatINR(payment.amount)}</span>
+                          <span className="font-semibold tabular-nums">{formatINR(appliedOf(payment))}</span>
                           {payment.status !== "completed" && <Badge variant="secondary">{payment.status}</Badge>}
                         </div>
                       </li>
@@ -667,7 +672,7 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice: listedInvoice, 
                   </ul>
                 ) : <p className="text-sm text-muted-foreground">No payments allocated to this invoice yet.</p>}
                 {paidAmount > recordedAmount + 0.01 && (
-                  <p className="mt-3 text-xs text-muted-foreground">Amount received also includes {formatINR(paidAmount - recordedAmount)} entered directly on the invoice.</p>
+                  <p className="mt-3 text-xs text-muted-foreground">Amount received also includes {formatINR(paidAmount - recordedAmount)} recorded directly on the invoice (outside payments).</p>
                 )}
               </CardContent>
             </Card>

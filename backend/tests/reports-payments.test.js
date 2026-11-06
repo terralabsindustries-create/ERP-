@@ -229,8 +229,12 @@ describe('payments', () => {
 
     expect((await request(app).delete(`/api/payments/${first.body.data.payment._id}`).set(auth(org.tokens.admin))).status).toBe(200);
     expect((await details()).body.data.invoice).toMatchObject({ paidAmount: 200, balanceAmount: 800, paymentStatus: 'partial' });
-    expect((await request(app).patch(`/api/invoices/${invoice._id}/payment-status`).set(auth(org.tokens.admin)).send({ paymentStatus: 'pending', amountPaid: 100 })).status).toBe(400);
-    const corrected = await request(app).patch(`/api/invoices/${invoice._id}/payment-status`).set(auth(org.tokens.admin)).send({ paymentStatus: 'paid', amountPaid: 200 });
+    // Setting the paid total directly is gone: receipts are payments, and a
+    // balance correction only changes the amount recorded outside them.
+    const legacy = await request(app).patch(`/api/invoices/${invoice._id}/payment-status`).set(auth(org.tokens.admin)).send({ paymentStatus: 'paid', amountPaid: 1000 });
+    expect(legacy.status).toBe(400);
+    expect(legacy.body.code).toBe('USE_PAYMENTS');
+    const corrected = await request(app).patch(`/api/invoices/${invoice._id}/payment-status`).set(auth(org.tokens.admin)).send({ manualPaidAmount: 0, reason: 'No cash taken outside Carbon' });
     expect(corrected.status).toBe(200);
     expect((await details()).body.data.invoice).toMatchObject({ paidAmount: 200, balanceAmount: 800, paymentStatus: 'partial' });
   });

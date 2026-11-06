@@ -253,6 +253,14 @@ const invoiceSchema = new mongoose.Schema({
     default: 0,
     min: [0, 'Balance amount cannot be negative']
   },
+  // The part of paidAmount recorded straight on the invoice rather than as
+  // payments (money received before Carbon, or the old "Mark paid"). Changed
+  // only by a balance correction (PATCH /invoices/:id/payment-status). Older
+  // invoices lack it: there, whatever part of paidAmount no payment covers.
+  manualPaidAmount: {
+    type: Number,
+    min: [0, 'Manual paid amount cannot be negative']
+  },
   paymentTerms: {
     type: String,
     trim: true,

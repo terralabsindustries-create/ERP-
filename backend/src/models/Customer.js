@@ -145,7 +145,8 @@ customerSchema.methods.updateStats = async function() {
   
   // Calculate total orders and revenue
   const jobs = await Job.find({ customerId: this._id });
-  const payments = await Payment.find({ customerId: this._id });
+  // Money actually received: not pending, failed, cancelled or refunded payments.
+  const payments = await Payment.find({ customerId: this._id, status: 'completed' }).sort({ paymentDate: 1 });
   
   this.totalOrders = jobs.length;
   this.totalRevenue = jobs.reduce((sum, job) => sum + (job.estimatedCost || 0), 0);
@@ -154,15 +155,18 @@ customerSchema.methods.updateStats = async function() {
   this.lastPaymentAmount = payments.length > 0 ? payments[payments.length - 1].amount : 0;
   this.lastPaymentDate = payments.length > 0 ? payments[payments.length - 1].paymentDate : null;
   
-  // Calculate outstanding balance
+  // Outstanding: what issued invoices still show as due (their balances already
+  // count payments applied to them and amounts recorded on the invoice), less
+  // money received on account and not yet applied.
   const Invoice = mongoose.model('Invoice');
-  const paidAmount = payments.reduce((sum, payment) => sum + (payment.amount || 0), 0);
-  const billedAmount = await Invoice.aggregate([
-    { $match: { customerId: this._id } },
-    { $group: { _id: null, total: { $sum: "$totalAmount" } } }
+  const { unallocatedOf } = require('../services/paymentLedger');
+  const owed = await Invoice.aggregate([
+    { $match: { customerId: this._id, status: { $nin: ['draft', 'cancelled'] } } },
+    { $group: { _id: null, total: { $sum: { $ifNull: ['$balanceAmount', 0] } } } }
   ]);
-  
-  this.outstandingBalance = (billedAmount[0]?.total || 0) - paidAmount;
+  const onAccount = payments.reduce((sum, payment) => sum + unallocatedOf(payment), 0);
+
+  this.outstandingBalance = Math.round(((owed[0]?.total || 0) - onAccount) * 100) / 100;
   
   return this.save();
 };

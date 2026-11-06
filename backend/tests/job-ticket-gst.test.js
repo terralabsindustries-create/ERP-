@@ -140,6 +140,8 @@ describe('an invoice raised from a job ticket', () => {
   });
 
   test('keeps its GST when a payment re-saves it and when only the notes change', async () => {
+    // Payments apply to issued invoices; the one above was saved as a draft.
+    await Invoice.updateOne({ _id: invoice._id }, { status: 'sent' });
     const pay = await api().post('/api/payments', { customerId: String(cust._id), invoiceId: invoice._id, amount: 500, paymentMethod: 'cash' });
     expect(pay.status).toBe(201);
     let stored = await Invoice.findById(invoice._id);

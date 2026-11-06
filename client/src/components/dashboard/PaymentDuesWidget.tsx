@@ -5,6 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Panel } from "@/components/common/Panel";
 import { EmptyState } from "@/components/common/EmptyState";
+import { InvoicePaymentDialog } from "@/components/invoices/InvoicePaymentDialog";
+import { useAuth } from "@/contexts/AuthContext";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
 import { formatINR } from "@/lib/printWorkflow";
@@ -44,9 +46,13 @@ interface PaymentDuesWidgetProps {
 export function PaymentDuesWidget({ onRefresh }: PaymentDuesWidgetProps) {
   const [dues, setDues] = useState<PaymentDue[]>([]);
   const [loading, setLoading] = useState(true);
-  const [markingPaid, setMarkingPaid] = useState<string | null>(null);
+  const [paying, setPaying] = useState<PaymentDue | null>(null);
   const [totalDue, setTotalDue] = useState(0);
   const { toast } = useToast();
+  const { hasPermission } = useAuth();
+  // Receipts are recorded as payments (with date, method and reference), so
+  // the invoice, its payment history and the Payments totals agree.
+  const canRecord = hasPermission("Payments: Record Payment") || hasPermission("Invoicing: Record Payment");
 
   useEffect(() => {
     fetchPaymentDues();
@@ -57,9 +63,14 @@ export function PaymentDuesWidget({ onRefresh }: PaymentDuesWidgetProps) {
 
   const fetchPaymentDues = async () => {
     try {
-      const response: GetInvoicesResponse = await apiClient.getInvoices({ paymentStatus: 'pending,partial,overdue' });
-      console.log('💰 Payment dues response:', response);
-      
+      // Issued invoices with a balance (not drafts), soonest due first. The
+      // total comes from the same server figure as the invoice list's
+      // "outstanding", not from the rows shown, so the two always agree.
+      const [response, viewStats] = await Promise.all([
+        apiClient.getInvoices({ view: 'unpaid', limit: 100, sortBy: 'dueDate', sortOrder: 'asc' }) as Promise<GetInvoicesResponse>,
+        apiClient.getInvoiceViewStats().catch(() => null)
+      ]);
+
       // Handle different response formats
       let duesData: PaymentDue[] = [];
       if (Array.isArray(response)) {
@@ -74,8 +85,8 @@ export function PaymentDuesWidget({ onRefresh }: PaymentDuesWidgetProps) {
       
       setDues(duesData);
       
-      const total = duesData.reduce((sum: number, due: PaymentDue) => sum + (due.balanceAmount ?? due.totalAmount ?? 0), 0);
-      setTotalDue(total);
+      const listed = duesData.reduce((sum: number, due: PaymentDue) => sum + (due.balanceAmount ?? due.totalAmount ?? 0), 0);
+      setTotalDue(typeof viewStats?.stats?.outstanding === 'number' ? viewStats.stats.outstanding : listed);
     } catch (error) {
       console.error('Error fetching payment dues:', error);
       toast({
@@ -101,42 +112,6 @@ export function PaymentDuesWidget({ onRefresh }: PaymentDuesWidgetProps) {
       return { urgency: 'due-soon', label: 'Due soon', rank: 1 };
     } else {
       return { urgency: 'normal', label: 'Upcoming', rank: 2 };
-    }
-  };
-
-  const markAsPaid = async (invoiceId: string) => {
-    const due = dues.find(d => d._id === invoiceId);
-    setMarkingPaid(invoiceId);
-    try {
-      await apiClient.updateInvoicePaymentStatus(invoiceId, {
-        paymentStatus: 'paid',
-        amountPaid: due?.totalAmount || 0
-      });
-
-      // Optimistically remove from list immediately
-      setDues(prev => {
-        const updated = prev.filter(d => d._id !== invoiceId);
-        setTotalDue(updated.reduce((sum, d) => sum + (d.balanceAmount ?? d.totalAmount ?? 0), 0));
-        return updated;
-      });
-
-      toast({
-        title: "Success",
-        description: "Invoice marked as paid",
-      });
-
-      onRefresh?.();
-    } catch (error) {
-      console.error('Error updating invoice:', error);
-      toast({
-        title: "Error",
-        description: "Failed to update invoice",
-        variant: "destructive",
-      });
-      // Re-fetch to restore correct state on failure
-      await fetchPaymentDues();
-    } finally {
-      setMarkingPaid(null);
     }
   };
 
@@ -215,21 +190,26 @@ export function PaymentDuesWidget({ onRefresh }: PaymentDuesWidgetProps) {
                   {balance !== due.totalAmount && due.totalAmount > 0 && (
                     <div className="num -mt-1 text-[11px] text-muted-foreground">of {formatINR(due.totalAmount)}</div>
                   )}
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onClick={() => markAsPaid(due._id)}
-                    loading={markingPaid === due._id}
-                  >
-                    {markingPaid !== due._id && <Check />}
-                    {markingPaid === due._id ? "Saving…" : "Mark paid"}
-                  </Button>
+                  {canRecord && balance > 0 && (
+                    <Button size="xs" variant="outline" onClick={() => setPaying(due)}>
+                      <Check />
+                      Mark paid
+                    </Button>
+                  )}
                 </div>
               </li>
             );
           })}
         </ul>
       )}
+      <InvoicePaymentDialog
+        invoice={paying}
+        onOpenChange={(open) => !open && setPaying(null)}
+        onSaved={() => {
+          fetchPaymentDues();
+          onRefresh?.();
+        }}
+      />
     </Panel>
   );
 }

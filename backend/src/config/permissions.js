@@ -17,7 +17,7 @@ const PERMISSION_TREE = [
   { module: 'Customers', actions: ['View', 'Create & Edit', 'Delete', 'Export'] },
   { module: 'Jobs', actions: ['View', 'Create & Edit', 'Delete', 'Change Status'] },
   { module: 'Quotations', actions: ['View', 'Create & Edit', 'Delete', 'Send Email', 'Change Status', 'Convert to Invoice'] },
-  { module: 'Invoicing', actions: ['View', 'Create & Edit', 'Delete', 'Send Email', 'Record Payment', 'Download PDF'] },
+  { module: 'Invoicing', actions: ['View', 'Create & Edit', 'Delete', 'Send Email', 'Record Payment', 'Correct Balance', 'Download PDF'] },
   { module: 'Invoicing (View No GST)', actions: [] },
 
   { module: 'Calendar', actions: ['View', 'Create & Edit', 'Delete'] },

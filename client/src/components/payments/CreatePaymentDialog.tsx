@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
 import { formatINR } from "@/lib/printWorkflow";
-import { METHOD_LABELS, type PaymentMethod } from "./paymentMeta";
+import { METHOD_LABELS, newIdempotencyKey, type PaymentMethod } from "./paymentMeta";
 import { localDate } from "@/lib/format";
 
 interface CreatePaymentDialogProps {
@@ -54,11 +54,15 @@ export function CreatePaymentDialog({ open, onOpenChange, onPaymentCreated }: Cr
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
+  // The key of the last submission: sent again only with the same payment, so
+  // a retry after a dropped connection cannot record it twice.
+  const attempt = useRef<{ signature: string; key: string } | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setForm(emptyForm());
     setError(null);
+    attempt.current = null;
     apiClient
       .getCustomer({ limit: 100 })
       .then((res: { customers?: CustomerOption[] }) => setCustomers(res?.customers || []))
@@ -72,7 +76,7 @@ export function CreatePaymentDialog({ open, onOpenChange, onPaymentCreated }: Cr
     }
     setLoadingInvoices(true);
     apiClient
-      .getInvoices({ customerId: form.customerId, paymentStatus: "pending,partial,overdue", limit: 50 })
+      .getInvoices({ customerId: form.customerId, view: "unpaid", limit: 100, sortBy: "dueDate", sortOrder: "asc" })
       .then((res: { invoices?: InvoiceOption[] }) => setInvoices((res?.invoices || []).filter((i) => i.balanceAmount > 0)))
       .catch(() => setInvoices([]))
       .finally(() => setLoadingInvoices(false));
@@ -92,18 +96,22 @@ export function CreatePaymentDialog({ open, onOpenChange, onPaymentCreated }: Cr
       return setError(`That is more than the ${formatINR(selectedInvoice.balanceAmount)} still due on ${selectedInvoice.invoiceNumber}.`);
     }
 
+    const payload = {
+      customerId: form.customerId,
+      invoiceId: form.invoiceId === NO_INVOICE ? undefined : form.invoiceId,
+      amount,
+      paymentMethod: form.paymentMethod,
+      status: form.status,
+      paymentDate: form.paymentDate,
+      referenceNumber: form.referenceNumber || undefined,
+      notes: form.notes || undefined
+    };
+    const signature = JSON.stringify(payload);
+    if (attempt.current?.signature !== signature) attempt.current = { signature, key: newIdempotencyKey() };
+
     setSaving(true);
     try {
-      await apiClient.createPayment({
-        customerId: form.customerId,
-        invoiceId: form.invoiceId === NO_INVOICE ? undefined : form.invoiceId,
-        amount,
-        paymentMethod: form.paymentMethod,
-        status: form.status,
-        paymentDate: form.paymentDate,
-        referenceNumber: form.referenceNumber || undefined,
-        notes: form.notes || undefined
-      });
+      await apiClient.createPayment({ ...payload, idempotencyKey: attempt.current.key });
       toast({
         title: "Payment recorded",
         description: selectedInvoice ? `${formatINR(amount)} recorded against ${selectedInvoice.invoiceNumber}.` : `${formatINR(amount)} recorded.`
@@ -157,7 +165,7 @@ export function CreatePaymentDialog({ open, onOpenChange, onPaymentCreated }: Cr
                 <SelectValue placeholder={loadingInvoices ? "Loading invoices…" : "No invoice"} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={NO_INVOICE}>No invoice (advance or on account)</SelectItem>
+                <SelectItem value={NO_INVOICE}>No invoice (advance — allocate it later)</SelectItem>
                 {invoices.map((i) => (
                   <SelectItem key={i._id} value={i._id}>
                     {i.invoiceNumber} — {formatINR(i.balanceAmount)} due

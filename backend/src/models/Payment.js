@@ -1,5 +1,32 @@
 const mongoose = require('mongoose');
 
+// One invoice a payment pays, and how much of the payment goes to it. See
+// services/paymentLedger.js.
+const allocationSchema = new mongoose.Schema({
+  invoiceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Invoice',
+    required: true
+  },
+  invoiceNumber: {
+    type: String,
+    trim: true
+  },
+  amount: {
+    type: Number,
+    required: true,
+    min: [0.01, 'An allocation must be more than 0']
+  },
+  allocatedAt: {
+    type: Date,
+    default: Date.now
+  },
+  allocatedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }
+}, { _id: false });
+
 const paymentSchema = new mongoose.Schema({
   paymentId: {
     type: String,
@@ -17,11 +44,26 @@ const paymentSchema = new mongoose.Schema({
     required: [true, 'Customer name is required'],
     trim: true
   },
+  // The invoices this payment pays. Whatever is not allocated is held on
+  // account (an advance) until it is applied. Payments recorded before
+  // allocations existed have none and paid their whole amount to invoiceId.
+  allocations: {
+    type: [allocationSchema],
+    default: undefined
+  },
+  // The invoice when exactly one is allocated (kept for older screens and
+  // reports); unset for an advance or a payment split across invoices.
   invoiceId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Invoice'
   },
   invoiceNumber: {
+    type: String,
+    trim: true
+  },
+  // Sent by the client with each submission: the same key again returns the
+  // payment already recorded instead of recording it twice.
+  idempotencyKey: {
     type: String,
     trim: true
   },
@@ -127,7 +169,12 @@ paymentSchema.index({ userId: 1, status: 1 });
 paymentSchema.index({ userId: 1, paymentDate: -1 });
 paymentSchema.index({ userId: 1, paymentMethod: 1 });
 paymentSchema.index({ userId: 1, invoiceId: 1 });
+paymentSchema.index({ 'allocations.invoiceId': 1 });
 paymentSchema.index({ referenceNumber: 1 });
+paymentSchema.index(
+  { userId: 1, idempotencyKey: 1 },
+  { unique: true, partialFilterExpression: { idempotencyKey: { $type: 'string' } } }
+);
 
 // Virtual for payment status color
 paymentSchema.virtual('statusColor').get(function() {

@@ -7,7 +7,7 @@ import { PageShell } from "@/components/layout/PageShell";
 import { ConfirmDialog, DataCard, DataTable, EntityCell, FilterSelect, MetricBar, Pagination, SearchField, StatusPill, Toolbar, ViewTabs, type Column, type PillTone } from "@/components/data";
 import { CreatePaymentDialog } from "@/components/payments/CreatePaymentDialog";
 import { ApplyPaymentDialog } from "@/components/payments/ApplyPaymentDialog";
-import { METHOD_LABELS, STATUS_META, invoiceNumberOf, type PaymentRecord, type PaymentStatus, type PaymentSummary } from "@/components/payments/paymentMeta";
+import { METHOD_LABELS, STATUS_META, appliedToLabel, type PaymentRecord, type PaymentStatus, type PaymentSummary } from "@/components/payments/paymentMeta";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useDebounced } from "@/hooks/useDebounced";
@@ -77,7 +77,7 @@ export default function Payments() {
     if (!deleting) return;
     try {
       await apiClient.deletePayment(deleting._id);
-      toast({ title: "Payment deleted", description: invoiceNumberOf(deleting) ? `${invoiceNumberOf(deleting)}'s balance was updated.` : undefined });
+      toast({ title: "Payment deleted", description: appliedToLabel(deleting) ? "The invoice balances were updated." : undefined });
       setDeleting(null);
       load();
     } catch (error) {
@@ -103,8 +103,17 @@ export default function Payments() {
     },
     {
       id: "invoice",
-      header: "Invoice",
-      cell: (p) => (invoiceNumberOf(p) ? <span className="font-mono text-[13px]">{invoiceNumberOf(p)}</span> : <span className="text-muted-foreground">On account</span>),
+      header: "Applied to",
+      cell: (p) => {
+        const label = appliedToLabel(p);
+        const onAccount = p.unallocatedAmount || 0;
+        return (
+          <div className="leading-tight">
+            {label ? <span className="font-mono text-[13px]" title={(p.allocations || []).map((a) => `${a.invoiceNumber}: ${formatINR(a.amount)}`).join("\n")}>{label}</span> : <span className="text-muted-foreground">On account</span>}
+            {label && onAccount > 0 && <div className="text-xs text-muted-foreground">{formatINR(onAccount)} on account</div>}
+          </div>
+        );
+      },
       hideBelow: "md"
     },
     { id: "method", header: "Method", cell: (p) => METHOD_LABELS[p.paymentMethod] || p.paymentMethod, sortValue: (p) => p.paymentMethod, hideBelow: "lg" },
@@ -154,7 +163,13 @@ export default function Payments() {
             onClick: () => setView(view === "failed" ? "all" : "failed"),
             active: view === "failed"
           },
-          { label: "Refunded", value: amt(s?.refunded.amount), hint: plural(s?.refunded.count || 0, "payment") }
+          { label: "Refunded", value: amt(s?.refunded.amount), hint: plural(s?.refunded.count || 0, "payment") },
+          {
+            label: "On account",
+            value: amt(s?.onAccount?.amount),
+            hint: s?.onAccount?.count ? `${plural(s.onAccount.count, "advance")} not yet applied` : "Nothing unapplied",
+            tone: s?.onAccount?.count ? "info" : "default"
+          }
         ]}
       />
 
@@ -186,7 +201,12 @@ export default function Payments() {
             rowKey={(p) => p._id}
             loading={loading}
             actions={(p) => [
-              { label: "Apply to invoice", icon: Link2, onClick: () => setApplying(p), hidden: !canRecord || !!p.invoiceId || p.status !== "completed" },
+              {
+                label: (p.allocations || []).length ? "Change allocation" : "Allocate to invoices",
+                icon: Link2,
+                onClick: () => setApplying(p),
+                hidden: !canRecord || !["completed", "pending"].includes(p.status)
+              },
               { label: "Mark received", icon: CheckCircle, onClick: () => setStatus(p, "completed"), hidden: !canRecord || p.status === "completed" },
               { label: "Mark failed (bounced)", icon: XCircle, onClick: () => setStatus(p, "failed"), hidden: !canRecord || p.status !== "completed" },
               { label: "Mark refunded", icon: RotateCcw, onClick: () => setStatus(p, "refunded"), hidden: !canRecord || p.status !== "completed" },
@@ -202,7 +222,7 @@ export default function Payments() {
                 <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
                   <span>
                     {fmtDate(p.paymentDate)} · {METHOD_LABELS[p.paymentMethod] || p.paymentMethod}
-                    {invoiceNumberOf(p) ? ` · ${invoiceNumberOf(p)}` : ""}
+                    {appliedToLabel(p) ? ` · ${appliedToLabel(p)}` : " · On account"}
                   </span>
                   <StatusPill tone={TONE[p.status]}>{LABEL[p.status]}</StatusPill>
                 </div>
@@ -239,7 +259,7 @@ export default function Payments() {
         title="Delete this payment?"
         description={
           deleting
-            ? `${formatINR(deleting.amount)} from ${customerOf(deleting)}.${invoiceNumberOf(deleting) && deleting.status === "completed" ? ` ${invoiceNumberOf(deleting)} will show this amount as due again.` : ""}`
+            ? `${formatINR(deleting.amount)} from ${customerOf(deleting)}.${appliedToLabel(deleting) && deleting.status === "completed" ? ` ${(deleting.allocations || []).length > 1 ? "Its invoices" : appliedToLabel(deleting)} will show this amount as due again.` : ""}`
             : undefined
         }
         onConfirm={remove}
