@@ -288,11 +288,10 @@ router.post(
       for (const l of lines) {
         const item = po.items.find((i) => String(i.inventoryId) === String(l.inventoryId));
         const qty = Number(l.quantity);
-        const stock = await Inventory.findOne({ _id: item.inventoryId, ...InventoryService.itemScope(req.user) });
-        if (stock) {
-          const previousQuantity = stock.quantity;
-          stock.quantity = previousQuantity + qty;
-          await stock.save();
+        // Added in one atomic write, so a sale made at the same moment is not overwritten.
+        const received = await InventoryService.changeStock({ _id: item.inventoryId, ...InventoryService.itemScope(req.user) }, qty);
+        if (received) {
+          const { item: stock, previousQuantity, newQuantity } = received;
           await InventoryMovement.create({
             inventoryItem: stock._id,
             itemName: stock.name,
@@ -302,7 +301,7 @@ router.post(
             unitCost: item.unitCost,
             totalCost: qty * item.unitCost,
             previousQuantity,
-            newQuantity: stock.quantity,
+            newQuantity,
             referenceType: 'purchase_order',
             referenceId: po._id,
             referenceNumber: po.poNumber,

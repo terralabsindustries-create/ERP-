@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle, CreditCard, Plus, RotateCcw, Trash2, XCircle } from "lucide-react";
+import { CheckCircle, CreditCard, Link2, Plus, RotateCcw, Trash2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { PageShell } from "@/components/layout/PageShell";
 import { ConfirmDialog, DataCard, DataTable, EntityCell, FilterSelect, MetricBar, Pagination, SearchField, StatusPill, Toolbar, ViewTabs, type Column, type PillTone } from "@/components/data";
 import { CreatePaymentDialog } from "@/components/payments/CreatePaymentDialog";
+import { ApplyPaymentDialog } from "@/components/payments/ApplyPaymentDialog";
 import { METHOD_LABELS, STATUS_META, invoiceNumberOf, type PaymentRecord, type PaymentStatus, type PaymentSummary } from "@/components/payments/paymentMeta";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -40,6 +41,7 @@ export default function Payments() {
   const [page, setPage] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
   const [deleting, setDeleting] = useState<PaymentRecord | null>(null);
+  const [applying, setApplying] = useState<PaymentRecord | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -184,6 +186,7 @@ export default function Payments() {
             rowKey={(p) => p._id}
             loading={loading}
             actions={(p) => [
+              { label: "Apply to invoice", icon: Link2, onClick: () => setApplying(p), hidden: !canRecord || !!p.invoiceId || p.status !== "completed" },
               { label: "Mark received", icon: CheckCircle, onClick: () => setStatus(p, "completed"), hidden: !canRecord || p.status === "completed" },
               { label: "Mark failed (bounced)", icon: XCircle, onClick: () => setStatus(p, "failed"), hidden: !canRecord || p.status !== "completed" },
               { label: "Mark refunded", icon: RotateCcw, onClick: () => setStatus(p, "refunded"), hidden: !canRecord || p.status !== "completed" },
@@ -229,6 +232,7 @@ export default function Payments() {
       </div>
 
       <CreatePaymentDialog open={createOpen} onOpenChange={setCreateOpen} onPaymentCreated={load} />
+      <ApplyPaymentDialog payment={applying} onClose={() => setApplying(null)} onApplied={load} />
       <ConfirmDialog
         open={!!deleting}
         onOpenChange={(o) => !o && setDeleting(null)}

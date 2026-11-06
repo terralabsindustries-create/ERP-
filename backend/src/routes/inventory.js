@@ -537,26 +537,37 @@ router.post('/:id/adjust', requirePermission('Inventory: Adjust Stock'), async (
     if (!Number.isFinite(delta) || (hasQuantity && !Number.isFinite(Number(quantity)))) return res.status(400).json({ success: false, message: 'Quantity must be a number' });
     if (hasChange && delta === 0) return res.status(400).json({ success: false, message: 'The change cannot be zero' });
 
-    const previousQuantity = item.quantity;
-    const newQuantity = previousQuantity + delta;
-    if (newQuantity < 0) {
-      return res.status(400).json({ success: false, message: `Only ${previousQuantity} ${item.unit} in stock` });
+    if (item.quantity + delta < 0) {
+      return res.status(400).json({ success: false, message: `Only ${item.quantity} ${item.unit} in stock` });
     }
 
-    const TYPES = ['purchase', 'adjustment', 'return', 'damage', 'sale'];
-    const movementType = TYPES.includes(req.body.type) ? req.body.type : delta > 0 ? 'purchase' : 'adjustment';
+    // One atomic write, so an invoice or another adjustment made at the same
+    // moment is added to, not overwritten. A removal is refused if the stock
+    // ran out in the meantime.
+    const scope = { _id: item._id, ...InventoryService.itemScope(req.user) };
+    const result = hasChange
+      ? await InventoryService.changeStock(scope, delta)
+      : await InventoryService.setStock(scope, Number(quantity));
+    if (!result) {
+      const now = await Inventory.findOne(scope).select('quantity');
+      if (!now) return res.status(404).json({ success: false, message: 'Inventory item not found' });
+      return res.status(400).json({ success: false, message: `Only ${now.quantity} ${item.unit} in stock` });
+    }
+    const { previousQuantity, newQuantity } = result;
+    const moved = Math.abs(Math.round((newQuantity - previousQuantity) * 10000) / 10000);
+    const updated = result.item;
 
-    item.quantity = newQuantity;
-    await item.save();
+    const TYPES = ['purchase', 'adjustment', 'return', 'damage', 'sale'];
+    const movementType = TYPES.includes(req.body.type) ? req.body.type : newQuantity > previousQuantity ? 'purchase' : 'adjustment';
 
     await InventoryMovement.create({
       inventoryItem: item._id,
       itemName: item.name,
       movementType,
-      quantity: Math.abs(delta),
+      quantity: moved,
       unit: item.unit,
       unitCost: item.unitCost || 0,
-      totalCost: Math.abs(delta) * (item.unitCost || 0),
+      totalCost: moved * (item.unitCost || 0),
       previousQuantity,
       newQuantity,
       referenceType: movementType === 'damage' ? 'damage' : movementType === 'return' ? 'return' : 'adjustment',
@@ -583,7 +594,7 @@ router.post('/:id/adjust', requirePermission('Inventory: Adjust Stock'), async (
       dataScope: req.user.dataScope
     }).catch(err => console.error('Activity log (adjust inventory) failed:', err.message));
 
-    res.json({ success: true, data: item, message: 'Stock updated' });
+    res.json({ success: true, data: updated, message: 'Stock updated' });
   } catch (error) {
     console.error('Error adjusting inventory:', error);
     res.status(500).json({ success: false, message: 'Failed to adjust inventory' });

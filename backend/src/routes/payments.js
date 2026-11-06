@@ -36,20 +36,38 @@ const rejectInvalid = (req, res) => {
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
- * Move an invoice's paid amount by `delta` (positive when money comes in,
- * negative when a payment is cancelled, refunded or deleted) and recompute its
- * balance and payment status. Adjusting by the difference keeps amounts that
- * were recorded directly on the invoice (Invoices → Record payment) intact.
+ * Move an invoice's paid amount by `delta`. The version check and balance
+ * predicate make concurrent allocations use the latest balance; no payment
+ * can silently push the invoice over its total or below zero.
  */
 async function applyToInvoice(invoiceId, delta) {
   if (!invoiceId || !delta) return;
-  const invoice = await Invoice.findById(invoiceId);
-  if (!invoice) return;
-  invoice.paidAmount = round2(Math.min(Math.max((invoice.paidAmount || 0) + delta, 0), invoice.totalAmount));
-  invoice.paymentStatus = invoice.paidAmount >= invoice.totalAmount ? 'paid' : invoice.paidAmount > 0 ? 'partial' : 'pending';
-  if (invoice.paymentStatus === 'paid') invoice.status = 'paid';
-  else if (invoice.status === 'paid') invoice.status = 'sent';
-  await invoice.save(); // pre-save recomputes balanceAmount
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const invoice = await Invoice.findById(invoiceId);
+    if (!invoice || (delta > 0 && ['draft', 'cancelled'].includes(invoice.status))) {
+      const error = new Error('Invoice is not available for payment');
+      error.statusCode = 400;
+      throw error;
+    }
+    const paidAmount = round2((invoice.paidAmount || 0) + delta);
+    if (paidAmount < 0 || paidAmount > round2(invoice.totalAmount)) {
+      const error = new Error(delta > 0 ? 'Amount is more than the invoice balance' : 'Reversal exceeds the amount paid on this invoice');
+      error.statusCode = 400;
+      error.code = delta > 0 ? 'AMOUNT_EXCEEDS_BALANCE' : 'REVERSAL_EXCEEDS_PAID';
+      throw error;
+    }
+    const paymentStatus = paidAmount >= invoice.totalAmount ? 'paid' : paidAmount > 0 ? 'partial' : 'pending';
+    const status = paymentStatus === 'paid' ? 'paid' : invoice.status === 'paid' ? 'sent' : invoice.status;
+    const updated = await Invoice.findOneAndUpdate(
+      { _id: invoice._id, __v: invoice.__v, paidAmount: invoice.paidAmount, totalAmount: invoice.totalAmount },
+      { $set: { paidAmount, balanceAmount: round2(invoice.totalAmount - paidAmount), paymentStatus, status }, $inc: { __v: 1 } },
+      { new: true }
+    );
+    if (updated) return;
+  }
+  const error = new Error('Invoice balance changed; please try again');
+  error.statusCode = 409;
+  throw error;
 }
 
 const counted = (payment) => (payment.status === 'completed' ? payment.amount : 0);
@@ -95,6 +113,10 @@ async function resolveParties(req, res) {
     }
     if (String(invoice.customerId) !== String(customer._id)) {
       res.status(400).json({ status: 'error', message: 'That invoice belongs to a different customer' });
+      return null;
+    }
+    if (['draft', 'cancelled'].includes(invoice.status)) {
+      res.status(400).json({ status: 'error', message: 'Payments can only be applied to issued invoices' });
       return null;
     }
   }
@@ -267,7 +289,12 @@ router.post('/', protect, requirePermission('Payments: Record Payment'), payment
       dataScope: req.user.dataScope
     });
 
-    await applyToInvoice(invoice?._id, counted(payment));
+    try {
+      await applyToInvoice(invoice?._id, counted(payment));
+    } catch (error) {
+      await Payment.deleteOne({ _id: payment._id });
+      throw error;
+    }
 
     ActivityLog.logActivity({
       action: 'Payment Recorded',
@@ -290,7 +317,7 @@ router.post('/', protect, requirePermission('Payments: Record Payment'), payment
     });
   } catch (error) {
     console.error('Create payment error:', error);
-    res.status(500).json({ status: 'error', message: 'Server error while creating payment' });
+    res.status(error.statusCode || 500).json({ status: 'error', message: error.statusCode ? error.message : 'Server error while creating payment', code: error.code });
   }
 });
 
@@ -300,6 +327,7 @@ router.post('/', protect, requirePermission('Payments: Record Payment'), payment
 router.put('/:id', protect, requirePermission('Payments: Record Payment'), [
   body('amount').optional().isFloat({ min: 0.01 }).withMessage('Amount must be greater than 0'),
   body('paymentMethod').optional().isIn(METHODS),
+  body('invoiceId').optional({ checkFalsy: true }).isMongoId().withMessage('Choose a valid invoice'),
   body('status').optional().isIn(STATUSES),
   body('paymentDate').optional({ checkFalsy: true }).isISO8601()
 ], async (req, res) => {
@@ -314,10 +342,46 @@ router.put('/:id', protect, requirePermission('Payments: Record Payment'), [
     }
 
     const before = counted(payment);
-    Object.assign(payment, pickFields(req.body));
-    if (!payment.dataScope && req.user.dataScope) payment.dataScope = req.user.dataScope;
-    await payment.save();
-    await applyToInvoice(payment.invoiceId, counted(payment) - before);
+    const fields = pickFields(req.body);
+    let invoice = null;
+    if (req.body.invoiceId) {
+      if (payment.invoiceId && String(payment.invoiceId) !== req.body.invoiceId) {
+        return res.status(400).json({ status: 'error', message: 'This payment is already allocated to an invoice' });
+      }
+      if (!payment.invoiceId) {
+        invoice = await Invoice.findOne({ _id: req.body.invoiceId, ...staffScopeQuery(req.user) });
+        if (!invoice || ['draft', 'cancelled'].includes(invoice.status) || String(invoice.customerId) !== String(payment.customerId)) {
+          return res.status(400).json({ status: 'error', message: 'Choose an invoice for this customer' });
+        }
+      }
+    }
+    const nextStatus = fields.status || payment.status;
+    const nextAmount = fields.amount ?? payment.amount;
+    const nextCounted = nextStatus === 'completed' ? nextAmount : 0;
+    const targetInvoiceId = invoice?._id || payment.invoiceId;
+    const delta = round2(nextCounted - (payment.invoiceId ? before : 0));
+    if (targetInvoiceId) await applyToInvoice(targetInvoiceId, delta);
+    try {
+      const changes = { ...fields };
+      if (invoice) {
+        changes.invoiceId = invoice._id;
+        changes.invoiceNumber = invoice.invoiceNumber;
+      }
+      if (!payment.dataScope && req.user.dataScope) changes.dataScope = req.user.dataScope;
+      const updated = await Payment.findOneAndUpdate(
+        { _id: payment._id, __v: payment.__v },
+        { $set: changes, $inc: { __v: 1 } },
+        { new: true, runValidators: true }
+      );
+      if (!updated) {
+        const error = new Error('Payment changed; please try again');
+        error.statusCode = 409;
+        throw error;
+      }
+    } catch (error) {
+      if (targetInvoiceId) await applyToInvoice(targetInvoiceId, -delta);
+      throw error;
+    }
 
     ActivityLog.logActivity({
       action: 'Payment Updated',
@@ -337,7 +401,7 @@ router.put('/:id', protect, requirePermission('Payments: Record Payment'), [
     res.status(200).json({ status: 'success', message: 'Payment updated', data: { payment: await populate(Payment.findById(payment._id)) } });
   } catch (error) {
     console.error('Update payment error:', error);
-    res.status(500).json({ status: 'error', message: 'Server error while updating payment' });
+    res.status(error.statusCode || 500).json({ status: 'error', message: error.statusCode ? error.message : 'Server error while updating payment', code: error.code });
   }
 });
 
@@ -352,7 +416,12 @@ router.delete('/:id', protect, requirePermission('Payments: Delete'), async (req
     if (!payment) {
       return res.status(404).json({ status: 'error', message: 'Payment not found' });
     }
-    await applyToInvoice(payment.invoiceId, -counted(payment));
+    try {
+      await applyToInvoice(payment.invoiceId, -counted(payment));
+    } catch (error) {
+      await Payment.create(payment.toObject());
+      throw error;
+    }
 
     ActivityLog.logActivity({
       action: 'Payment Deleted',
@@ -371,7 +440,7 @@ router.delete('/:id', protect, requirePermission('Payments: Delete'), async (req
     res.status(200).json({ status: 'success', message: 'Payment deleted successfully' });
   } catch (error) {
     console.error('Delete payment error:', error);
-    res.status(500).json({ status: 'error', message: 'Server error while deleting payment' });
+    res.status(error.statusCode || 500).json({ status: 'error', message: error.statusCode ? error.message : 'Server error while deleting payment', code: error.code });
   }
 });
 

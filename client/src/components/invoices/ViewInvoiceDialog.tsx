@@ -27,6 +27,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  Check,
   ChevronDown,
   Download,
   Mail,
@@ -53,7 +54,8 @@ import { useToast } from "@/hooks/use-toast";
 import { EditInvoiceDialog } from "./EditInvoiceDialog";
 import { useNavigate } from "react-router-dom";
 import { AREA_UNITS, areaText, gstByRate, isAreaUnit, sizeLabel } from "@/lib/billing";
-import { formatINR } from "@/lib/format";
+import { fmtDate, formatINR } from "@/lib/format";
+import { METHOD_LABELS, type PaymentRecord } from "@/components/payments/paymentMeta";
 
 interface InvoiceItem {
   itemName: string;
@@ -109,6 +111,8 @@ interface Invoice {
   isInterState?: boolean;
   amountPaid: number;
   balanceDue: number;
+  paidAmount?: number;
+  balanceAmount?: number;
   status: 'draft' | 'sent' | 'paid' | 'overdue' | 'cancelled' | 'refunded';
   paymentStatus: 'pending' | 'partial' | 'paid' | 'overdue';
   noGst?: boolean;
@@ -129,7 +133,13 @@ interface ViewInvoiceDialogProps {
   sendVia?: InvoiceSendChannel | null;
 }
 
-export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdated, sendVia }: ViewInvoiceDialogProps) {
+export function ViewInvoiceDialog({ open, onOpenChange, invoice: listedInvoice, onInvoiceUpdated, sendVia }: ViewInvoiceDialogProps) {
+  const [details, setDetails] = useState<{ key: string; invoice: Invoice; paymentHistory: PaymentRecord[] } | null>(null);
+  const [detailsError, setDetailsError] = useState("");
+  const invoiceKey = listedInvoice?._id || listedInvoice?.id;
+  // With no invoice open, invoiceKey and details?.key are both undefined.
+  const invoice = details && details.key === invoiceKey ? details.invoice : null;
+  const paymentHistory = details && details.key === invoiceKey ? details.paymentHistory : [];
   const [loading, setLoading] = useState(false);
   const [printing, setPrinting] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
@@ -146,6 +156,18 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
   const [templateMapping, setTemplateMapping] = useState<Record<string, string>>({});
   const { toast } = useToast();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!open || !invoiceKey) return;
+    let cancelled = false;
+    setDetailsError("");
+    apiClient.getInvoice(invoiceKey).then((response: { invoice: Invoice; paymentHistory?: PaymentRecord[] }) => {
+      if (!cancelled) setDetails({ key: invoiceKey, invoice: response.invoice, paymentHistory: response.paymentHistory || [] });
+    }).catch((error: Error) => {
+      if (!cancelled) setDetailsError(error.message || "Invoice details could not be loaded");
+    });
+    return () => { cancelled = true; };
+  }, [open, invoiceKey]);
 
   useEffect(() => {
     if (!showWhatsAppDialog) return;
@@ -192,14 +214,21 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
     }
   };
 
-  const invoiceKey = invoice?._id || invoice?.id;
   useEffect(() => {
     if (open && invoiceKey && sendVia) startSend(sendVia);
     // Only when the dialog opens on an invoice with a channel asked for.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, invoiceKey, sendVia]);
+  }, [open, invoiceKey, sendVia, details]);
 
-  if (!invoice) return null;
+  if (!listedInvoice) return null;
+  if (!invoice) return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Invoice details</DialogTitle></DialogHeader>
+        <p className="text-sm text-muted-foreground">{detailsError || "Loading invoice details…"}</p>
+      </DialogContent>
+    </Dialog>
+  );
 
   // The invoice PDF could not be made: either the business has no company
   // details yet (send them to Settings), or something else went wrong.
@@ -357,15 +386,18 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
 
   const getPaymentStatusConfig = (status: string) => {
     const configs = {
-      "pending": { variant: "secondary" as const, label: "Pending" },
-      "partial": { variant: "default" as const, label: "Partial" },
+      "pending": { variant: "secondary" as const, label: "Unpaid" },
+      "partial": { variant: "default" as const, label: "Partially Paid" },
       "paid": { variant: "success" as const, label: "Paid" },
       "overdue": { variant: "destructive" as const, label: "Overdue" },
     };
     return configs[status as keyof typeof configs] || configs["pending"];
   };
 
-  const paymentStatusConfig = getPaymentStatusConfig(invoice.paymentStatus);
+  const paidAmount = invoice.paidAmount ?? invoice.amountPaid ?? 0;
+  const balanceAmount = invoice.balanceAmount ?? Math.max(0, invoice.totalAmount - paidAmount);
+  const recordedAmount = paymentHistory.filter((payment) => payment.status === "completed").reduce((sum, payment) => sum + payment.amount, 0);
+  const paymentStatusConfig = getPaymentStatusConfig(balanceAmount <= 0 ? "paid" : paidAmount > 0 ? "partial" : "pending");
 
   return (
     <>
@@ -597,20 +629,45 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
                   );
                 })()}
                 <div className="border-t pt-2 flex justify-between font-semibold">
-                  <span>Total Amount{invoice.totalGstAmount > 0 ? " (incl. GST)" : ""}:</span>
+                  <span>Invoice Total{invoice.totalGstAmount > 0 ? " (incl. GST)" : ""}:</span>
                   <span className="text-lg">{formatINR(invoice.totalAmount || 0)}</span>
                 </div>
-                {invoice.amountPaid > 0 && (
-                  <>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Amount Paid:</span>
-                      <span className="text-success-strong">₹{invoice.amountPaid.toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between font-semibold">
-                      <span>Balance Due:</span>
-                      <span className="text-warning-strong">₹{invoice.balanceDue.toLocaleString()}</span>
-                    </div>
-                  </>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Amount Received:</span>
+                  <span className="text-success-strong">{formatINR(paidAmount)}</span>
+                </div>
+                <div className="flex justify-between font-semibold">
+                  <span>Remaining Balance:</span>
+                  <span className={balanceAmount > 0 ? "text-warning-strong" : "text-success-strong"}>{formatINR(balanceAmount)}</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Payment Status:</span>
+                  <Badge variant={paymentStatusConfig.variant}>{paymentStatusConfig.label}</Badge>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader><CardTitle className="text-lg">Payment History</CardTitle></CardHeader>
+              <CardContent>
+                {paymentHistory.length ? (
+                  <ul className="divide-y">
+                    {paymentHistory.map((payment) => (
+                      <li key={payment._id} className="flex flex-col gap-1 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <div className="font-medium">{fmtDate(payment.paymentDate)} · {METHOD_LABELS[payment.paymentMethod] || payment.paymentMethod}</div>
+                          <div className="text-xs text-muted-foreground">Reference: {payment.referenceNumber || "—"}</div>
+                        </div>
+                        <div className="flex items-center gap-2 sm:justify-end">
+                          <span className="font-semibold tabular-nums">{formatINR(payment.amount)}</span>
+                          {payment.status !== "completed" && <Badge variant="secondary">{payment.status}</Badge>}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : <p className="text-sm text-muted-foreground">No payments allocated to this invoice yet.</p>}
+                {paidAmount > recordedAmount + 0.01 && (
+                  <p className="mt-3 text-xs text-muted-foreground">Amount received also includes {formatINR(paidAmount - recordedAmount)} entered directly on the invoice.</p>
                 )}
               </CardContent>
             </Card>
@@ -677,6 +734,19 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
               </DropdownMenu>
             </div>
             <div className="flex gap-2">
+              {/* Closes the preview the same way as the X: the page underneath
+                  is where the user came from. Nothing is saved, sent or
+                  changed. Held while a PDF is being made, so a print dialog or
+                  download does not appear after the preview has gone. */}
+              <Button
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+                disabled={loading || printing}
+                className="gap-2"
+              >
+                <Check className="h-4 w-4" />
+                Finished
+              </Button>
               <Button
                 variant="default"
                 onClick={handleEdit}

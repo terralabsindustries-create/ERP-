@@ -181,4 +181,57 @@ describe('payments', () => {
     expect(res.status).toBe(200);
     expect(typeof res.body.data.stats.totalAmount).toBe('number');
   });
+
+  test('partial, full, on-account allocation and reversal stay in sync with invoice details', async () => {
+    const invoice = await make.invoice(org.admin, cust, { lines: [{ amount: 1000, rate: 0 }] });
+    const post = (amount, invoiceId) => request(app).post('/api/payments').set(auth(org.tokens.admin)).send({
+      customerId: String(cust._id), amount, paymentMethod: 'upi', referenceNumber: `REF-${amount}`, ...(invoiceId ? { invoiceId } : {})
+    });
+    const details = () => request(app).get(`/api/invoices/${invoice._id}`).set(auth(org.tokens.admin));
+
+    let view = await details();
+    expect(view.body.data.invoice).toMatchObject({ paidAmount: 0, balanceAmount: 1000, paymentStatus: 'pending' });
+    expect(view.body.data.paymentHistory).toHaveLength(0);
+
+    const first = await post(300, String(invoice._id));
+    expect(first.status).toBe(201);
+    view = await details();
+    expect(view.body.data.invoice).toMatchObject({ paidAmount: 300, balanceAmount: 700, paymentStatus: 'partial' });
+    expect(view.body.data.paymentHistory[0]).toMatchObject({ amount: 300, paymentMethod: 'upi', referenceNumber: 'REF-300' });
+    expect((await request(app).put(`/api/payments/${first.body.data.payment._id}`).set(auth(org.tokens.admin)).send({ amount: 1100 })).status).toBe(400);
+    expect((await details()).body.data.invoice.paidAmount).toBe(300);
+
+    const advance = await post(200);
+    expect(advance.status).toBe(201);
+    expect(advance.body.data.payment.invoiceId).toBeFalsy();
+    expect((await details()).body.data.invoice.balanceAmount).toBe(700);
+    expect((await request(app).put(`/api/payments/${advance.body.data.payment._id}`).set(auth(org.tokens.admin)).send({ invoiceId: String(invoice._id) })).status).toBe(200);
+    view = await details();
+    expect(view.body.data.invoice).toMatchObject({ paidAmount: 500, balanceAmount: 500, paymentStatus: 'partial' });
+    expect(view.body.data.paymentHistory).toHaveLength(2);
+    expect((await request(app).put(`/api/payments/${advance.body.data.payment._id}`).set(auth(org.tokens.admin)).send({ invoiceId: String(invoice._id) })).status).toBe(200);
+    expect((await details()).body.data.invoice.paidAmount).toBe(500);
+    const otherInvoice = await make.invoice(org.admin, cust, { lines: [{ amount: 500, rate: 0 }] });
+    expect((await request(app).put(`/api/payments/${advance.body.data.payment._id}`).set(auth(org.tokens.admin)).send({ invoiceId: String(otherInvoice._id) })).status).toBe(400);
+    expect((await Invoice.findById(otherInvoice._id)).paidAmount).toBe(0);
+
+    expect((await post(501, String(invoice._id))).status).toBe(400);
+    const final = await post(500, String(invoice._id));
+    expect(final.status).toBe(201);
+    view = await details();
+    expect(view.body.data.invoice).toMatchObject({ paidAmount: 1000, balanceAmount: 0, paymentStatus: 'paid' });
+    expect(view.body.data.paymentHistory).toHaveLength(3);
+
+    expect((await request(app).put(`/api/payments/${final.body.data.payment._id}`).set(auth(org.tokens.admin)).send({ status: 'refunded' })).status).toBe(200);
+    view = await details();
+    expect(view.body.data.invoice).toMatchObject({ paidAmount: 500, balanceAmount: 500, paymentStatus: 'partial' });
+    expect(view.body.data.paymentHistory.find((p) => p._id === final.body.data.payment._id).status).toBe('refunded');
+
+    expect((await request(app).delete(`/api/payments/${first.body.data.payment._id}`).set(auth(org.tokens.admin))).status).toBe(200);
+    expect((await details()).body.data.invoice).toMatchObject({ paidAmount: 200, balanceAmount: 800, paymentStatus: 'partial' });
+    expect((await request(app).patch(`/api/invoices/${invoice._id}/payment-status`).set(auth(org.tokens.admin)).send({ paymentStatus: 'pending', amountPaid: 100 })).status).toBe(400);
+    const corrected = await request(app).patch(`/api/invoices/${invoice._id}/payment-status`).set(auth(org.tokens.admin)).send({ paymentStatus: 'paid', amountPaid: 200 });
+    expect(corrected.status).toBe(200);
+    expect((await details()).body.data.invoice).toMatchObject({ paidAmount: 200, balanceAmount: 800, paymentStatus: 'partial' });
+  });
 });

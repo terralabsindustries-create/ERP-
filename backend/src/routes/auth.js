@@ -9,6 +9,7 @@ const { generateOTP, hashOTP, verifyOTP, getOTPEmailTemplate } = require('../uti
 const { createTransporter, getFromAddress, sendMailErrorResponse } = require('../utils/mailer');
 const { hashInvitationToken, isLive } = require('../utils/invitationUtils');
 const { syncEmployeeForUser } = require('../utils/employeeSync');
+const { loginRateLimit } = require('../middleware/loginRateLimit');
 
 const router = express.Router();
 
@@ -430,7 +431,9 @@ router.post('/invitation/:token/accept', [
 // @route   POST /api/auth/login
 // @desc    Login user
 // @access  Public
-router.post('/login', loginValidation, validate, async (req, res) => {
+// Failed attempts are rate limited (middleware/loginRateLimit.js); successful
+// sign-ins never count.
+router.post('/login', loginRateLimit, loginValidation, validate, async (req, res) => {
   try {
     const { email, password } = req.body;
     

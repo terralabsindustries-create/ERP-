@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
+import { jobFitsCustomer } from "@/lib/invoiceJob";
 import { Plus, Trash2, Calculator, UserPlus } from "lucide-react";
 import { CreateCustomerDialog } from "@/components/customers/CreateCustomerDialog";
 import { QuickCreateJobDialog } from "@/components/jobs/QuickCreateJobDialog";
@@ -416,7 +417,8 @@ export function AdvancedCreateInvoiceDialog({
                     // happens once the dropdown has been opened). This is a
                     // fully controlled Select, so as long as we don't act on
                     // that spurious "", the value we set simply stays put.
-                    if (value) setFormData(prev => ({ ...prev, customerId: value }));
+                    // A job ticket of the previous customer can't stay on the invoice.
+                    if (value) setFormData(prev => ({ ...prev, customerId: value, jobId: jobFitsCustomer(jobs, prev.jobId, value) ? prev.jobId : "" }));
                   }}
                 >
                   <SelectTrigger>

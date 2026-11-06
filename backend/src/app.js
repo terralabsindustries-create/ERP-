@@ -17,6 +17,15 @@ const mongoose = require('mongoose');
 const app = express();
 
 // Security Middleware
+// Behind a reverse proxy (nginx, a load balancer) set TRUST_PROXY to the
+// number of proxies in front of the app — usually 1 — so req.ip is the
+// client's address rather than the proxy's (sign-in rate limits key on it).
+// Unset, nothing is trusted, as before.
+if (process.env.TRUST_PROXY) {
+  const trust = process.env.TRUST_PROXY.trim();
+  app.set('trust proxy', /^\d+$/.test(trust) ? Number(trust) : trust === 'true' ? true : trust);
+}
+
 app.use(helmet());
 app.use(compression());
 

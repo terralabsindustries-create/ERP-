@@ -424,20 +424,24 @@ export default function Jobs() {
                         </div>
                       </td>
                       <td className="px-4 py-3 text-right font-medium tabular-nums">
-                        {billedOf(job) > 0 ? (
+                        {job.invoices?.length > 0 ? (
                           formatCurrency(Math.round(billedOf(job)))
                         ) : (
                           <div className="flex flex-col items-end gap-1">
-                            {estimateOf(job) > 0 ? (
+                            {estimateOf(job) > 0 && (
                               <span className="text-muted-foreground" title="Estimate — not billed yet">
                                 {formatCurrency(estimateOf(job))} <span className="text-xs">est.</span>
                               </span>
-                            ) : (
-                              <span className="text-muted-foreground">Not billed</span>
                             )}
+                            <span className="text-destructive-strong">Not billed</span>
                             {/* The job ticket's items, notes and HSN codes come across to the invoice. */}
                             {canInvoice && job.status !== "cancelled" && (
-                              <Button variant="outline" size="xs" onClick={() => handleGenerateInvoice(job)}>
+                              <Button
+                                variant="outline"
+                                size="xs"
+                                className="border-destructive/30 bg-destructive-soft text-destructive-strong hover:border-destructive/50 hover:bg-destructive/10 hover:text-destructive-strong"
+                                onClick={() => handleGenerateInvoice(job)}
+                              >
                                 <FileText />
                                 Create invoice
                               </Button>

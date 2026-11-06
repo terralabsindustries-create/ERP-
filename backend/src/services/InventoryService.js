@@ -38,95 +38,140 @@ const stockNeeded = (item, inventoryItem) => {
   return Number(item.quantity) || 0;
 };
 
+const round4 = (n) => Math.round((Number(n) + Number.EPSILON) * 10000) / 10000;
+
+// The stock status the model's save hook would give the new quantity; an
+// update that bypasses save() recomputes it the same way.
+const STOCK_STATUS = {
+  $switch: {
+    branches: [
+      { case: { $lte: ['$quantity', 0] }, then: 'out_of_stock' },
+      { case: { $lte: ['$quantity', { $ifNull: ['$minStockLevel', 0] }] }, then: 'low_stock' }
+    ],
+    default: 'adequate'
+  }
+};
+const stockUpdate = (quantity) => [
+  { $set: { quantity, lastUpdated: '$$NOW', updatedAt: '$$NOW' } },
+  { $set: { stockStatus: STOCK_STATUS } }
+];
+
+/** Thrown when an invoice wants more of a stock item than is left. */
+class InsufficientStockError extends Error {
+  constructor(details) {
+    super('Insufficient stock for invoice items');
+    this.name = 'InsufficientStockError';
+    this.details = details;
+  }
+}
+
 class InventoryService {
   /**
-   * Take invoice quantities out of stock and record a "sale" movement per line.
-   * Lines that are not stock items (custom text lines) are skipped.
-   * @param {Array} items - Priced invoice lines ({ itemName, quantity, unit, itemType, totalSquareFeet })
-   * @param {String} invoiceId
-   * @param {String} invoiceNumber
-   * @param {Object} user - req.user of the login creating the invoice
+   * Moves a stock item's quantity by `delta` in one atomic write, so changes
+   * made at the same moment add up rather than overwrite each other. A
+   * decrease is only applied while enough stock is left: if it would go below
+   * zero nothing changes and this returns null.
+   *
+   * @returns {{ item, previousQuantity, newQuantity } | null}
    */
-  static async deductInventoryForInvoice(items, invoiceId, invoiceNumber, user) {
-    const movements = [];
-    const errors = [];
+  static async changeStock(filter, delta, { session } = {}) {
+    const guard = delta < 0 ? { quantity: { $gte: -delta } } : {};
+    const item = await Inventory.findOneAndUpdate(
+      { ...filter, ...guard },
+      stockUpdate({ $round: [{ $add: ['$quantity', delta] }, 4] }),
+      { new: true, session }
+    );
+    if (!item) return null;
+    return { item, previousQuantity: round4(item.quantity - delta), newQuantity: item.quantity };
+  }
 
+  /**
+   * Sets a stock item's quantity (a stock count) in one atomic write, and
+   * reports what it was just before. Returns null if there is no such item.
+   */
+  static async setStock(filter, quantity, { session } = {}) {
+    const before = await Inventory.findOneAndUpdate(filter, stockUpdate(round4(quantity)), { new: false, session });
+    if (!before) return null;
+    const item = await Inventory.findById(before._id).session(session || null);
+    return { item, previousQuantity: before.quantity, newQuantity: round4(quantity) };
+  }
+
+  /**
+   * Takes an invoice's stock out: for each line that is a stock item of the
+   * business, an atomic decrement guarded by the quantity left (so two
+   * invoices racing for the last units cannot both have them). Lines that
+   * are not stock items — one-off text lines — are skipped.
+   *
+   * Throws InsufficientStockError if a line wants more than is left. Without
+   * a transaction (no `session`), whatever this call had already taken is put
+   * back before it throws; inside one, the transaction's abort does that.
+   *
+   * @returns {Array<{ item, quantity, previousQuantity, newQuantity }>}
+   */
+  static async takeStockForInvoice(lines, user, { session } = {}) {
+    const taken = [];
     try {
-      let session = null;
-      try {
-        session = await mongoose.startSession();
-      } catch {
-        session = null;
-      }
+      for (const line of lines || []) {
+        if (!line.itemName || !((Number(line.quantity) || 0) > 0)) continue;
+        const stock = await findItem(user, line.itemName, session);
+        if (!stock) continue;
+        const quantity = stockNeeded(line, stock);
+        if (!(quantity > 0)) continue;
 
-      if (session) {
-        try {
-          await session.withTransaction(async () => {
-            for (const item of items) {
-              await this.processInventoryDeduction(item, invoiceId, invoiceNumber, user, session, movements, errors);
-            }
-          });
-          await session.endSession();
-          return { success: errors.length === 0, movements, errors };
-        } catch (txError) {
-          // Standalone MongoDB has no transactions; do it step by step instead.
-          await session.endSession().catch(() => {});
-          movements.length = 0;
-          errors.length = 0;
-          if (!/Transaction numbers are only allowed|replica set|transaction/i.test(txError.message || '')) {
-            console.error('Inventory deduction transaction failed:', txError.message);
-          }
+        const change = await this.changeStock({ _id: stock._id, ...itemScope(user), status: 'active' }, -quantity, { session });
+        if (!change) {
+          const now = await findItem(user, line.itemName, session);
+          // Retired since the line was priced: no longer a stock item.
+          if (!now) continue;
+          throw new InsufficientStockError([
+            `Insufficient stock for "${line.itemName}". Available: ${now.quantity}, Required: ${quantity}`
+          ]);
         }
+        taken.push({ quantity, ...change });
       }
-
-      for (const item of items) {
-        await this.processInventoryDeduction(item, invoiceId, invoiceNumber, user, null, movements, errors);
-      }
-      return { success: errors.length === 0, movements, errors };
+      return taken;
     } catch (error) {
-      console.error('Error in deductInventoryForInvoice:', error);
-      return { success: false, movements, errors: [...errors, error.message] };
+      if (!session) await this.returnStock(taken, user);
+      throw error;
     }
   }
 
-  static async processInventoryDeduction(item, invoiceId, invoiceNumber, user, session, movements, errors) {
-    if (!item.itemName || !((Number(item.quantity) || 0) > 0)) return;
-
-    const inventoryItem = await findItem(user, item.itemName, session);
-    // Not a stock item: a one-off line typed on the invoice. Nothing to deduct.
-    if (!inventoryItem) return;
-    const quantity = stockNeeded(item, inventoryItem);
-
-    if (inventoryItem.quantity < quantity) {
-      errors.push(`Insufficient stock for "${item.itemName}". Available: ${inventoryItem.quantity}, Required: ${quantity}`);
-      return;
+  /**
+   * Puts back stock taken by takeStockForInvoice (undoing an invoice that
+   * could not be completed). Keeps going past an item it cannot update, and
+   * reports each one loudly: it is a stock count someone must correct.
+   */
+  static async returnStock(taken, user) {
+    for (const { item, quantity } of taken || []) {
+      try {
+        await this.changeStock({ _id: item._id, ...itemScope(user) }, quantity);
+      } catch (error) {
+        console.error(`STOCK NOT RESTORED: ${quantity} ${item.unit} of "${item.name}" (${item._id}) — correct it by hand.`, error.message);
+      }
     }
+  }
 
-    const previousQuantity = inventoryItem.quantity;
-    const newQuantity = previousQuantity - quantity;
-    await Inventory.updateOne({ _id: inventoryItem._id }, { quantity: newQuantity, updatedAt: Date.now() }, session ? { session } : {});
-
-    const movement = new InventoryMovement({
-      inventoryItem: inventoryItem._id,
-      itemName: inventoryItem.name,
+  /** The "sale" stock movements recording what an invoice took. */
+  static saleMovements(taken, invoice, user) {
+    return (taken || []).map(({ item, quantity, previousQuantity, newQuantity }) => ({
+      inventoryItem: item._id,
+      itemName: item.name,
       movementType: 'sale',
       quantity,
-      unit: inventoryItem.unit,
-      unitCost: inventoryItem.unitCost || 0,
-      totalCost: quantity * (inventoryItem.unitCost || 0),
+      unit: item.unit,
+      unitCost: item.unitCost || 0,
+      totalCost: quantity * (item.unitCost || 0),
       previousQuantity,
       newQuantity,
       referenceType: 'invoice',
-      referenceId: new mongoose.Types.ObjectId(String(invoiceId)),
-      referenceNumber: invoiceNumber,
+      referenceId: invoice._id,
+      referenceNumber: invoice.invoiceNumber,
       reason: 'Invoice sale',
-      notes: `Sold ${quantity} ${inventoryItem.unit} of ${inventoryItem.name}`,
+      notes: `Sold ${quantity} ${item.unit} of ${item.name}`,
       userId: user._id,
       performedByName: user.fullName,
-      dataScope: inventoryItem.dataScope || user.dataScope
-    });
-    await movement.save(session ? { session } : undefined);
-    movements.push(movement);
+      dataScope: item.dataScope || user.dataScope
+    }));
   }
 
   /**
@@ -152,11 +197,10 @@ class InventoryService {
     if (alreadyReturned) return { success: true, message: 'Stock was already restored for this invoice' };
 
     for (const sale of sales) {
-      const inventoryItem = await Inventory.findOne({ _id: sale.inventoryItem, ...itemScope(user) });
-      if (!inventoryItem) continue;
-      const previousQuantity = inventoryItem.quantity;
-      const newQuantity = previousQuantity + sale.quantity;
-      await Inventory.updateOne({ _id: inventoryItem._id }, { quantity: newQuantity, updatedAt: Date.now() });
+      // Added on in one write, so a sale made at the same moment is not lost.
+      const change = await this.changeStock({ _id: sale.inventoryItem, ...itemScope(user) }, sale.quantity);
+      if (!change) continue;
+      const { item: inventoryItem, previousQuantity, newQuantity } = change;
       await InventoryMovement.create({
         inventoryItem: sale.inventoryItem,
         itemName: sale.itemName,
@@ -241,6 +285,7 @@ class InventoryService {
 }
 
 InventoryService.itemScope = itemScope;
+InventoryService.InsufficientStockError = InsufficientStockError;
 InventoryService.stockNeeded = stockNeeded;
 InventoryService.movementScope = movementScope;
 

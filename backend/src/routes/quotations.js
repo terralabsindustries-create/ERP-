@@ -367,10 +367,9 @@ router.post('/:id/convert-to-invoice', protect, requirePermission('Quotations: C
     const dueDate = new Date(invoiceDate);
     dueDate.setDate(dueDate.getDate() + 30);
 
-    const invoiceNumber = await Invoice.generateInvoiceNumber(req.user._id, req.user.dataScope);
-
+    // Numbered when it is written (Invoice.createNumbered), retrying if a
+    // concurrent invoice takes the number first.
     const invoiceData = {
-      invoiceNumber,
       customerId: customer._id,
       customerName: customer.name,
       customerGstNumber: customer.gstNumber || '',
@@ -394,7 +393,16 @@ router.post('/:id/convert-to-invoice', protect, requirePermission('Quotations: C
     };
     if (req.user.dataScope) invoiceData.dataScope = req.user.dataScope;
 
-    const invoice = await Invoice.create(invoiceData);
+    let invoice;
+    try {
+      invoice = await Invoice.createNumbered(invoiceData);
+    } catch (error) {
+      if (!Invoice.isNumberTaken(error)) throw error;
+      return res.status(409).json({
+        status: 'error',
+        message: 'Several invoices were being numbered at the same moment and this one could not get a number. Please try again.'
+      });
+    }
 
     quotation.status = 'converted';
     quotation.convertedInvoiceId = invoice._id;

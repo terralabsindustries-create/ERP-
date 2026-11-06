@@ -142,6 +142,10 @@ export function CreateJobDialog({
   const [showInvoiceView, setShowInvoiceView] = useState(false);
   const [isGeneratingInvoice, setIsGeneratingInvoice] = useState(false);
   const invoiceTriggerRef = useRef<HTMLButtonElement>(null);
+  const submitButtonRef = useRef<HTMLButtonElement>(null);
+  // Set the moment a create starts, before React re-renders the button as
+  // disabled, so a second Enter can never send a second job.
+  const submittingRef = useRef(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -510,6 +514,7 @@ export function CreateJobDialog({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingRef.current) return;
 
     // Validate required fields
     if (!formData.title || !formData.title.trim()) {
@@ -619,6 +624,7 @@ export function CreateJobDialog({
       }
     }
 
+    submittingRef.current = true;
     setLoading(true);
     try {
       const jobData = {
@@ -690,8 +696,30 @@ export function CreateJobDialog({
         variant: "destructive",
       });
     } finally {
+      submittingRef.current = false;
       setLoading(false);
     }
+  };
+
+  // The browser only submits on Enter from a text box. Picking a customer from
+  // the search results, or an option from a list, leaves focus on the dialog
+  // itself, so Enter there did nothing. Enter on the dialog now presses Create
+  // Job; fields, buttons and lists keep their own Enter. It clicks the button
+  // rather than submitting the form, so the button's rule still holds: nothing
+  // happens until a customer is set, or while a job is being created.
+  const createJobOnEnter = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Enter" || e.target !== e.currentTarget || e.defaultPrevented || e.nativeEvent.isComposing) return;
+    if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+    e.preventDefault();
+    submitButtonRef.current?.click();
+  };
+
+  // Enter while adding a customer adds that customer. Left to the browser it
+  // would submit the job form, creating the job for the customer chosen before.
+  const addCustomerOnEnter = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Enter" || (e.target as HTMLElement).tagName !== "INPUT" || e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    if (!creatingCustomer && newCustomerData.name.trim()) handleAddCustomer();
   };
 
   // Names need not be unique, so a new customer can always be added — even
@@ -721,7 +749,7 @@ export function CreateJobDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="w-[95vw] max-w-[1200px] max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-[95vw] max-w-[1200px] max-h-[90vh] overflow-y-auto" onKeyDown={createJobOnEnter}>
           <DialogHeader>
             <DialogTitle className="text-lg sm:text-xl">
               {preselectedCustomer ? `New Job Ticket for ${preselectedCustomer.name}` : 'New Job Ticket'}
@@ -867,7 +895,7 @@ export function CreateJobDialog({
                       )}
                     </div>
                   ) : (
-                    <div className="space-y-3 p-3 border rounded-md bg-muted/5">
+                    <div className="space-y-3 p-3 border rounded-md bg-muted/5" onKeyDown={addCustomerOnEnter}>
                       <div className="flex items-center justify-between">
                         <h4 className="font-medium text-sm">Add a customer</h4>
                         <Button
@@ -1647,7 +1675,7 @@ export function CreateJobDialog({
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)} className="w-full sm:w-auto">
                 Cancel
               </Button>
-              <Button type="submit" disabled={loading || !formData.customerId} className="w-full sm:w-auto">
+              <Button ref={submitButtonRef} type="submit" disabled={loading || !formData.customerId} className="w-full sm:w-auto">
                 {loading ? "Creating..." : "Create Job"}
               </Button>
             </DialogFooter>

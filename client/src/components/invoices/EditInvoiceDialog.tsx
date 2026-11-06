@@ -21,6 +21,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertTriangle, Plus, Trash2, Calculator } from "lucide-react";
 import apiClient from "@/lib/apiClient";
+import { jobFitsCustomer } from "@/lib/invoiceJob";
 import { useToast } from "@/hooks/use-toast";
 import { localDate } from "@/lib/format";
 import { BillingTotals } from "@/components/billing/BillingTotals";
@@ -249,7 +250,8 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
               <Label htmlFor="customerId">Customer</Label>
               <Select
                 value={formData.customerId}
-                onValueChange={(value) => setFormData(prev => ({ ...prev, customerId: value }))}
+                // A job ticket of the previous customer can't stay on the invoice.
+                onValueChange={(value) => setFormData(prev => ({ ...prev, customerId: value, jobId: jobFitsCustomer(jobs, prev.jobId, value) ? prev.jobId : "no-job" }))}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select customer" />

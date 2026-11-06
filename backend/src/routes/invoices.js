@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const { body, query } = require('express-validator');
 const { validate } = require('../middleware/validate');
 const Invoice = require('../models/Invoice');
+const Payment = require('../models/Payment');
 const Customer = require('../models/Customer');
 const Job = require('../models/Job');
 const HsnCode = require('../models/HsnCode');
@@ -11,6 +12,7 @@ const { settingsOwnerId, businessSettings } = require('../utils/businessSettings
 const ActivityLog = require('../models/ActivityLog');
 const PDFService = require('../services/PDFService');
 const InventoryService = require('../services/InventoryService');
+const { createInvoiceWithStock } = require('../services/invoiceCreation');
 const { protect } = require('../middleware/auth');
 const { requirePermission, userCan } = require('../middleware/requirePermission');
 const { parseDesignCharge, parseGstRate, priceInvoiceDocument, HSN_PATTERN } = require('../utils/billing');
@@ -125,6 +127,23 @@ const invoiceValidation = [
 
 /** A reference as the client may send it: an id, or the populated object. */
 const idOf = (value) => (value && typeof value === 'object' ? value._id || value.id : value);
+
+/**
+ * Why a job ticket cannot be linked to an invoice for `customerId`, or null if
+ * it can: it must be one of the business's job tickets, raised for that
+ * customer. A job of another business reads as not found, exactly like one
+ * that does not exist, so ids of other businesses reveal nothing.
+ */
+async function jobLinkProblem(user, jobId, customerId) {
+  const job = mongoose.isValidObjectId(jobId)
+    ? await Job.findOne({ _id: jobId, ...orgScope(user) }).select('customerId')
+    : null;
+  if (!job) return { status: 404, message: 'Job ticket not found' };
+  if (String(job.customerId) !== String(customerId)) {
+    return { status: 400, message: 'This job ticket is for a different customer. Choose the job ticket\'s customer, or another job ticket.' };
+  }
+  return null;
+}
 
 /**
  * Lines (with their GST rates), design charge and discount → the stored lines,
@@ -316,11 +335,16 @@ router.get('/:id', protect, async (req, res) => {
         message: 'Invoice not found'
       });
     }
+
+    const paymentHistory = await Payment.find({ invoiceId: invoice._id })
+      .select('paymentId paymentDate amount paymentMethod referenceNumber status')
+      .sort({ paymentDate: -1, createdAt: -1 });
     
     res.status(200).json({
       status: 'success',
       data: {
-        invoice
+        invoice,
+        paymentHistory
       }
     });
     
@@ -387,11 +411,17 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
       });
     }
 
-    const invoiceNumber = await Invoice.generateInvoiceNumber(req.user._id, req.user.dataScope);
+    // A linked job ticket must be this business's, for this customer. The
+    // client sends "" (or nothing) for no job.
+    const jobId = idOf(req.body.jobId);
+    if (jobId) {
+      const problem = await jobLinkProblem(req.user, jobId, customer._id);
+      if (problem) return res.status(problem.status).json({ status: 'error', message: problem.message });
+    }
 
     // Only these fields are taken from the request; everything else is derived.
+    // The invoice number is given when the invoice is written.
     const invoiceData = {
-      invoiceNumber,
       customerId: customer._id,
       customerName: customer.name,
       customerGstNumber: customer.gstNumber,
@@ -416,39 +446,37 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
     };
     if (req.body.status) invoiceData.status = req.body.status;
 
-    // Job is optional — the client sends "" rather than omitting the field
-    // when none is picked, which fails Mongoose's ObjectId cast on create.
-    const jobId = idOf(req.body.jobId);
-    if (jobId && mongoose.isValidObjectId(jobId)) invoiceData.jobId = jobId;
+    if (jobId) invoiceData.jobId = jobId;
     if (req.body.jobTitle) invoiceData.jobTitle = req.body.jobTitle;
 
     // Add dataScope if available
     if (req.user.dataScope) {
       invoiceData.dataScope = req.user.dataScope;
     }
-    const invoice = await Invoice.create(invoiceData);
 
-    // Deduct inventory for all items
+    // The invoice and its stock deduction are written together: if the stock
+    // has run out since the check above (another invoice took it), or any
+    // write fails, no invoice is created and no stock is taken.
+    let invoice;
     try {
-      const inventoryResult = await InventoryService.deductInventoryForInvoice(
-        lines,
-        invoice._id,
-        invoiceNumber,
-        req.user
-      );
-
-      if (!inventoryResult.success) {
-        // If inventory deduction fails, we should ideally rollback the invoice
-        // For now, we'll log the error and continue
-        console.error('Inventory deduction failed:', inventoryResult.errors);
-        
-        // You might want to delete the invoice here or mark it as failed
-        // await Invoice.findByIdAndDelete(invoice._id);
+      invoice = await createInvoiceWithStock(invoiceData, lines, req.user);
+    } catch (error) {
+      if (error instanceof InventoryService.InsufficientStockError) {
+        const latest = await InventoryService.checkStockAvailability(lines, req.user);
+        return res.status(400).json({
+          status: 'error',
+          message: 'Insufficient stock for invoice items',
+          details: error.details,
+          stockCheck: latest.items
+        });
       }
-    } catch (inventoryError) {
-      console.error('Error during inventory deduction:', inventoryError);
-      // Log the error but don't fail the invoice creation
-      // In a production system, you might want to implement proper rollback
+      if (Invoice.isNumberTaken(error)) {
+        return res.status(409).json({
+          status: 'error',
+          message: 'Several invoices were being numbered at the same moment and this one could not get a number. Please try again.'
+        });
+      }
+      throw error;
     }
 
     // Populate the created invoice
@@ -559,6 +587,13 @@ router.put('/:id', protect, requirePermission('Invoicing: Create & Edit'), [
       const jobId = idOf(req.body.jobId);
       // "" or "no-job" unsets the optional job reference.
       invoice.jobId = jobId && mongoose.isValidObjectId(jobId) ? jobId : null;
+    }
+    // A job ticket newly linked, or kept while the customer changes, must be
+    // this business's and the invoice's customer's. An older invoice saved
+    // with another link is left alone while neither changes.
+    if (invoice.jobId && (invoice.isModified('jobId') || invoice.isModified('customerId'))) {
+      const problem = await jobLinkProblem(req.user, invoice.jobId, invoice.customerId);
+      if (problem) return res.status(problem.status).json({ status: 'error', message: problem.message });
     }
     if (req.body.invoiceDate) invoice.invoiceDate = req.body.invoiceDate;
     if (req.body.dueDate) invoice.dueDate = req.body.dueDate;
@@ -825,7 +860,7 @@ router.patch('/:id/payment-status', protect, requirePermission('Invoicing: Recor
   body('amountPaid').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Amount paid must be greater than or equal to 0')
 ], validate, async (req, res) => {
   try {
-    const { paymentStatus, amountPaid } = req.body;
+    const { amountPaid } = req.body;
 
     const query = { _id: req.params.id, ...staffScopeQuery(req.user) };
 
@@ -837,8 +872,6 @@ router.patch('/:id/payment-status', protect, requirePermission('Invoicing: Recor
         message: 'Invoice not found'
       });
     }
-
-    console.log('💰 Payment status update:', { paymentStatus, amountPaid, currentPaidAmount: invoice.paidAmount });
 
     // Validate amount paid
     if (amountPaid !== undefined) {
@@ -864,29 +897,32 @@ router.patch('/:id/payment-status', protect, requirePermission('Invoicing: Recor
         });
       }
 
+      const allocated = await Payment.aggregate([
+        { $match: { invoiceId: invoice._id, status: 'completed' } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]);
+      if (amountPaid + 0.001 < (allocated[0]?.total || 0)) {
+        return res.status(400).json({ status: 'error', message: 'Amount paid cannot be less than payments already allocated to this invoice.' });
+      }
+
       invoice.paidAmount = amountPaid;
-      invoice.balanceAmount = invoice.totalAmount - amountPaid;
-      console.log('💰 Updated amounts:', { paidAmount: invoice.paidAmount, balanceAmount: invoice.balanceAmount });
     }
 
-    // Update payment status
-    invoice.paymentStatus = paymentStatus;
+    // The amount is authoritative; a manual status must not contradict the balance.
+    invoice.paymentStatus = invoice.paidAmount >= invoice.totalAmount ? 'paid' : invoice.paidAmount > 0 ? 'partial' : 'pending';
 
     // Auto-update invoice status based on payment status
-    if (paymentStatus === 'paid') {
+    if (invoice.paymentStatus === 'paid') {
       invoice.status = 'paid';
-    } else if (paymentStatus === 'partial') {
-      if (invoice.status !== 'paid') {
-        invoice.status = 'sent';
-      }
+    } else if (invoice.status === 'paid') {
+      invoice.status = 'sent';
     }
 
     await invoice.save();
-    console.log('✅ Invoice saved successfully');
 
     ActivityLog.logActivity({
       action: 'Invoice Payment Status Updated',
-      description: `Invoice ${invoice.invoiceNumber} payment status was changed to ${paymentStatus}`,
+      description: `Invoice ${invoice.invoiceNumber} payment status was changed to ${invoice.paymentStatus}`,
       entityType: 'invoice',
       entityId: invoice._id,
       entityName: invoice.invoiceNumber,

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+require('./NumberSequence');
 
 const invoiceItemSchema = new mongoose.Schema({
   itemName: {
@@ -400,46 +401,57 @@ invoiceSchema.pre('save', function(next) {
   next();
 });
 
-// Static method to generate invoice number
-invoiceSchema.statics.generateInvoiceNumber = async function(userId, dataScope) {
+/**
+ * The next invoice number of a business: INV-YYYYMM-####, counting up within
+ * the month.
+ *
+ * Numbers come from an atomic counter (NumberSequence), so concurrent requests
+ * each get their own. The counter is kept at or above the highest number
+ * already used this month — invoices written before the counter existed, or
+ * by older code, are never numbered over.
+ *
+ * Pass `session` to allocate inside a transaction: if it aborts, the number
+ * goes back unused.
+ */
+invoiceSchema.statics.generateInvoiceNumber = async function (userId, dataScope, { session } = {}) {
   const today = new Date();
   const year = today.getFullYear();
   const month = String(today.getMonth() + 1).padStart(2, '0');
-
-  // Count invoices for this month
-  const startOfMonth = new Date(year, today.getMonth(), 1);
-  const endOfMonth = new Date(year, today.getMonth() + 1, 0);
-
-  // Use dataScope if available, fallback to userId for migration
-  const countQuery = dataScope
-    ? { dataScope, createdAt: { $gte: startOfMonth, $lte: endOfMonth } }
-    : { userId, createdAt: { $gte: startOfMonth, $lte: endOfMonth } };
-
-  const count = await this.countDocuments(countQuery);
-
-  // Start with the next number in sequence
-  let sequenceNumber = count + 1;
-  let invoiceNumber = `INV-${year}${month}-${String(sequenceNumber).padStart(4, '0')}`;
-
-  // Keep incrementing until we find a unique invoice number. The query has to be
-  // rebuilt each pass — reusing one object would keep testing the first number
-  // forever and spin here indefinitely.
+  const prefix = `INV-${year}${month}-`;
   const scope = dataScope ? { dataScope } : { userId };
 
-  // Bounded so a future logic slip can never hang the request thread. 10k is far
-  // beyond any real monthly volume; hitting it means something is genuinely wrong.
-  const MAX_ATTEMPTS = 10000;
-  let attempts = 0;
+  const [highest] = await this.aggregate([
+    { $match: { ...scope, invoiceNumber: { $regex: `^${prefix}\\d+$` } } },
+    { $group: { _id: null, max: { $max: { $toLong: { $substrCP: ['$invoiceNumber', prefix.length, 12] } } } } }
+  ]).session(session || null);
 
-  while (await this.findOne({ ...scope, invoiceNumber })) {
-    sequenceNumber++;
-    invoiceNumber = `INV-${year}${month}-${String(sequenceNumber).padStart(4, '0')}`;
-    if (++attempts >= MAX_ATTEMPTS) {
-      throw new Error(`Could not allocate a unique invoice number after ${MAX_ATTEMPTS} attempts`);
+  const NumberSequence = mongoose.model('NumberSequence');
+  const sequence = await NumberSequence.nextAfter(`invoice:${dataScope || userId}:${year}${month}`, Number(highest?.max) || 0, { session });
+  return `${prefix}${String(sequence).padStart(4, '0')}`;
+};
+
+/** True when an insert failed because its invoice number is already used in the business. */
+invoiceSchema.statics.isNumberTaken = (error) =>
+  error?.code === 11000 && Boolean(error.keyPattern?.invoiceNumber || /invoiceNumber/.test(error.message || ''));
+
+/**
+ * Creates an invoice under the next free number of its business. If another
+ * request took that number first (a unique-index collision), it numbers the
+ * invoice again and retries, instead of failing.
+ *
+ * Inside a transaction it does not retry — the transaction is over once an
+ * insert fails — and the caller starts a new transaction instead.
+ */
+invoiceSchema.statics.createNumbered = async function (data, { session, attempts = 5 } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    const invoiceNumber = await this.generateInvoiceNumber(data.userId, data.dataScope, { session });
+    try {
+      const [invoice] = await this.create([{ ...data, invoiceNumber }], session ? { session } : {});
+      return invoice;
+    } catch (error) {
+      if (!this.isNumberTaken(error) || session || attempt >= attempts) throw error;
     }
   }
-
-  return invoiceNumber;
 };
 
 // Static method to get invoice statistics. matchQuery decides whose invoices

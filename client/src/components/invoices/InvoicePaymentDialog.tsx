@@ -3,7 +3,6 @@ import { AlertTriangle, CheckCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
@@ -35,7 +34,6 @@ export function InvoicePaymentDialog({
   onSaved: () => void;
 }) {
   const { toast } = useToast();
-  const [status, setStatus] = useState("pending");
   const [paid, setPaid] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -44,7 +42,6 @@ export function InvoicePaymentDialog({
 
   useEffect(() => {
     if (!invoice) return;
-    setStatus(invoice.paymentStatus || "pending");
     setPaid(alreadyPaid > 0 ? String(alreadyPaid) : "");
   }, [invoice, alreadyPaid]);
 
@@ -56,7 +53,11 @@ export function InvoicePaymentDialog({
     if (!invoice || invalid || exceeds) return;
     setSaving(true);
     try {
-      await apiClient.updateInvoicePaymentStatus(invoice._id, { paymentStatus: status, ...(amount !== null ? { amountPaid: amount } : {}) });
+      const nextPaid = amount ?? alreadyPaid;
+      await apiClient.updateInvoicePaymentStatus(invoice._id, {
+        paymentStatus: nextPaid >= total ? "paid" : nextPaid > 0 ? "partial" : "pending",
+        amountPaid: nextPaid
+      });
       toast({ title: `${invoice.invoiceNumber} updated` });
       onSaved();
       onOpenChange(false);
@@ -91,20 +92,6 @@ export function InvoicePaymentDialog({
         )}
 
         <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="pay-status">Payment status</Label>
-            <Select value={status} onValueChange={setStatus}>
-              <SelectTrigger id="pay-status">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="pending">Unpaid</SelectItem>
-                <SelectItem value="partial">Part paid</SelectItem>
-                <SelectItem value="paid">Paid</SelectItem>
-                {invoice?.dueDate && new Date(invoice.dueDate) <= new Date() && <SelectItem value="overdue">Overdue</SelectItem>}
-              </SelectContent>
-            </Select>
-          </div>
           <div className="space-y-1.5">
             <Label htmlFor="pay-amount">Total paid so far (₹)</Label>
             <Input
