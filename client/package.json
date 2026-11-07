@@ -9,7 +9,8 @@
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
     "preview": "vite preview",
-    "build:desktop": "vite build --mode desktop"
+    "build:desktop": "vite build --mode desktop",
+    "test:config": "node --test tests/vite-config.test.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",

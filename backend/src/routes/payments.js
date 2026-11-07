@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const express = require('express');
 const mongoose = require('mongoose');
 const { body, query, validationResult } = require('express-validator');
@@ -46,6 +47,7 @@ function present(payment) {
   const allocations = ledger.allocationsOf(payment);
   const json = typeof payment.toJSON === 'function' ? payment.toJSON() : { ...payment };
   delete json.idempotencyKey;
+  delete json.idempotencyFingerprint;
   return {
     ...json,
     allocations: allocations.map((a) => ({ invoiceId: String(a.invoiceId), invoiceNumber: a.invoiceNumber, amount: a.amount, allocatedAt: a.allocatedAt })),
@@ -118,6 +120,48 @@ const idempotencyKeyOf = (req) => {
   const key = (req.get('Idempotency-Key') || req.body.idempotencyKey || '').toString().trim();
   return key || undefined;
 };
+
+/** JSON with object keys sorted at every level, and empty values dropped, so equal requests serialise equally. */
+const canonical = (value) => {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const entries = Object.keys(value)
+      .sort()
+      .filter((k) => value[k] !== undefined && value[k] !== null && value[k] !== '')
+      .map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`);
+    return `{${entries.join(',')}}`;
+  }
+  return JSON.stringify(value);
+};
+
+/**
+ * What a payment request asks for, as a hash: the customer, every field the
+ * payment is saved with (amount, method, status, date, reference, notes and
+ * method details) and its invoice allocations. Two requests with the same
+ * idempotency key are the same payment only if these match. `invoiceId` is
+ * read as an allocation of the whole amount, allocations in any order, and a
+ * date by the instant it names.
+ */
+function requestFingerprint(body) {
+  const fields = pickFields(body);
+  const requested = Array.isArray(body.allocations)
+    ? body.allocations
+    : body.invoiceId ? [{ invoiceId: body.invoiceId, amount: fields.amount }] : [];
+  const allocations = requested
+    .map((a) => ({ invoiceId: String((a && a.invoiceId) || '').toLowerCase(), amount: round2(a && a.amount) }))
+    .sort((x, y) => (x.invoiceId < y.invoiceId ? -1 : x.invoiceId > y.invoiceId ? 1 : x.amount - y.amount));
+  const date = fields.paymentDate ? new Date(fields.paymentDate) : null;
+  return crypto
+    .createHash('sha256')
+    .update(canonical({
+      ...fields,
+      customerId: String(body.customerId || '').toLowerCase(),
+      status: fields.status || 'completed',
+      paymentDate: date && !Number.isNaN(date.getTime()) ? date.toISOString() : fields.paymentDate,
+      allocations
+    }))
+    .digest('hex');
+}
 
 // @route   GET /api/payments
 // @desc    Payments the caller may see, with totals for the same filters
@@ -269,13 +313,19 @@ router.get('/:id', protect, async (req, res) => {
 
 /**
  * The earlier submission with this idempotency key, as the response to a
- * repeat: the same payment, not a second one. A key reused for a different
- * payment is refused.
+ * repeat: the same payment, not a second one — but only if the repeat asks for
+ * exactly the same payment (requestFingerprint). A key reused for anything
+ * else is refused with 409.
  */
-async function replay(req, res, key, { customerId, amount }) {
+async function replay(req, res, key, fingerprint) {
   const existing = await Payment.findOne({ userId: req.user._id, idempotencyKey: key });
   if (!existing) return false;
-  if (String(existing.customerId) !== String(customerId) || round2(existing.amount) !== round2(amount)) {
+  // Keys recorded before fingerprints were stored can only be matched on
+  // customer and amount.
+  const same = existing.idempotencyFingerprint
+    ? existing.idempotencyFingerprint === fingerprint
+    : String(existing.customerId) === String(req.body.customerId) && round2(existing.amount) === round2(req.body.amount);
+  if (!same) {
     res.status(409).json({ status: 'error', message: 'This submission key was already used for a different payment.', code: 'IDEMPOTENCY_KEY_REUSED' });
     return true;
   }
@@ -301,7 +351,8 @@ router.post('/', protect, paymentValidation, async (req, res) => {
     }
 
     const fields = pickFields(req.body);
-    if (key && (await replay(req, res, key, { customerId: req.body.customerId, amount: fields.amount }))) return;
+    const fingerprint = key ? requestFingerprint(req.body) : undefined;
+    if (key && (await replay(req, res, key, fingerprint))) return;
 
     const customer = await Customer.findOne({ _id: req.body.customerId, ...orgScope(req.user) });
     if (!customer) {
@@ -332,6 +383,7 @@ router.post('/', protect, paymentValidation, async (req, res) => {
         customerName: customer.name,
         allocations,
         idempotencyKey: key,
+        idempotencyFingerprint: fingerprint,
         collectedByName: req.user.fullName,
         userId: req.user._id,
         dataScope: req.user.dataScope
@@ -339,7 +391,7 @@ router.post('/', protect, paymentValidation, async (req, res) => {
     } catch (error) {
       // A concurrent submission with the same key got there first (or this
       // one failed because it did): answer with that payment.
-      if (key && (await replay(req, res, key, { customerId: customer._id, amount: fields.amount }))) return;
+      if (key && (await replay(req, res, key, fingerprint))) return;
       throw error;
     }
 

@@ -67,6 +67,11 @@ const paymentSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  // A hash of the request that used the key (routes/payments.js
+  // requestFingerprint): a repeat is the same payment only if it matches.
+  idempotencyFingerprint: {
+    type: String
+  },
   amount: {
     type: Number,
     required: [true, 'Payment amount is required'],

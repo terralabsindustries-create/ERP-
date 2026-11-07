@@ -329,6 +329,96 @@ describe('repeated and concurrent submissions', () => {
     await expectConsistent();
   });
 
+  test('an identical retry returns the original payment, however its allocations and date are written', async () => {
+    const a = await invoiceFor(1000);
+    const b = await invoiceFor(1000);
+    const key = newKey();
+    const body = {
+      customerId: String(cust._id),
+      amount: 600,
+      paymentMethod: 'cheque',
+      status: 'completed',
+      paymentDate: '2026-11-02',
+      referenceNumber: 'CHQ-104',
+      notes: 'Cheque handed over at the counter',
+      allocations: [{ invoiceId: String(a._id), amount: 400 }, { invoiceId: String(b._id), amount: 200 }],
+      idempotencyKey: key
+    };
+    const first = await admin.post('/api/payments', body);
+    expect(first.status).toBe(201);
+    expect(first.body.data.payment.idempotencyFingerprint).toBeUndefined();
+
+    const retry = await admin.post('/api/payments', body);
+    expect(retry.status).toBe(200);
+    expect(retry.body.replayed).toBe(true);
+    expect(retry.body.data.payment._id).toBe(first.body.data.payment._id);
+
+    // The same request written differently: allocations reordered, the date
+    // as a full timestamp, the key in the header instead of the body.
+    const { idempotencyKey, ...rest } = body;
+    const reordered = await request(app).post('/api/payments').set(auth(org.tokens.admin)).set('Idempotency-Key', idempotencyKey).send({
+      ...rest,
+      paymentDate: '2026-11-02T00:00:00.000Z',
+      allocations: [...body.allocations].reverse()
+    });
+    expect(reordered.status).toBe(200);
+    expect(reordered.body.data.payment._id).toBe(first.body.data.payment._id);
+
+    // Recording against one invoice by invoiceId is the same as one allocation of the whole amount.
+    const singleKey = newKey();
+    const viaInvoiceId = await admin.post('/api/payments', { customerId: String(cust._id), invoiceId: String(a._id), amount: 100, paymentMethod: 'upi', idempotencyKey: singleKey });
+    expect(viaInvoiceId.status).toBe(201);
+    const viaAllocations = await admin.post('/api/payments', { customerId: String(cust._id), allocations: [{ invoiceId: String(a._id), amount: 100 }], amount: 100, paymentMethod: 'upi', idempotencyKey: singleKey });
+    expect(viaAllocations.status).toBe(200);
+    expect(viaAllocations.body.data.payment._id).toBe(viaInvoiceId.body.data.payment._id);
+
+    expect(await Payment.countDocuments({ idempotencyKey: { $in: [key, singleKey] } })).toBe(2);
+    expect(await state(a)).toMatchObject({ paidAmount: 500 });
+    expect(await state(b)).toMatchObject({ paidAmount: 200 });
+    await expectConsistent();
+  });
+
+  test('the same key with the same customer and amount but a different invoice is refused, and records nothing', async () => {
+    const a = await invoiceFor(1000);
+    const b = await invoiceFor(1000);
+    const key = newKey();
+    const body = { customerId: String(cust._id), invoiceId: String(a._id), amount: 300, paymentMethod: 'upi', paymentDate: '2026-11-03', referenceNumber: 'UPI-9', idempotencyKey: key };
+    const first = await admin.post('/api/payments', body);
+    expect(first.status).toBe(201);
+
+    const otherInvoice = await admin.post('/api/payments', { ...body, invoiceId: String(b._id) });
+    expect(otherInvoice.status).toBe(409);
+    expect(otherInvoice.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
+    expect(await state(b)).toMatchObject({ paidAmount: 0 });
+
+    // Every other part of the request counts too.
+    for (const change of [
+      { paymentMethod: 'cash' },
+      { status: 'pending' },
+      { paymentDate: '2026-11-04' },
+      { referenceNumber: 'UPI-10' },
+      { notes: 'Different note' },
+      { invoiceId: undefined },
+      { invoiceId: undefined, allocations: [{ invoiceId: String(a._id), amount: 200 }] }
+    ]) {
+      const res = await admin.post('/api/payments', { ...body, ...change });
+      expect([JSON.stringify(change), res.status, res.body.code]).toEqual([JSON.stringify(change), 409, 'IDEMPOTENCY_KEY_REUSED']);
+    }
+    expect(await Payment.countDocuments({ idempotencyKey: key })).toBe(1);
+    expect(await state(a)).toMatchObject({ paidAmount: 300 });
+
+    // Sent at the same moment: one is recorded, the other refused, never two.
+    const raceKey = newKey();
+    const race = await Promise.all([
+      admin.post('/api/payments', { ...body, idempotencyKey: raceKey }),
+      admin.post('/api/payments', { ...body, invoiceId: String(b._id), idempotencyKey: raceKey })
+    ]);
+    expect(race.map((r) => r.status).sort()).toEqual([201, 409]);
+    expect(await Payment.countDocuments({ idempotencyKey: raceKey })).toBe(1);
+    expect((await state(a)).paidAmount + (await state(b)).paidAmount).toBe(600);
+    await expectConsistent();
+  });
+
   test('two payments racing for the last of a balance: one lands, the invoice is never overpaid', async () => {
     const inv = await invoiceFor(1000);
     const results = await Promise.all([700, 700, 700].map((amount) => pay({ invoiceId: String(inv._id), amount })));
