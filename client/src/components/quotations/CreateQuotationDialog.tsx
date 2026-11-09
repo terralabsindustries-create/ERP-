@@ -38,6 +38,7 @@ export interface QuotationRecord {
   status?: string;
   customer_id: { _id: string; name?: string } | string | null;
   valid_until?: string | null;
+  shipping_address?: string;
   payment_link?: string | null;
   terms_conditions?: string;
   notes?: string;
@@ -99,6 +100,7 @@ export const CreateQuotationDialog = ({
   const emptyForm = {
     customer_id: "",
     valid_until: "",
+    shipping_address: "",
     payment_link: "",
     terms_conditions: "",
     notes: "",
@@ -130,6 +132,7 @@ export const CreateQuotationDialog = ({
     setFormData({
       customer_id: idOf(quotation.customer_id),
       valid_until: quotation.valid_until ? localDate(quotation.valid_until) : "",
+      shipping_address: quotation.shipping_address || "",
       payment_link: quotation.payment_link || "",
       terms_conditions: quotation.terms_conditions || "",
       notes: quotation.notes || "",
@@ -253,6 +256,7 @@ export const CreateQuotationDialog = ({
       const payload = {
         customer_id: formData.customer_id,
         valid_until: formData.valid_until,
+        shipping_address: formData.shipping_address,
         payment_link: formData.payment_link,
         terms_conditions: formData.terms_conditions,
         notes: formData.notes,
@@ -387,6 +391,42 @@ export const CreateQuotationDialog = ({
                 ))}
               </SelectContent>
             </Select>
+          </div>
+
+          {formData.customer_id && (() => {
+            const customer = customers.find((c) => c._id === formData.customer_id);
+            if (!customer) return null;
+            return (
+              <div className="grid gap-3 rounded-md border bg-muted/30 p-4 text-sm sm:grid-cols-3">
+                <div>
+                  <p className="font-semibold">Customer</p>
+                  <p>{customer.name}</p>
+                  {customer.phone && <p>{customer.phone}</p>}
+                  {customer.email && <p className="break-all">{customer.email}</p>}
+                  {customer.gstNumber && <p>GSTIN: {customer.gstNumber}</p>}
+                </div>
+                <div>
+                  <p className="font-semibold">Billing address</p>
+                  <p className="whitespace-pre-wrap">{customer.address || "Not provided"}</p>
+                </div>
+                <div>
+                  <p className="font-semibold">Shipping address</p>
+                  <p className="whitespace-pre-wrap">{formData.shipping_address || customer.address || "Not provided"}</p>
+                </div>
+              </div>
+            );
+          })()}
+
+          <div className="space-y-2">
+            <Label htmlFor="quotation-shipping-address">Shipping address (optional)</Label>
+            <Textarea
+              id="quotation-shipping-address"
+              value={formData.shipping_address}
+              onChange={(e) => setFormData((prev) => ({ ...prev, shipping_address: e.target.value }))}
+              placeholder="Leave blank to use the customer's billing address"
+              maxLength={1000}
+              rows={2}
+            />
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

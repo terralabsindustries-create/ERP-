@@ -599,6 +599,7 @@ class PDFService {
     summary.push({ label: 'Total', value: money(total), bold: true });
 
     const billing = this.splitAddress(customer.address);
+    const shipping = this.splitAddress(quotation.shipping_address || customer.address);
     return {
       type: 'QUOTATION',
       numberLabel: 'Quotation No.',
@@ -611,7 +612,7 @@ class PDFService {
       company: companyInfo,
       customer: { name: customer.name || 'N/A', lines: custLines },
       billingLines: billing,
-      shippingLines: billing,
+      shippingLines: shipping,
       items,
       bankLines: this.bankLines(companyInfo),
       summary,
@@ -715,6 +716,12 @@ class PDFService {
     const headL = W - headR - 16;
     write(d.type, right - headR, y - 3, S.title, { bold: true, color: C.ink, width: headR, align: 'right' });
     let ry = y + 32;
+    if (d.type === 'QUOTATION') {
+      for (const row of [{ label: d.numberLabel || 'Number', value: d.number }, ...(d.meta || [])]) {
+        write(row.label, right - 210, ry, S.detail, { width: 86, align: 'right', color: C.muted });
+        ry = write(row.value, right - 116, ry, S.meta, { width: 116, align: 'right', bold: true, color: C.ink }) + 2;
+      }
+    }
     if (d.badge) {
       const bw = 104;
       const bh = 21;
@@ -758,7 +765,7 @@ class PDFService {
     rule(y, C.ink, 1.2);
     y += 12;
 
-    // ---------- BILL TO (left), NUMBER AND DATES (right) ----------
+    // ---------- CUSTOMER AND ADDRESSES ----------
     const metaW = 220;
     const metaX = right - metaW;
     const partyW = W - metaW - 24;
@@ -767,25 +774,49 @@ class PDFService {
     const shipDiffers = shipping.length > 0 && shipping.join('\n') !== billing.join('\n');
     const partyCol = shipDiffers ? (partyW - 16) / 2 : partyW;
 
-    let py = label('Bill To', left, y, partyCol) + 3;
-    py = write(d.customer.name || 'N/A', left, py, S.party, { bold: true, color: C.ink, width: partyCol }) + 1;
-    for (const line of [...billing, ...(d.customer.lines || [])]) py = write(line, left, py, S.detail, { width: partyCol });
-    if (shipDiffers) {
-      const sx = left + partyCol + 16;
-      let sy = label('Ship To', sx, y, partyCol) + 3;
-      for (const line of shipping) sy = write(line, sx, sy, S.detail, { width: partyCol });
-      py = Math.max(py, sy);
-    }
+    if (d.type === 'QUOTATION') {
+      const gap = 16;
+      const colW = (W - gap * 2) / 3;
+      const sections = [
+        { title: 'Customer', lines: [d.customer.name || 'N/A', ...(d.customer.lines || [])] },
+        { title: 'Billing Address', lines: billing.length ? billing : ['N/A'] },
+        { title: 'Shipping Address', lines: shipping.length ? shipping : ['N/A'] }
+      ];
+      let bottomOfParty = y;
+      sections.forEach((section, index) => {
+        const x = left + index * (colW + gap);
+        let sy = label(section.title, x, y, colW) + 4;
+        section.lines.forEach((line, lineIndex) => {
+          sy = write(line, x, sy, lineIndex === 0 && index === 0 ? S.party : S.detail, {
+            bold: lineIndex === 0 && index === 0,
+            color: C.ink,
+            width: colW
+          });
+        });
+        bottomOfParty = Math.max(bottomOfParty, sy);
+      });
+      y = bottomOfParty + 14;
+    } else {
+      let py = label('Bill To', left, y, partyCol) + 3;
+      py = write(d.customer.name || 'N/A', left, py, S.party, { bold: true, color: C.ink, width: partyCol }) + 1;
+      for (const line of [...billing, ...(d.customer.lines || [])]) py = write(line, left, py, S.detail, { width: partyCol });
+      if (shipDiffers) {
+        const sx = left + partyCol + 16;
+        let sy = label('Ship To', sx, y, partyCol) + 3;
+        for (const line of shipping) sy = write(line, sx, sy, S.detail, { width: partyCol });
+        py = Math.max(py, sy);
+      }
 
-    let my = y;
-    const metaLabelW = 96;
-    for (const row of [{ label: d.numberLabel || 'Number', value: d.number }, ...(d.meta || [])]) {
-      const h = Math.max(measure(row.label, S.detail, metaLabelW), measure(row.value, S.meta, metaW - metaLabelW, true));
-      write(row.label, metaX, my + 0.5, S.detail, { color: C.muted, width: metaLabelW });
-      write(row.value, metaX + metaLabelW, my, S.meta, { bold: true, color: C.ink, width: metaW - metaLabelW, align: 'right' });
-      my += h + 4;
+      let my = y;
+      const metaLabelW = 96;
+      for (const row of [{ label: d.numberLabel || 'Number', value: d.number }, ...(d.meta || [])]) {
+        const h = Math.max(measure(row.label, S.detail, metaLabelW), measure(row.value, S.meta, metaW - metaLabelW, true));
+        write(row.label, metaX, my + 0.5, S.detail, { color: C.muted, width: metaLabelW });
+        write(row.value, metaX + metaLabelW, my, S.meta, { bold: true, color: C.ink, width: metaW - metaLabelW, align: 'right' });
+        my += h + 4;
+      }
+      y = Math.max(py, my) + 14;
     }
-    y = Math.max(py, my) + 14;
 
     // ---------- ITEMS ----------
     // Size and Area appear when a line is priced by area (6 × 4 ft, 24 sq ft

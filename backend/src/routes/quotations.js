@@ -71,7 +71,8 @@ const quotationValidation = [
   body('design_charge').optional({ values: 'falsy' }).custom((v) => parseDesignCharge(v) !== null).withMessage('Design charge must be an amount of 0 or more'),
   body('design_charge_tax_rate').optional({ values: 'null' }).custom((v) => parseGstRate(v) !== null).withMessage('The design charge GST rate must be from 0 to 100%'),
   body('discount_amount').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Discount cannot be negative'),
-  body('is_interstate').optional({ values: 'null' }).isBoolean().withMessage('is_interstate must be true or false')
+  body('is_interstate').optional({ values: 'null' }).isBoolean().withMessage('is_interstate must be true or false'),
+  body('shipping_address').optional().isString().isLength({ max: 1000 }).withMessage('Shipping address is too long')
 ];
 
 // A quotation can be changed while it is being worked on: a draft, or one sent
@@ -174,7 +175,7 @@ router.post('/', protect, requirePermission('Quotations: Create & Edit'), quotat
   }
 
   try {
-    const { customer_id, valid_until, items, payment_link, terms_conditions, notes } = req.body;
+    const { customer_id, valid_until, items, payment_link, terms_conditions, notes, shipping_address } = req.body;
 
     // Verify customer belongs to this user/scope
     const customerFilter = req.user.dataScope
@@ -197,6 +198,7 @@ router.post('/', protect, requirePermission('Quotations: Create & Edit'), quotat
       customer_id,
       ...priced.fields,
       valid_until: valid_until || null,
+      shipping_address: shipping_address || '',
       payment_link: payment_link || null,
       terms_conditions,
       notes,
@@ -240,7 +242,7 @@ router.put('/:id', protect, requirePermission('Quotations: Create & Edit'), quot
     const priced = pricedQuotation(req.body);
     if (priced.error) return res.status(400).json({ status: 'error', message: priced.error });
 
-    const { valid_until, payment_link, terms_conditions, notes } = req.body;
+    const { valid_until, payment_link, terms_conditions, notes, shipping_address } = req.body;
     // Only while it is still editable: a conversion that lands in the
     // meantime must not be overwritten.
     const quotation = await Quotation.findOneAndUpdate(
@@ -250,6 +252,7 @@ router.put('/:id', protect, requirePermission('Quotations: Create & Edit'), quot
           customer_id: customer._id,
           ...priced.fields,
           valid_until: valid_until || null,
+          shipping_address: shipping_address || '',
           payment_link: payment_link || null,
           terms_conditions,
           notes

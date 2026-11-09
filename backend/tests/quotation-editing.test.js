@@ -40,6 +40,7 @@ const createDraft = async (extra = {}) => {
 const edited = (q, patch = {}) => ({
   customer_id: String(cust._id),
   valid_until: q.valid_until,
+  shipping_address: q.shipping_address,
   terms_conditions: q.terms_conditions,
   notes: q.notes,
   items: q.items.map(({ item_name, description, quantity, unit, unit_price, length, width, hsn_code, tax_rate }) => ({ item_name, description, quantity, unit, unit_price, length, width, hsn_code, tax_rate })),
@@ -81,6 +82,7 @@ describe('editing a draft quotation', () => {
       discount_amount: 100,
       notes: 'Revised after the call',
       valid_until: '2026-12-31',
+      shipping_address: 'Warehouse Road\nKozhikode - 673001',
       // Totals sent by the client are never trusted.
       subtotal: 1,
       total_amount: 1,
@@ -96,6 +98,7 @@ describe('editing a draft quotation', () => {
       design_charge: 600,
       discount_amount: 100,
       notes: 'Revised after the call',
+      shipping_address: 'Warehouse Road\nKozhikode - 673001',
       gst_type: 'gst'
     });
     expect(after.customer_id._id).toBe(String(cust2._id));
@@ -119,6 +122,7 @@ describe('editing a draft quotation', () => {
 
     const stored = await Quotation.findById(q._id).populate('customer_id');
     const d = PDFService.quotationDocument(stored, company);
+    expect(d.shippingLines).toEqual(['Warehouse Road', 'Kozhikode - 673001']);
     expect(d.items.map((i) => i.description)).toEqual(['Brochure', 'Flex banner', 'Standee']);
     expect(d.summary.find((s) => s.label === 'Discount').value).toBe('- INR 100.00');
     expect(d.summary.find((s) => s.label === 'Taxable Amount').value).toBe('INR 4,376.00');

@@ -237,13 +237,14 @@ test('a part-paid invoice shows what is paid and the balance due; a paid one is 
 test('a quotation is drawn by the same layout, with its own number and validity', () => {
   const quotation = {
     quotationNumber: 'QT-2026-0007', createdAt: new Date('2026-11-05'), valid_until: new Date('2026-11-20'),
-    customer_id: { name: 'Malabar Events & Weddings', phone: '+91 99460 11223' },
+    customer_id: { name: 'Malabar Events & Weddings', phone: '+91 99460 11223', address: 'Kozhikode - 673014' },
+    shipping_address: 'Warehouse Road\nKozhikode - 673001',
     items: [{ item_name: 'Flex banner', unit: 'sqft', length: 6, width: 4, area_per_piece: 24, total_area: 240, quantity: 10, unit_price: 12, tax_rate: 18, tax_amount: 518.4, total_amount: 3398.4 }],
     subtotal: 2880, total_amount: 3398.4
   };
   const out = render(PDFService.quotationDocument(quotation, company));
   expect(out.pages).toHaveLength(1);
-  for (const part of ['QUOTATION', 'Quotation No.', 'QT-2026-0007', 'Valid Until', '20/11/2026', 'Size (L × W)', 'INR 3,398.40']) {
+  for (const part of ['QUOTATION', 'Quotation No.', 'QT-2026-0007', 'Valid Until', '20/11/2026', 'CUSTOMER', 'BILLING ADDRESS', 'SHIPPING ADDRESS', 'Warehouse Road', 'Size (L × W)', 'INR 3,398.40']) {
     expect(out.find(part).length).toBeGreaterThan(0);
   }
 });

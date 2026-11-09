@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,14 +11,15 @@ import apiClient from "@/lib/apiClient";
 interface CreateHsnCodeDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onHsnCodeCreated: () => void;
+  onHsnCodeCreated: (hsnCode: { _id: string; hsnCode: string; description: string; gstRate: number }) => void;
+  initialGstRate?: number;
 }
 
-export function CreateHsnCodeDialog({ open, onOpenChange, onHsnCodeCreated }: CreateHsnCodeDialogProps) {
+export function CreateHsnCodeDialog({ open, onOpenChange, onHsnCodeCreated, initialGstRate = 18 }: CreateHsnCodeDialogProps) {
   const [formData, setFormData] = useState({
     hsnCode: "",
     description: "",
-    gstRate: 18,
+    gstRate: initialGstRate,
     type: "product" as 'product' | 'service' | 'both',
     category: "",
     subCategory: "",
@@ -27,13 +28,17 @@ export function CreateHsnCodeDialog({ open, onOpenChange, onHsnCodeCreated }: Cr
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
 
+  useEffect(() => {
+    if (open) setFormData((prev) => ({ ...prev, gstRate: initialGstRate }));
+  }, [open, initialGstRate]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!formData.hsnCode || !formData.description || !formData.category) {
+    if (!/^\d{4,8}$/.test(formData.hsnCode.trim()) || !formData.description.trim() || !formData.category.trim()) {
       toast({
         title: "Invalid Input",
-        description: "Please fill in all required fields",
+        description: "Enter a 4 to 8 digit HSN code, description, and category.",
         variant: "destructive",
       });
       return;
@@ -43,7 +48,7 @@ export function CreateHsnCodeDialog({ open, onOpenChange, onHsnCodeCreated }: Cr
     try {
       console.log('📋 Creating HSN code:', formData);
       
-      const response = await apiClient.createHsnCode(formData);
+      const response: any = await apiClient.createHsnCode(formData);
       console.log('📋 HSN code created successfully:', response);
       
       toast({
@@ -51,7 +56,7 @@ export function CreateHsnCodeDialog({ open, onOpenChange, onHsnCodeCreated }: Cr
         description: "HSN Code has been created successfully",
       });
       
-      onHsnCodeCreated();
+      onHsnCodeCreated(response.hsnCode);
       onOpenChange(false);
       
       // Reset form
@@ -68,7 +73,7 @@ export function CreateHsnCodeDialog({ open, onOpenChange, onHsnCodeCreated }: Cr
       console.error('Error creating HSN code:', error);
       toast({
         title: "Error",
-        description: "Failed to create HSN code",
+        description: error instanceof Error ? error.message : "Failed to create HSN code",
         variant: "destructive",
       });
     } finally {

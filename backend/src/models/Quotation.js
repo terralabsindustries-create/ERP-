@@ -55,6 +55,9 @@ const quotationSchema = new mongoose.Schema({
   valid_until: {
     type: Date
   },
+  // Optional delivery address for this quotation. When empty, use the
+  // customer's billing address on the PDF.
+  shipping_address: { type: String, trim: true, default: '' },
   items: [quotationItemSchema],
   // Sum of the line amounts.
   subtotal: { type: Number, default: 0 },

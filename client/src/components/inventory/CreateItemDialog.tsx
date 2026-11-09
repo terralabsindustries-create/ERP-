@@ -8,9 +8,10 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { AlertCircle, Info, Calculator } from "lucide-react";
+import { AlertCircle, Info, Calculator, Plus } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { UnitConverterDialog } from "./UnitConverterDialog";
+import { CreateHsnCodeDialog } from "@/components/hsn/CreateHsnCodeDialog";
 
 interface CreateItemDialogProps {
   open: boolean;
@@ -96,6 +97,7 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
   const [showNewSupplier, setShowNewSupplier] = useState(false);
   const [newSupplier, setNewSupplier] = useState("");
   const [showUnitConverter, setShowUnitConverter] = useState(false);
+  const [showCreateHsn, setShowCreateHsn] = useState(false);
   const { toast } = useToast();
 
   // Calculate status automatically
@@ -143,6 +145,12 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
     } catch (error) {
       console.error('Error fetching HSN codes:', error);
     }
+  };
+
+  const handleHsnCreated = (hsn: { _id: string; hsnCode: string; description: string; gstRate: number }) => {
+    setHsnCodes((codes) => [...codes.filter((code) => code.hsnCode !== hsn.hsnCode), hsn]);
+    setFormData((prev) => ({ ...prev, hsnCode: hsn.hsnCode, gstRate: String(hsn.gstRate) }));
+    setShowCreateHsn(false);
   };
 
   const fetchSuppliers = async () => {
@@ -302,6 +310,7 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
   };
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[95vw] max-w-[600px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
@@ -504,6 +513,9 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    {!GST_RATES.some((rate) => rate.value === formData.gstRate) && (
+                      <SelectItem value={formData.gstRate}>{formData.gstRate}%</SelectItem>
+                    )}
                     {GST_RATES.map(rate => (
                       <SelectItem key={rate.value} value={rate.value}>{rate.label}</SelectItem>
                     ))}
@@ -512,7 +524,12 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="hsnCode">HSN Code {parseFloat(formData.gstRate) > 0 && "(Recommended)"}</Label>
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor="hsnCode">HSN Code {parseFloat(formData.gstRate) > 0 && "(Recommended)"}</Label>
+                  <Button type="button" variant="ghost" size="sm" className="h-auto gap-1 px-1 py-0 text-xs" onClick={() => setShowCreateHsn(true)}>
+                    <Plus className="h-3.5 w-3.5" /> New HSN
+                  </Button>
+                </div>
                 <Select value={formData.hsnCode || "none"} onValueChange={(value) => {
                   const hsnCodeValue = value === "none" ? "" : value;
                   setFormData(prev => ({ ...prev, hsnCode: hsnCodeValue }));
@@ -521,8 +538,10 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
                     setFormData(prev => ({ ...prev, gstRate: selectedHsn.gstRate.toString() }));
                   }
                 }}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select HSN" />
+                  <SelectTrigger id="hsnCode">
+                    <SelectValue placeholder="Select HSN">
+                      {formData.hsnCode ? hsnCodes.find((hsn) => hsn.hsnCode === formData.hsnCode)?.hsnCode || formData.hsnCode : "No HSN Code"}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">No HSN Code</SelectItem>
@@ -560,5 +579,12 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
         </form>
       </DialogContent>
     </Dialog>
+    <CreateHsnCodeDialog
+        open={showCreateHsn}
+        onOpenChange={setShowCreateHsn}
+        onHsnCodeCreated={handleHsnCreated}
+        initialGstRate={Number(formData.gstRate) || 0}
+    />
+    </>
   );
 }
