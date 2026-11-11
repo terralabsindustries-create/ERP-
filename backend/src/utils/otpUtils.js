@@ -86,7 +86,7 @@ const getOTPEmailTemplate = (otp, fullName) => {
           </div>
           
           <div class="footer">
-            <p>&copy; 2026 Synx Automation Private Limited. All rights reserved.</p>
+            <p>&copy; 2026 TerraLabs Industries. All rights reserved.</p>
             <p>Support: support@serpy.in</p>
             <p>This is an automated message. Please do not reply to this email.</p>
           </div>
@@ -109,7 +109,7 @@ const getOTPEmailTemplate = (otp, fullName) => {
       
       If you have any questions or need assistance, please contact our support team at support@serpy.in.
       
-      © 2026 Synx Automation Private Limited. All rights reserved.
+      © 2026 TerraLabs Industries. All rights reserved.
     `
   };
 };
