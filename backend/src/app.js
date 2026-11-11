@@ -39,6 +39,7 @@ const corsOrigins = [...new Set([
   ...listedOrigins(process.env.FRONTEND_URL),
   ...listedOrigins(process.env.CORS_ORIGINS),
   'https://erp-delta-one-83.vercel.app',
+  'https://app.carbonprintflow.com',
   'https://api.carbonprintflow.com',
   // Earlier deployments, kept while they may still be in use.
   'https://serpy-silk.vercel.app',
