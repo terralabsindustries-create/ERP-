@@ -503,13 +503,13 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
           <div className="space-y-4 p-4 bg-muted/50 rounded-lg border border-border">
             <h3 className="text-sm font-semibold text-foreground/80 uppercase tracking-wide">Tax & Compliance</h3>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="gstRate">GST Rate *</Label>
                 <Select value={formData.gstRate} onValueChange={(value) =>
                   setFormData(prev => ({ ...prev, gstRate: value }))
                 }>
-                  <SelectTrigger>
+                  <SelectTrigger id="gstRate">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -523,10 +523,10 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
                 </Select>
               </div>
 
-              <div className="space-y-2">
+              <div className="min-w-0 space-y-2">
                 <div className="flex items-center justify-between gap-2">
-                  <Label htmlFor="hsnCode">HSN Code {parseFloat(formData.gstRate) > 0 && "(Recommended)"}</Label>
-                  <Button type="button" variant="ghost" size="sm" className="h-auto gap-1 px-1 py-0 text-xs" onClick={() => setShowCreateHsn(true)}>
+                  <Label htmlFor="hsnCode" className="whitespace-nowrap">HSN Code</Label>
+                  <Button type="button" variant="ghost" size="sm" className="h-auto shrink-0 gap-1 px-1 py-0 text-xs" onClick={() => setShowCreateHsn(true)}>
                     <Plus className="h-3.5 w-3.5" /> New HSN
                   </Button>
                 </div>
@@ -552,21 +552,24 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
                     ))}
                   </SelectContent>
                 </Select>
+                {parseFloat(formData.gstRate) > 0 && (
+                  <p className="text-xs text-muted-foreground">Recommended for taxable items</p>
+                )}
               </div>
             </div>
 
             {/* Notes */}
-          <div className="space-y-2">
-            <Label htmlFor="notes">Notes (Optional)</Label>
-            <Textarea
-              id="notes"
-              value={formData.notes}
-              onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
-              placeholder="Additional information about this item"
-              rows={3}
-            />
+            <div className="space-y-2">
+              <Label htmlFor="notes">Notes (Optional)</Label>
+              <Textarea
+                id="notes"
+                value={formData.notes}
+                onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
+                placeholder="Additional information about this item"
+                rows={3}
+              />
+            </div>
           </div>
-        </div>
 
         <DialogFooter className="flex flex-col sm:flex-row gap-2 sm:gap-0">
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)} className="w-full sm:w-auto">

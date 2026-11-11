@@ -1,14 +1,8 @@
-// Soft tints for initials, picked from the name so a person or record keeps
-// its colour everywhere it appears.
-const TINTS = [
-  "bg-primary-soft text-primary-strong",
-  "bg-info-soft text-info-strong",
-  "bg-success-soft text-success-strong",
-  "bg-warning-soft text-warning-strong",
-  "bg-secondary text-secondary-foreground"
-];
+// Initials sit on a warm paper chip in ink, the same for every name, as on the
+// Carbon website.
+const AVATAR = "bg-paper-3 text-ink-2";
 
-export const tintFor = (name: string) => TINTS[[...(name || "?")].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % TINTS.length];
+export const tintFor = (_name: string) => AVATAR;
 
 export const initialsOf = (name = "") =>
   name

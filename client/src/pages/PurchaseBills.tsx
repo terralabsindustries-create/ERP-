@@ -53,8 +53,8 @@ const statusOf = (b: Bill): { label: string; tone: PillTone } =>
     : isOverdue(b)
       ? { label: "Overdue", tone: "danger" }
       : b.paymentStatus === "partial"
-        ? { label: "Part paid", tone: "info" }
-        : { label: "Unpaid", tone: "warning" };
+        ? { label: "Part paid", tone: "warning" }
+        : { label: "Unpaid", tone: "info" };
 
 export default function PurchaseBills() {
   const { hasPermission } = useAuth();

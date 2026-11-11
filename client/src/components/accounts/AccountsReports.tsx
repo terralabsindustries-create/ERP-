@@ -244,7 +244,7 @@ export function AccountsReports() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <CreditCard className="h-4 w-4 text-purple-500" />
+              <CreditCard className="h-4 w-4 text-primary" />
               Cash Flow
             </CardTitle>
           </CardHeader>
@@ -329,7 +329,7 @@ export function AccountsReports() {
                 </thead>
                 <tbody>
                   {recentTransactions.map((transaction) => (
-                    <tr key={transaction._id} className="border-b hover:bg-muted/50">
+                    <tr key={transaction._id} className="border-b hover:bg-muted">
                       <td className="py-3 px-4 text-sm text-muted-foreground">
                         {new Date(transaction.createdAt).toLocaleDateString()}
                       </td>
@@ -343,7 +343,7 @@ export function AccountsReports() {
                       <td className="py-3 px-4">
                         <Badge
                           variant={transaction.transactionType === 'income' ? 'default' : 'destructive'}
-                          className={transaction.transactionType === 'income' ? 'bg-green-500 hover:bg-green-600' : ''}
+                          className={transaction.transactionType === 'income' ? 'bg-success text-success-foreground hover:bg-success/90' : ''}
                         >
                           {transaction.transactionType === 'income' ? 'Income' : 'Expense'}
                         </Badge>

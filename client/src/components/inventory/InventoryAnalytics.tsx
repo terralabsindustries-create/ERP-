@@ -7,6 +7,20 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import apiClient from "@/lib/apiClient";
 
+/* Chart styling from the Carbon tokens (src/index.css): series in the order
+   amber, cyan, magenta, ink, green; gridlines in --line, axis text in --ink-3. */
+const SERIES = [1, 2, 3, 4, 5].map((n) => `hsl(var(--chart-${n}))`);
+const GRID = "hsl(var(--line))";
+const AXIS_TICK = { fill: "hsl(var(--ink-3))" };
+const TOOLTIP_STYLE: React.CSSProperties = {
+  background: "hsl(var(--card))",
+  border: "1px solid hsl(var(--line))",
+  borderRadius: 10,
+  boxShadow: "var(--shadow)",
+  color: "hsl(var(--ink))",
+  fontSize: 12,
+};
+
 interface AnalyticsData {
   analytics: {
     totalItems: number;
@@ -78,10 +92,7 @@ export function InventoryAnalytics({ canSeeCost = true }: { canSeeCost?: boolean
     return new Intl.NumberFormat('en-IN').format(num);
   };
 
-  const getCategoryColor = (index: number) => {
-    const colors = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82CA9D'];
-    return colors[index % colors.length];
-  };
+  const getCategoryColor = (index: number) => SERIES[index % SERIES.length];
 
   const getStockStatusColor = (quantity: number, minLevel: number) => {
     if (quantity <= minLevel / 2) return 'destructive';
@@ -207,14 +218,16 @@ export function InventoryAnalytics({ canSeeCost = true }: { canSeeCost?: boolean
                     labelLine={false}
                     label={({ _id, percent }) => `${_id} ${(percent * 100).toFixed(0)}%`}
                     outerRadius={80}
-                    fill="#8884d8"
+                    fill={SERIES[0]}
+                    stroke="hsl(var(--card))"
+                    strokeWidth={3}
                     dataKey={canSeeCost ? "totalValue" : "count"}
                   >
                     {analytics.categoryDistribution.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={getCategoryColor(index)} />
                     ))}
                   </Pie>
-                  <Tooltip formatter={(value) => (canSeeCost ? formatCurrency(value as number) : formatNumber(value as number))} />
+                  <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(value) => (canSeeCost ? formatCurrency(value as number) : formatNumber(value as number))} />
                 </PieChart>
               </ResponsiveContainer>
             ) : (
@@ -233,20 +246,24 @@ export function InventoryAnalytics({ canSeeCost = true }: { canSeeCost?: boolean
             {analytics.topMovingItems.length > 0 ? (
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={analytics.topMovingItems}>
-                  <CartesianGrid strokeDasharray="3 3" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
                   <XAxis 
                     dataKey="name" 
                     angle={-45}
                     textAnchor="end"
                     height={100}
                     fontSize={12}
+                    tick={AXIS_TICK}
+                    stroke={GRID}
                   />
-                  <YAxis />
+                  <YAxis tick={AXIS_TICK} stroke={GRID} fontSize={12} />
                   <Tooltip 
+                    contentStyle={TOOLTIP_STYLE}
+                    cursor={{ fill: "hsl(var(--paper-2))" }}
                     formatter={(value) => [formatNumber(value as number), 'Quantity']}
                     labelFormatter={(label) => `Item: ${label}`}
                   />
-                  <Bar dataKey="quantity" fill="#8884d8" />
+                  <Bar dataKey="quantity" fill={SERIES[0]} radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             ) : (

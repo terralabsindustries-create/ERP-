@@ -52,7 +52,7 @@ export function BillingTotals({
     <dl className="space-y-2 text-sm">
       <div className="flex justify-between">
         <dt className="text-muted-foreground">Items subtotal</dt>
-        <dd className="num">{formatINR(totals.subtotal)}</dd>
+        <dd className="num font-mono">{formatINR(totals.subtotal)}</dd>
       </div>
       <div className="flex items-center justify-between gap-3">
         <dt>
@@ -117,23 +117,23 @@ export function BillingTotals({
       <Separator />
       <div className="flex justify-between">
         <dt className="text-muted-foreground">Taxable amount</dt>
-        <dd className="num">{formatINR(totals.taxableAmount)}</dd>
+        <dd className="num font-mono">{formatINR(totals.taxableAmount)}</dd>
       </div>
       {rates.map((r) =>
         isInterState ? (
           <div key={r.rate} className="flex justify-between">
             <dt className="text-muted-foreground">IGST @ {pct(r.rate)}</dt>
-            <dd className="num">{formatINR(r.igst)}</dd>
+            <dd className="num font-mono">{formatINR(r.igst)}</dd>
           </div>
         ) : (
           <div key={r.rate} className="space-y-1">
             <div className="flex justify-between">
               <dt className="text-muted-foreground">CGST @ {pct(r.rate / 2)}</dt>
-              <dd className="num">{formatINR(r.cgst)}</dd>
+              <dd className="num font-mono">{formatINR(r.cgst)}</dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-muted-foreground">SGST @ {pct(r.rate / 2)}</dt>
-              <dd className="num">{formatINR(r.sgst)}</dd>
+              <dd className="num font-mono">{formatINR(r.sgst)}</dd>
             </div>
           </div>
         )
@@ -141,13 +141,13 @@ export function BillingTotals({
       {rates.length > 1 && (
         <div className="flex justify-between">
           <dt className="text-muted-foreground">Total GST</dt>
-          <dd className="num">{formatINR(totals.gst)}</dd>
+          <dd className="num font-mono">{formatINR(totals.gst)}</dd>
         </div>
       )}
       {rates.length === 0 && (
         <div className="flex justify-between">
           <dt className="text-muted-foreground">GST</dt>
-          <dd className="num">{formatINR(0)}</dd>
+          <dd className="num font-mono">{formatINR(0)}</dd>
         </div>
       )}
       <div className="flex items-center gap-2 pt-1">
@@ -156,10 +156,9 @@ export function BillingTotals({
           Supply to another state (IGST instead of CGST + SGST)
         </Label>
       </div>
-      <Separator />
-      <div className="flex justify-between text-base font-semibold">
+      <div className="flex justify-between border-t border-dashed border-input pt-2 text-base font-semibold">
         <dt>{totalLabel} (incl. GST)</dt>
-        <dd className="num">{formatINR(totals.total)}</dd>
+        <dd className="num font-mono text-primary">{formatINR(totals.total)}</dd>
       </div>
       {totals.discount > totals.gross && <p className="text-xs text-destructive-strong">The discount is more than the {totalLabel.toLowerCase()} before discount.</p>}
     </dl>

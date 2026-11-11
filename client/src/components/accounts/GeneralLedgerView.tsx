@@ -157,11 +157,11 @@ export function GeneralLedgerView() {
 
   const getSourceBadgeColor = (source: string) => {
     switch (source) {
-      case 'invoice': return 'bg-blue-100 text-blue-700';
-      case 'vendor': return 'bg-purple-100 text-purple-700';
-      case 'account': return 'bg-green-100 text-green-700';
-      case 'payment': return 'bg-orange-100 text-orange-700';
-      default: return 'bg-gray-100 text-gray-700';
+      case 'invoice': return 'bg-info-soft text-info-strong';
+      case 'vendor': return 'bg-primary-soft text-primary-strong';
+      case 'account': return 'bg-success-soft text-success-strong';
+      case 'payment': return 'bg-warning-soft text-warning-strong';
+      default: return 'bg-muted text-muted-foreground';
     }
   };
 
@@ -221,12 +221,12 @@ export function GeneralLedgerView() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <TrendingUp className="h-4 w-4 text-green-500" />
+              <TrendingUp className="h-4 w-4 text-success-strong" />
               Total Income
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-600">₹{totalIncome.toLocaleString()}</div>
+            <div className="font-display text-2xl font-bold tracking-[-0.03em] text-success-strong">₹{totalIncome.toLocaleString()}</div>
             <p className="text-xs text-muted-foreground">
               {filteredTransactions.filter(t => t.type === 'income').length} transactions
             </p>
@@ -236,12 +236,12 @@ export function GeneralLedgerView() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <TrendingDown className="h-4 w-4 text-red-500" />
+              <TrendingDown className="h-4 w-4 text-destructive-strong" />
               Total Expenses
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-red-600">₹{totalExpenses.toLocaleString()}</div>
+            <div className="font-display text-2xl font-bold tracking-[-0.03em] text-destructive-strong">₹{totalExpenses.toLocaleString()}</div>
             <p className="text-xs text-muted-foreground">
               {filteredTransactions.filter(t => t.type === 'expense').length} transactions
             </p>
@@ -251,12 +251,12 @@ export function GeneralLedgerView() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Wallet className="h-4 w-4 text-blue-500" />
+              <Wallet className="h-4 w-4 text-info-strong" />
               Net Amount
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className={`text-2xl font-bold ${netAmount >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+            <div className={`font-display text-2xl font-bold tracking-[-0.03em] ${netAmount >= 0 ? 'text-success-strong' : 'text-destructive-strong'}`}>
               ₹{netAmount.toLocaleString()}
             </div>
             <p className="text-xs text-muted-foreground">profit/loss</p>
@@ -266,7 +266,7 @@ export function GeneralLedgerView() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Receipt className="h-4 w-4 text-purple-500" />
+              <Receipt className="h-4 w-4 text-primary" />
               Total Transactions
             </CardTitle>
           </CardHeader>
@@ -381,11 +381,11 @@ export function GeneralLedgerView() {
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-4 flex-1">
-                      <div className={`w-10 h-10 rounded-full flex items-center justify-center ${txn.type === 'income' ? 'bg-green-100' : 'bg-red-100'}`}>
+                      <div className={`w-10 h-10 rounded-full flex items-center justify-center ${txn.type === 'income' ? 'bg-success-soft' : 'bg-destructive-soft'}`}>
                         {txn.type === 'income' ? (
-                          <ArrowUpRight className="h-5 w-5 text-green-600" />
+                          <ArrowUpRight className="h-5 w-5 text-success-strong" />
                         ) : (
-                          <ArrowDownRight className="h-5 w-5 text-red-600" />
+                          <ArrowDownRight className="h-5 w-5 text-destructive-strong" />
                         )}
                       </div>
 
@@ -412,7 +412,7 @@ export function GeneralLedgerView() {
                     </div>
 
                     <div className="text-right ml-4">
-                      <div className={`text-lg font-bold ${txn.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
+                      <div className={`font-mono text-lg font-semibold ${txn.type === 'income' ? 'text-success-strong' : 'text-destructive-strong'}`}>
                         {txn.type === 'income' ? '+' : '-'}₹{txn.amount.toLocaleString()}
                       </div>
                     </div>

@@ -306,7 +306,7 @@ export default function CustomerPortal() {
                   return (
                     <li key={inv._id} className="flex items-start justify-between gap-3 px-4 py-3 sm:px-5">
                       <div className="min-w-0">
-                        <div className="font-mono text-sm font-medium">{inv.invoiceNumber}</div>
+                        <div className="font-mono text-sm font-semibold text-primary">{inv.invoiceNumber}</div>
                         <div className="text-xs text-muted-foreground">
                           {format(new Date(inv.invoiceDate), "d MMM yyyy")}
                           {inv.jobTitle ? ` · ${inv.jobTitle}` : ""}

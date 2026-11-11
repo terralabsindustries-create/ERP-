@@ -34,10 +34,20 @@ import {
   PRIORITY_STYLES,
   SHOP_FLOOR_STATUSES,
   STAGES,
+  type Phase,
   type Stage,
 } from "@/lib/printWorkflow";
 
 type View = "floor" | "all";
+
+/** Each column carries its phase's process ink as a 2px cap. */
+const PHASE_CAP: Record<Phase, string> = {
+  sales: "border-t-phase-sales",
+  prepress: "border-t-phase-prepress",
+  press: "border-t-phase-press",
+  postpress: "border-t-phase-postpress",
+  dispatch: "border-t-phase-dispatch",
+};
 
 const jobId = (job: any) => job._id || job.id;
 
@@ -181,7 +191,7 @@ export default function ProductionBoard() {
         />
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex rounded-lg border bg-muted/70 p-0.5">
+          <div className="inline-flex rounded-[9px] bg-muted p-[3px]">
             {([
               ["floor", "Shop floor"],
               ["all", "All stages"],
@@ -191,7 +201,7 @@ export default function ProductionBoard() {
                 type="button"
                 onClick={() => setView(key)}
                 className={cn(
-                  "rounded-md px-3 py-1 text-[13px] font-medium transition-colors",
+                  "rounded-[7px] px-3 py-1 text-[13px] font-medium transition-[color,background-color,box-shadow] duration-200",
                   view === key ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
                 )}
               >
@@ -227,13 +237,13 @@ export default function ProductionBoard() {
             <span className="rounded-md border bg-card px-2 py-1 text-muted-foreground">
               <span className="num font-semibold text-foreground">{openJobs.length}</span> open
             </span>
-            <span className="rounded-md border border-destructive/25 bg-destructive-soft px-2 py-1 text-destructive-strong">
+            <span className="rounded-md border border-amber/50 bg-warning-soft px-2 py-1 text-warning-strong">
               <span className="num font-semibold">{rush}</span> rush
             </span>
-            <span className="rounded-md border border-warning/30 bg-warning-soft px-2 py-1 text-warning-strong">
+            <span className="rounded-md border border-phase-press/25 bg-phase-press/10 px-2 py-1 font-semibold text-phase-press-text">
               <span className="num font-semibold">{dueToday}</span> due today
             </span>
-            <span className={cn("rounded-md border px-2 py-1", overdue ? "border-destructive/25 bg-red-600 text-white" : "bg-card text-muted-foreground")}>
+            <span className={cn("rounded-md border px-2 py-1", overdue ? "border-destructive bg-destructive text-destructive-foreground" : "bg-card text-muted-foreground")}>
               <span className="num font-semibold">{overdue}</span> overdue
             </span>
           </div>
@@ -258,19 +268,20 @@ export default function ProductionBoard() {
                 onDragLeave={() => setDragOver((s) => (s === stage.status ? null : s))}
                 onDrop={() => onDrop(stage.status)}
                 className={cn(
-                  "flex w-[280px] shrink-0 flex-col rounded-xl border bg-muted/50 transition-colors",
+                  "flex w-[280px] shrink-0 flex-col rounded-xl border border-t-2 bg-muted/50 transition-colors duration-200",
+                  PHASE_CAP[stage.phase],
                   dragOver === stage.status && "border-primary/50 bg-primary/5",
                   focusStage === stage.status && "ring-2 ring-primary/30"
                 )}
               >
                 <div className="px-3 pb-2 pt-3">
-                  <div className={cn("mb-1 h-3.5 text-[10px] font-semibold uppercase tracking-[0.1em]", PHASES[stage.phase].className)}>
+                  <div className={cn("mb-1 h-3.5 font-mono text-[10px] font-semibold uppercase tracking-[0.1em]", PHASES[stage.phase].className)}>
                     {firstOfPhase ? PHASES[stage.phase].label : ""}
                   </div>
                   <div className="flex items-center gap-2">
                     <span className={cn("h-2 w-2 rounded-full", stage.dot)} />
                     <span className="text-[13px] font-semibold">{stage.label}</span>
-                    <span className="num ml-auto rounded-md bg-card px-1.5 py-0.5 text-xs font-medium text-muted-foreground shadow-sm">
+                    <span className="num ml-auto rounded-md bg-card px-1.5 py-0.5 font-mono text-xs font-medium text-muted-foreground shadow-sm">
                       {items.length}
                     </span>
                   </div>
@@ -278,7 +289,7 @@ export default function ProductionBoard() {
 
                 <div className="flex-1 space-y-2 overflow-y-auto px-2 pb-2">
                   {loading && jobs.length === 0 ? (
-                    [0, 1].map((n) => <div key={n} className="h-24 animate-pulse rounded-lg bg-card" />)
+                    [0, 1].map((n) => <div key={n} className="skeleton h-24 rounded-lg" />)
                   ) : items.length === 0 ? (
                     <div className="rounded-lg border border-dashed border-border/80 px-3 py-6 text-center text-xs text-muted-foreground">
                       {canMove ? "Drop a job here" : "No jobs"}
@@ -332,7 +343,8 @@ function JobCard({
         onDragStart();
       }}
       className={cn(
-        "group relative overflow-hidden rounded-lg border bg-card p-3 pl-3.5 shadow-card transition-shadow hover:shadow-elevated",
+        "group relative overflow-hidden rounded-lg border bg-card p-3 pl-3.5 shadow-card transition-shadow duration-200 hover:shadow-elevated",
+        job.priority === "urgent" && "border-amber shadow-rush hover:shadow-rush",
         canMove && "cursor-grab active:cursor-grabbing"
       )}
     >
@@ -350,7 +362,7 @@ function JobCard({
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="-mr-1 -mt-1 rounded p-1 text-muted-foreground opacity-60 hover:bg-accent hover:opacity-100"
+                className="-mr-1 -mt-1 rounded p-1 text-muted-foreground opacity-60 transition-[opacity,background-color] duration-200 hover:bg-primary/[0.07] hover:opacity-100"
                 aria-label="Move job"
               >
                 <MoreHorizontal className="h-4 w-4" />
@@ -380,7 +392,7 @@ function JobCard({
       </div>
 
       {specs.length > 0 && (
-        <div className="mt-2 truncate rounded bg-muted/70 px-1.5 py-1 font-mono text-[10.5px] text-muted-foreground">
+        <div className="mt-2 truncate rounded bg-muted px-1.5 py-1 font-mono text-[10.5px] text-muted-foreground">
           {specs.join(" · ")}
         </div>
       )}
@@ -393,7 +405,7 @@ function JobCard({
           <span
             className={cn(
               "inline-flex items-center gap-1 rounded px-1.5 py-px text-[10.5px] font-medium",
-              due === "overdue" ? "bg-destructive/10 text-destructive" : due === "today" ? "bg-warning/10 text-[hsl(30_90%_32%)]" : "text-muted-foreground"
+              due === "overdue" ? "bg-destructive-soft text-destructive-strong" : due === "today" ? "font-semibold text-phase-press-text" : "text-muted-foreground"
             )}
           >
             {due === "overdue" && <CircleAlert className="h-3 w-3" />}
@@ -406,7 +418,7 @@ function JobCard({
           <button
             type="button"
             onClick={() => onMove(next.status)}
-            className="inline-flex items-center gap-1 rounded-md border bg-card px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary"
+            className="inline-flex items-center gap-1 rounded-md border bg-card px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground transition-colors duration-200 hover:border-primary hover:text-primary"
             title={`Move to ${next.label}`}
           >
             {next.short} <ArrowRight className="h-3 w-3" />

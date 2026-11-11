@@ -37,7 +37,7 @@ function JobCard({ job, actions, primary, onOpen }: { job: CounterJob; actions: 
         className="block w-full space-y-1.5 px-3 pb-2 pt-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
         <div className="flex items-center justify-between gap-2">
-          <span className="font-mono text-[12px] text-muted-foreground">{job.jobNumber}</span>
+          <span className="font-mono text-[12px] font-semibold text-primary">{job.jobNumber}</span>
           <span className="flex shrink-0 items-center gap-1">
             {job.timeline.priority !== "medium" && job.timeline.priority !== "low" && <StatusPill tone={PRIORITY_META[job.timeline.priority].tone}>{PRIORITY_META[job.timeline.priority].label}</StatusPill>}
             {job.isOverdue && <StatusPill tone="danger">Overdue</StatusPill>}

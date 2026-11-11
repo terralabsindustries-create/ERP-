@@ -31,25 +31,30 @@ export interface Stage {
   dot: string;
 }
 
-export const PHASES: Record<Phase, { label: string; className: string }> = {
-  sales: { label: "Sales", className: "text-slate-600 dark:text-slate-400" },
-  prepress: { label: "Pre-press", className: "text-sky-700 dark:text-sky-400" },
-  press: { label: "Press", className: "text-fuchsia-700 dark:text-fuchsia-400" },
-  postpress: { label: "Post-press", className: "text-amber-700 dark:text-amber-400" },
-  dispatch: { label: "Dispatch", className: "text-emerald-700 dark:text-emerald-400" },
+/*
+  Each phase is one of the process inks (tokens --phase-* in src/index.css).
+  `className` colours the phase's name as text, `bar` is its fill (column caps,
+  bars), and each stage's `dot` is the phase ink, lighter for earlier stages.
+*/
+export const PHASES: Record<Phase, { label: string; className: string; bar: string }> = {
+  sales: { label: "Sales", className: "text-phase-sales-text", bar: "bg-phase-sales" },
+  prepress: { label: "Pre-press", className: "text-phase-prepress-text", bar: "bg-phase-prepress" },
+  press: { label: "Press", className: "text-phase-press-text", bar: "bg-phase-press" },
+  postpress: { label: "Post-press", className: "text-phase-postpress-text", bar: "bg-phase-postpress" },
+  dispatch: { label: "Dispatch", className: "text-phase-dispatch-text", bar: "bg-phase-dispatch" },
 };
 
 export const STAGES: Stage[] = [
-  { status: "inquiry", label: "Enquiry", short: "Enquiry", description: "New requirement received", phase: "sales", dot: "bg-slate-400" },
-  { status: "quotation_sent", label: "Quote Sent", short: "Quoted", description: "Estimate shared with customer", phase: "sales", dot: "bg-slate-500" },
-  { status: "quotation_approved", label: "Order Confirmed", short: "Confirmed", description: "Customer approved the quote", phase: "sales", dot: "bg-indigo-500" },
-  { status: "design_in_progress", label: "Design / Pre-press", short: "Pre-press", description: "Artwork, layout and imposition", phase: "prepress", dot: "bg-sky-500" },
-  { status: "design_approved", label: "Proof Approved", short: "Proof OK", description: "Customer signed off the proof", phase: "prepress", dot: "bg-cyan-500" },
-  { status: "production_ready", label: "Plates & Make-ready", short: "Make-ready", description: "Plates, paper and press set-up", phase: "press", dot: "bg-violet-500" },
-  { status: "ready_for_print", label: "On Press", short: "Printing", description: "Running on the press", phase: "press", dot: "bg-fuchsia-500" },
-  { status: "quality_check", label: "Finishing & QC", short: "Finishing", description: "Cutting, binding, lamination, QC", phase: "postpress", dot: "bg-amber-500" },
-  { status: "completed", label: "Ready to Dispatch", short: "Ready", description: "Packed and waiting for dispatch", phase: "dispatch", dot: "bg-emerald-500" },
-  { status: "delivered", label: "Delivered", short: "Delivered", description: "Handed over to customer", phase: "dispatch", dot: "bg-emerald-700" },
+  { status: "inquiry", label: "Enquiry", short: "Enquiry", description: "New requirement received", phase: "sales", dot: "bg-phase-sales/40" },
+  { status: "quotation_sent", label: "Quote Sent", short: "Quoted", description: "Estimate shared with customer", phase: "sales", dot: "bg-phase-sales/70" },
+  { status: "quotation_approved", label: "Order Confirmed", short: "Confirmed", description: "Customer approved the quote", phase: "sales", dot: "bg-phase-sales" },
+  { status: "design_in_progress", label: "Design / Pre-press", short: "Pre-press", description: "Artwork, layout and imposition", phase: "prepress", dot: "bg-phase-prepress/60" },
+  { status: "design_approved", label: "Proof Approved", short: "Proof OK", description: "Customer signed off the proof", phase: "prepress", dot: "bg-phase-prepress" },
+  { status: "production_ready", label: "Plates & Make-ready", short: "Make-ready", description: "Plates, paper and press set-up", phase: "press", dot: "bg-phase-press/60" },
+  { status: "ready_for_print", label: "On Press", short: "Printing", description: "Running on the press", phase: "press", dot: "bg-phase-press" },
+  { status: "quality_check", label: "Finishing & QC", short: "Finishing", description: "Cutting, binding, lamination, QC", phase: "postpress", dot: "bg-phase-postpress" },
+  { status: "completed", label: "Ready to Dispatch", short: "Ready", description: "Packed and waiting for dispatch", phase: "dispatch", dot: "bg-phase-dispatch/60" },
+  { status: "delivered", label: "Delivered", short: "Delivered", description: "Handed over to customer", phase: "dispatch", dot: "bg-phase-dispatch" },
 ];
 
 export const CANCELLED_STAGE: Stage = {
@@ -58,7 +63,7 @@ export const CANCELLED_STAGE: Stage = {
   short: "Cancelled",
   description: "Job cancelled",
   phase: "sales",
-  dot: "bg-red-500",
+  dot: "bg-destructive",
 };
 
 const BY_STATUS = new Map<string, Stage>([...STAGES, CANCELLED_STAGE].map((s) => [s.status, s]));
@@ -106,10 +111,11 @@ export const dueState = (dueDate?: string | Date | null, status?: string): "over
 };
 
 export const PRIORITY_STYLES: Record<string, { label: string; className: string; bar: string }> = {
-  low: { label: "Low", className: "border-border bg-muted text-muted-foreground", bar: "bg-muted-foreground/40" },
+  low: { label: "Low", className: "border-border bg-muted text-muted-foreground", bar: "bg-ink-3/50" },
   medium: { label: "Normal", className: "border-info/25 bg-info-soft text-info-strong", bar: "bg-info" },
-  high: { label: "High", className: "border-warning/30 bg-warning-soft text-warning-strong", bar: "bg-warning" },
-  urgent: { label: "Rush", className: "border-destructive/25 bg-destructive-soft text-destructive-strong", bar: "bg-destructive" },
+  high: { label: "High", className: "border-primary/20 bg-primary-soft text-primary-strong", bar: "bg-primary" },
+  // A rush job is amber: its tag, its edge and (on the board) its card's border
+  urgent: { label: "Rush", className: "border-amber/50 bg-warning-soft text-warning-strong", bar: "bg-amber" },
 };
 
 export const formatINR = (amount: number, opts: { compact?: boolean } = {}) => {

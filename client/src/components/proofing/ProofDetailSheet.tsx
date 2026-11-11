@@ -182,7 +182,7 @@ export function ProofDetailSheet({
           <>
             <SheetHeader className="space-y-1 border-b px-5 py-4 pr-12 text-left">
               <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <span className="font-mono text-[13px] text-foreground">{p.proofNumber}</span>
+                <span className="font-mono text-[13px] font-semibold text-primary">{p.proofNumber}</span>
                 <Tag>v{p.version}</Tag>
                 <StatusPill tone={due?.overdue ? "warning" : status.tone}>{due?.overdue ? "Overdue" : status.label}</StatusPill>
               </div>

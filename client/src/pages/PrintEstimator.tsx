@@ -198,7 +198,7 @@ function ImpositionPreview({ input, result }: { input: EstimateInput; result: Es
           y={oy + r * (imp.pieceHeight + input.gutter)}
           width={imp.pieceWidth}
           height={imp.pieceHeight}
-          className="fill-sky-100 stroke-sky-600"
+          className="fill-amber-soft stroke-brand"
           strokeWidth={Math.max(W, H) / 400}
         />
       );
@@ -207,13 +207,13 @@ function ImpositionPreview({ input, result }: { input: EstimateInput; result: Es
   return (
     <div className="flex flex-col items-center gap-2">
       <svg viewBox={`0 0 ${W} ${H}`} className="max-h-56 w-full" preserveAspectRatio="xMidYMid meet" role="img" aria-label={`${imp.ups} up on the sheet`}>
-        <rect x={0} y={0} width={W} height={H} className="fill-white stroke-slate-400" strokeWidth={Math.max(W, H) / 250} />
+        <rect x={0} y={0} width={W} height={H} className="fill-card stroke-line-strong" strokeWidth={Math.max(W, H) / 250} />
         <rect
           x={input.margin}
           y={input.margin}
           width={Math.max(0, W - 2 * input.margin)}
           height={Math.max(0, H - 2 * input.margin)}
-          className="fill-slate-50 stroke-slate-300"
+          className="fill-paper stroke-line"
           strokeDasharray={`${Math.max(W, H) / 80}`}
           strokeWidth={Math.max(W, H) / 400}
         />
@@ -574,10 +574,10 @@ export default function PrintEstimator() {
                 <div className="mt-5 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{result.error}</div>
               ) : (
                 <>
-                  <div className="mt-5 rounded-lg bg-slate-900 p-4 text-white print:border print:bg-white print:text-black">
-                    <div className="text-xs text-slate-400 print:text-slate-600">Quote for {input.quantity.toLocaleString("en-IN")} pcs (incl. GST)</div>
-                    <div className="num mt-1 text-3xl font-semibold tracking-tight">{formatINR(result.total)}</div>
-                    <div className="mt-2 flex items-center justify-between text-xs text-slate-300 print:text-slate-600">
+                  <div className="on-night mt-5 rounded-lg bg-night p-4 text-night-text print:border print:bg-card print:text-ink">
+                    <div className="text-xs text-night-muted print:text-ink-2">Quote for {input.quantity.toLocaleString("en-IN")} pcs (incl. GST)</div>
+                    <div className="num mt-1 font-display text-3xl font-bold tracking-[-0.03em] print:text-brand">{formatINR(result.total)}</div>
+                    <div className="mt-2 flex items-center justify-between text-xs text-night-muted print:text-ink-2">
                       <span>₹{result.perPiece.toFixed(2)} / pc + GST</span>
                       <span>₹{result.perPieceWithGst.toFixed(2)} / pc incl.</span>
                     </div>
@@ -609,12 +609,12 @@ export default function PrintEstimator() {
                     ].map(([k, v]) => (
                       <div key={k as string} className="flex justify-between">
                         <dt className="text-muted-foreground">{k}</dt>
-                        <dd className="num">{formatINR(v as number)}</dd>
+                        <dd className="num font-mono">{formatINR(v as number)}</dd>
                       </div>
                     ))}
-                    <div className="flex justify-between border-t pt-2 font-semibold">
+                    <div className="flex justify-between border-t border-dashed border-input pt-2 font-semibold">
                       <dt>Total</dt>
-                      <dd className="num">{formatINR(result.total)}</dd>
+                      <dd className="num font-mono text-primary">{formatINR(result.total)}</dd>
                     </div>
                   </dl>
                 </>

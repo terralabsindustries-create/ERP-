@@ -165,7 +165,7 @@ export function DataTable<T>({
                 tabIndex={onRowClick ? 0 : undefined}
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
                 onKeyDown={onRowClick ? (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onRowClick(row)) : undefined}
-                className={cn("min-w-0 flex-1 px-4 py-3", onRowClick && "cursor-pointer active:bg-muted/50")}
+                className={cn("min-w-0 flex-1 px-4 py-3", onRowClick && "cursor-pointer active:bg-muted")}
               >
                 {mobile(row)}
               </div>
@@ -181,7 +181,7 @@ export function DataTable<T>({
       <div className={cn("overflow-x-auto", mobile && "hidden md:block")}>
         <table className="w-full text-sm" style={{ minWidth }}>
           <thead>
-            <tr className="border-b bg-muted/30">
+            <tr className="border-b bg-background">
               {columns.map((c) => {
                 const active = sort?.id === c.id;
                 return (
@@ -196,7 +196,7 @@ export function DataTable<T>({
                         type="button"
                         onClick={() => toggleSort(c.id)}
                         className={cn(
-                          "inline-flex items-center gap-1 uppercase tracking-wider hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                          "inline-flex items-center gap-1 uppercase tracking-[0.08em] transition-colors duration-200 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                           c.align === "right" && "flex-row-reverse",
                           active && "text-foreground"
                         )}
@@ -222,10 +222,10 @@ export function DataTable<T>({
               <tr
                 key={rowKey(row)}
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
-                className={cn("transition-colors", onRowClick && "cursor-pointer hover:bg-muted/40", rowClassName?.(row))}
+                className={cn("transition-colors duration-200", onRowClick && "cursor-pointer hover:bg-muted", rowClassName?.(row))}
               >
                 {columns.map((c) => (
-                  <td key={c.id} className={cn("px-4 py-2.5 align-middle", ALIGN[c.align || "left"], c.align === "right" && "num", c.hideBelow && HIDE[c.hideBelow], c.className)}>
+                  <td key={c.id} className={cn("px-4 py-2.5 align-middle", ALIGN[c.align || "left"], c.align === "right" && "num font-mono", c.hideBelow && HIDE[c.hideBelow], c.className)}>
                     {c.cell(row)}
                   </td>
                 ))}

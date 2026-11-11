@@ -19,6 +19,7 @@ export function invoiceState(i: InvoiceStateFields): { label: string; tone: Pill
   if (i.status === "refunded") return { label: "Refunded", tone: "neutral" };
   if (i.paymentStatus === "paid") return { label: "Paid", tone: "success" };
   if (isInvoiceOverdue(i)) return { label: "Overdue", tone: "danger" };
-  if (i.paymentStatus === "partial") return { label: "Part paid", tone: "info" };
-  return { label: "Unpaid", tone: "warning" };
+  // Carbon's badge colours: part-paid is amber (warning); an open, not-yet-due invoice is info
+  if (i.paymentStatus === "partial") return { label: "Part paid", tone: "warning" };
+  return { label: "Unpaid", tone: "info" };
 }

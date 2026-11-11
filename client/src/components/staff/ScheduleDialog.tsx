@@ -77,7 +77,7 @@ export function ScheduleDialog({ open, onOpenChange, staff, onScheduleSaved }: S
   const shiftTypes = [
     { value: 'morning', label: 'Morning (6AM-2PM)', color: 'bg-warning-soft text-warning-strong' },
     { value: 'afternoon', label: 'Afternoon (2PM-10PM)', color: 'bg-info-soft text-info-strong' },
-    { value: 'evening', label: 'Evening (4PM-12AM)', color: 'bg-purple-100 text-purple-800 dark:bg-purple-500/15 dark:text-purple-300' },
+    { value: 'evening', label: 'Evening (4PM-12AM)', color: 'bg-lilac/60 text-ink dark:bg-lilac/15 dark:text-lilac' },
     { value: 'night', label: 'Night (10PM-6AM)', color: 'bg-muted text-foreground' }
   ];
 

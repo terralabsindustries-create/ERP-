@@ -2,6 +2,7 @@ import { format } from "date-fns";
 import { fmtDate, formatINR } from "@/lib/format";
 import type { Delivery } from "@/lib/api/deliveries";
 import { dateOnly, fmtPhone, jobTitleOf, slotLabel, totalQty } from "./deliveryMeta";
+import { printColorVars, printFontFaces, whenPrintFontsReady } from "@/lib/printFonts";
 
 /** The business details printed at the top of a challan. */
 export interface ChallanBusiness {
@@ -38,36 +39,43 @@ export function challanHtml(d: Delivery, biz: ChallanBusiness) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Delivery challan ${esc(d.deliveryId)}</title>
 <style>
+  ${printFontFaces()}
+  :root { ${printColorVars()} }
   @page { size: A4; margin: 14mm; }
   * { box-sizing: border-box; }
-  body { margin: 0; font: 13px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: #111; background: #f4f4f5; }
-  .sheet { max-width: 794px; margin: 24px auto; background: #fff; padding: 36px 40px; border: 1px solid #e4e4e7; }
+  body { margin: 0; font: 13px/1.45 Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: var(--print-ink); background: var(--print-paper); -webkit-font-smoothing: antialiased; }
+  .mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .sheet { max-width: 794px; margin: 24px auto; background: #fff; padding: 36px 40px; border: 1px solid var(--print-hair); border-radius: 14px; }
   .bar { max-width: 794px; margin: 16px auto 0; display: flex; justify-content: flex-end; gap: 8px; }
-  .bar button { font: inherit; padding: 8px 16px; border-radius: 6px; border: 1px solid #d4d4d8; background: #fff; cursor: pointer; }
-  .bar button.primary { background: #111; color: #fff; border-color: #111; }
-  header { display: flex; justify-content: space-between; gap: 24px; border-bottom: 2px solid #111; padding-bottom: 14px; }
-  .biz { font-size: 20px; font-weight: 700; }
-  .muted { color: #555; }
+  .bar button { font: inherit; font-weight: 600; padding: 8px 16px; border-radius: 10px; border: 1px solid var(--print-line); background: #fff; color: var(--print-ink); cursor: pointer; }
+  .bar button.primary { background: var(--print-brand); color: var(--print-brand-fg); border-color: var(--print-brand); }
+  header { display: flex; justify-content: space-between; gap: 24px; border-bottom: 2px solid var(--print-ink); padding-bottom: 14px; }
+  .biz { font-family: Sora, Inter, sans-serif; font-size: 20px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; }
+  .muted { color: var(--print-ink-2); }
   .doc { text-align: right; }
-  .doc h1 { margin: 0; font-size: 16px; letter-spacing: .12em; }
+  .doc h1 { margin: 0; font-family: Sora, Inter, sans-serif; font-size: 16px; font-weight: 600; letter-spacing: .12em; color: var(--print-brand); }
+  .doc .id { margin-top: 2px; font-weight: 600; color: var(--print-brand); }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin: 18px 0; }
-  .label { font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: #666; margin-bottom: 4px; }
+  .label { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 10px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--print-ink-2); margin-bottom: 4px; }
   dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; }
-  dt { color: #555; } dd { margin: 0; font-weight: 500; }
+  dt { color: var(--print-ink-2); } dd { margin: 0; font-weight: 600; }
+  dd.id { font-family: "JetBrains Mono", ui-monospace, monospace; color: var(--print-brand); }
   table { width: 100%; border-collapse: collapse; margin-top: 6px; }
-  th, td { border: 1px solid #d4d4d8; padding: 7px 9px; text-align: left; vertical-align: top; }
-  th { background: #f4f4f5; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  th, td { border: 1px solid var(--print-line); padding: 7px 9px; text-align: left; vertical-align: top; }
+  th { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--print-ink-2); }
   td.n, th.n { width: 36px; text-align: center; } td.q, th.q { width: 90px; text-align: right; }
-  tfoot td { font-weight: 700; }
-  .pay { margin-top: 14px; padding: 10px 12px; border: 1px dashed #a1a1aa; }
+  td.q, td.n { font-family: "JetBrains Mono", ui-monospace, monospace; font-weight: 500; }
+  tfoot td { font-weight: 600; border-top: 1px dashed var(--print-ink-2); }
+  tfoot td.q { color: var(--print-brand); font-weight: 600; }
+  .pay { margin-top: 14px; padding: 10px 12px; border: 1px dashed var(--print-line); }
   .notes { margin-top: 12px; white-space: pre-wrap; }
   .signs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; margin-top: 56px; }
-  .sign { border-top: 1px solid #111; padding-top: 6px; font-size: 12px; }
-  .foot { margin-top: 28px; font-size: 11px; color: #666; text-align: center; }
+  .sign { border-top: 1px solid var(--print-ink); padding-top: 6px; font-size: 12px; }
+  .foot { margin-top: 28px; font-size: 11px; color: var(--print-ink-2); text-align: center; }
   @media print {
     body { background: #fff; }
     .bar { display: none; }
-    .sheet { margin: 0; border: 0; padding: 0; max-width: none; }
+    .sheet { margin: 0; border: 0; border-radius: 0; padding: 0; max-width: none; }
   }
 </style>
 </head>
@@ -83,7 +91,7 @@ export function challanHtml(d: Delivery, biz: ChallanBusiness) {
     </div>
     <div class="doc">
       <h1>DELIVERY CHALLAN</h1>
-      <div class="muted">${esc(d.deliveryId)}</div>
+      <div class="id mono">${esc(d.deliveryId)}</div>
     </div>
   </header>
 
@@ -99,7 +107,7 @@ export function challanHtml(d: Delivery, biz: ChallanBusiness) {
     </div>
     <div>
       <div class="label">Details</div>
-      <dl>${meta.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
+      <dl>${meta.map(([k, v], n) => `<dt>${esc(k)}</dt><dd${n === 0 ? ' class="id"' : ""}>${esc(v)}</dd>`).join("")}</dl>
     </div>
   </div>
 
@@ -142,7 +150,8 @@ export function printChallan(d: Delivery, biz: ChallanBusiness) {
     w.document.getElementById("print-btn")?.addEventListener("click", () => w.print());
     w.document.getElementById("close-btn")?.addEventListener("click", () => w.close());
     w.focus();
-    setTimeout(() => w.print(), 300);
+    // Print once Carbon's fonts have loaded, so the copy is not set in a fallback face
+    whenPrintFontsReady(w.document).then(() => setTimeout(() => w.print(), 100));
     return;
   }
   const frame = document.createElement("iframe");
@@ -157,9 +166,11 @@ export function printChallan(d: Delivery, biz: ChallanBusiness) {
   doc.open();
   doc.write(html);
   doc.close();
-  setTimeout(() => {
-    frame.contentWindow?.focus();
-    frame.contentWindow?.print();
-    setTimeout(() => frame.remove(), 1000);
-  }, 300);
+  whenPrintFontsReady(doc).then(() =>
+    setTimeout(() => {
+      frame.contentWindow?.focus();
+      frame.contentWindow?.print();
+      setTimeout(() => frame.remove(), 1000);
+    }, 100)
+  );
 }

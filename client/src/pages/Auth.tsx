@@ -201,30 +201,30 @@ export default function Auth() {
   return (
     <div className="min-h-screen grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] bg-background">
       {/* Brand panel */}
-      <aside className="relative hidden overflow-hidden bg-slate-950 text-white lg:flex lg:flex-col">
+      <aside className="on-night relative hidden overflow-hidden bg-night text-night-text lg:flex lg:flex-col">
         {/* crop-mark grid, like the corner of a press sheet */}
         <svg className="pointer-events-none absolute inset-0 h-full w-full opacity-[0.07]" aria-hidden>
           <defs>
             <pattern id="crop" width="96" height="96" patternUnits="userSpaceOnUse">
-              <path d="M0 12 H8 M12 0 V8 M96 84 H88 M84 96 V88" stroke="white" strokeWidth="1" />
-              <circle cx="48" cy="48" r="6" fill="none" stroke="white" strokeWidth="1" />
-              <path d="M48 38 V58 M38 48 H58" stroke="white" strokeWidth="1" />
+              <path d="M0 12 H8 M12 0 V8 M96 84 H88 M84 96 V88" stroke="currentColor" strokeWidth="1" />
+              <circle cx="48" cy="48" r="6" fill="none" stroke="currentColor" strokeWidth="1" />
+              <path d="M48 38 V58 M38 48 H58" stroke="currentColor" strokeWidth="1" />
             </pattern>
           </defs>
           <rect width="100%" height="100%" fill="url(#crop)" />
         </svg>
-        <div className="absolute -right-32 -top-32 h-96 w-96 rounded-full bg-sky-500/20 blur-3xl" aria-hidden />
-        <div className="absolute -bottom-40 -left-24 h-96 w-96 rounded-full bg-fuchsia-600/10 blur-3xl" aria-hidden />
+        <div className="absolute -right-32 -top-32 h-96 w-96 rounded-full bg-amber/20 blur-3xl" aria-hidden />
+        <div className="absolute -bottom-40 -left-24 h-96 w-96 rounded-full bg-phase-press/10 blur-3xl" aria-hidden />
 
         <div className="relative flex flex-1 flex-col justify-between p-10 xl:p-14">
           <BrandLogo tone="light" />
 
           <div className="max-w-lg">
-            <p className="section-label !text-sky-300">Built for printers</p>
+            <p className="section-label signature-bar !text-amber">Built for printers</p>
             <h1 className="mt-3 text-3xl font-semibold leading-tight tracking-tight xl:text-[40px]">
               Run your print shop from estimate to dispatch.
             </h1>
-            <p className="mt-4 text-[15px] leading-relaxed text-slate-300">
+            <p className="mt-4 text-[15px] leading-relaxed text-night-muted">
               One system for offset, digital and large-format work — quoting, job tickets, the production floor,
               paper stock and GST billing.
             </p>
@@ -237,19 +237,19 @@ export default function Auth() {
                 { icon: FileText, title: "GST billing & follow-ups", text: "Invoices, payment reminders and WhatsApp updates." },
               ].map(({ icon: Icon, title, text }) => (
                 <li key={title} className="flex gap-4">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/[0.06] ring-1 ring-white/10">
-                    <Icon className="h-[18px] w-[18px] text-sky-300" />
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-night-tint/[0.06] ring-1 ring-night-tint/[0.12]">
+                    <Icon className="h-[18px] w-[18px] text-amber" />
                   </span>
                   <div>
                     <div className="text-sm font-medium">{title}</div>
-                    <div className="text-sm text-slate-400">{text}</div>
+                    <div className="text-sm text-night-muted">{text}</div>
                   </div>
                 </li>
               ))}
             </ul>
           </div>
 
-          <div className="flex items-center gap-3 text-xs text-slate-500">
+          <div className="flex items-center gap-3 text-xs text-night-muted/70">
             <span className="cmyk-strip h-1 w-12 rounded-full" aria-hidden />
             Cyan · Magenta · Yellow · Key
           </div>

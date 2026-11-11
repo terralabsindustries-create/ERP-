@@ -1,5 +1,6 @@
 import { createRoot } from 'react-dom/client'
 import App from './App.tsx'
+import './fonts'
 import './index.css'
 
 // Scrolling the page with the pointer over a focused number field would step

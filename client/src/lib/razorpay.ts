@@ -68,7 +68,8 @@ export const openRazorpayPayment = async (options: RazorpayOptions): Promise<voi
   const razorpay = new window.Razorpay({
     ...options,
     theme: {
-      color: options.theme?.color || '#3399cc',
+      // Razorpay wants a hex colour; the brand brown comes from the tokens in index.css
+      color: options.theme?.color || getComputedStyle(document.documentElement).getPropertyValue('--print-brand').trim() || undefined,
     },
   });
 

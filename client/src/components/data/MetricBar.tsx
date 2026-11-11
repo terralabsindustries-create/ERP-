@@ -22,7 +22,7 @@ const TONE_VALUE: Record<MetricTone, string> = {
   info: "text-info-strong"
 };
 const TONE_DOT: Record<MetricTone, string> = {
-  default: "bg-muted-foreground/40",
+  default: "bg-ink-3",
   success: "bg-success",
   warning: "bg-warning",
   danger: "bg-destructive",
@@ -57,17 +57,17 @@ export function MetricBar({ metrics, loading, className }: { metrics: Metric[]; 
             aria-pressed={m.onClick ? !!m.active : undefined}
             className={cn(
               "relative min-w-0 bg-card px-4 py-3.5 text-left sm:px-5 sm:py-4",
-              m.onClick && "transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-              m.active && "bg-primary-soft/40 hover:bg-primary-soft/50"
+              m.onClick && "transition-colors duration-200 hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+              m.active && "bg-amber-soft/40 hover:bg-amber-soft/60"
             )}
           >
-            {m.active && <span className="absolute inset-x-0 top-0 h-0.5 bg-primary" aria-hidden />}
-            <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            {m.active && <span className="absolute inset-x-0 top-0 h-0.5 bg-amber" aria-hidden />}
+            <div className="flex items-center gap-1.5 font-mono text-[10.5px] font-semibold uppercase tracking-[0.1em] text-ink-3">
               <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", TONE_DOT[tone])} aria-hidden />
               <span className="truncate">{m.label}</span>
             </div>
-            <div className={cn("num mt-1.5 truncate text-xl font-semibold leading-tight tracking-tight sm:text-2xl", TONE_VALUE[tone])}>
-              {loading ? <span className="inline-block h-6 w-20 animate-pulse rounded bg-muted align-middle" /> : m.value}
+            <div className={cn("num mt-1.5 truncate font-display text-xl font-bold leading-tight tracking-[-0.03em] sm:text-2xl", TONE_VALUE[tone])}>
+              {loading ? <span className="skeleton inline-block h-6 w-20 rounded align-middle" /> : m.value}
             </div>
             {m.hint !== undefined && !loading && <div className="mt-1 truncate text-xs text-muted-foreground">{m.hint}</div>}
           </Comp>

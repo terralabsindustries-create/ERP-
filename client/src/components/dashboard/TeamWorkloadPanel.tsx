@@ -63,7 +63,7 @@ export function TeamWorkloadPanel() {
             </thead>
             <tbody>
               {rows.map((m) => (
-                <tr key={m.user._id} className="border-b last:border-0 hover:bg-muted/40">
+                <tr key={m.user._id} className="border-b last:border-0 hover:bg-muted">
                   <td className="px-4 py-2.5 sm:px-5">
                     <Link to="/team" className="font-medium hover:underline">{m.user.fullName}</Link>
                     <span className="ml-1.5 text-xs capitalize text-muted-foreground">{m.user.role}</span>

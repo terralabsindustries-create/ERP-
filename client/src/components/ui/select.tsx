@@ -17,7 +17,7 @@ const SelectTrigger = React.forwardRef<
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
-      "flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-card px-3 py-2 text-left text-sm text-foreground shadow-sm transition-[color,border-color,box-shadow] hover:border-foreground/25 data-[placeholder]:text-muted-foreground focus:outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-background/50 [&>span]:line-clamp-1 [&>span]:flex-1 [&>span]:text-left",
+      "flex h-9 w-full items-center justify-between gap-2 rounded-lg border border-input bg-background px-3 py-2 text-left text-sm text-foreground transition-[color,background-color,border-color,box-shadow] duration-200 ease-[ease] hover:border-foreground/25 data-[placeholder]:text-ink-3 focus:outline-none focus:border-primary focus:bg-card focus:shadow-ring disabled:cursor-not-allowed disabled:opacity-60 aria-[invalid=true]:border-danger-border [&>span]:line-clamp-1 [&>span]:flex-1 [&>span]:text-left",
       className
     )}
     {...props}
@@ -103,7 +103,7 @@ const SelectLabel = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SelectPrimitive.Label
     ref={ref}
-    className={cn("py-1.5 pl-8 pr-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground", className)}
+    className={cn("py-1.5 pl-8 pr-2 font-mono text-[10.5px] font-semibold uppercase tracking-[0.1em] text-ink-3", className)}
     {...props}
   />
 ))

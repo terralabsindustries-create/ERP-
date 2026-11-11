@@ -306,10 +306,10 @@ export function StaffCredentialsDialog({ open, onOpenChange, staff, onStaffUpdat
                       <div 
                         className={`h-2 rounded-full transition-all ${
                           passwordData.newPassword.length >= 8 
-                            ? 'bg-green-500 w-full' 
+                            ? 'bg-success w-full' 
                             : passwordData.newPassword.length >= 6 
-                            ? 'bg-yellow-500 w-2/3' 
-                            : 'bg-red-500 w-1/3'
+                            ? 'bg-amber w-2/3' 
+                            : 'bg-destructive w-1/3'
                         }`}
                       />
                     </div>

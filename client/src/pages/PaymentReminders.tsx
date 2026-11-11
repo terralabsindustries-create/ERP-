@@ -368,7 +368,7 @@ export default function PaymentReminders() {
       sortValue: (i) => i.customerName.toLowerCase(),
       className: "min-w-[210px]"
     },
-    { id: "invoice", header: "Invoice", cell: (i) => <span className="font-mono text-[13px]">{i.invoiceNumber}</span>, sortValue: (i) => i.invoiceNumber },
+    { id: "invoice", header: "Invoice", cell: (i) => <span className="font-mono text-[13px] font-semibold text-primary">{i.invoiceNumber}</span>, sortValue: (i) => i.invoiceNumber },
     {
       id: "due",
       header: "Due",
@@ -413,7 +413,7 @@ export default function PaymentReminders() {
   const historyColumns: Column<Reminder>[] = [
     { id: "at", header: "Sent", cell: (r) => <span className="whitespace-nowrap">{formatDateTime(r.sentAt || r.createdAt)}</span>, className: "w-[170px]" },
     { id: "customer", header: "Customer", cell: (r) => <EntityCell avatar={r.customerName} title={r.customerName} subtitle={r.customerPhone} /> },
-    { id: "invoice", header: "Invoice", cell: (r) => <span className="font-mono text-[13px]">{r.invoiceNumber}</span>, hideBelow: "md" },
+    { id: "invoice", header: "Invoice", cell: (r) => <span className="font-mono text-[13px] font-semibold text-primary">{r.invoiceNumber}</span>, hideBelow: "md" },
     { id: "type", header: "Type", cell: (r) => <Tag>{REMINDER_TYPE[r.reminderType] || r.reminderType}</Tag>, hideBelow: "lg" },
     { id: "balance", header: "Balance", align: "right", cell: (r) => formatCurrency(r.balanceAmount), hideBelow: "lg" },
     { id: "count", header: "No.", align: "right", cell: (r) => `#${r.reminderCount}`, hideBelow: "xl" },
@@ -838,7 +838,7 @@ export default function PaymentReminders() {
                   </Button>
                 )}
                 <Button
-                  className="flex-1 gap-2 bg-green-600 hover:bg-green-700"
+                  className="flex-1 gap-2 bg-whatsapp-strong text-white shadow-none hover:bg-whatsapp-strong/90"
                   onClick={handleSaveSettings}
                   disabled={savingSettings}
                 >
@@ -973,7 +973,7 @@ export default function PaymentReminders() {
               Cancel
             </Button>
             <Button
-              className="bg-green-600 hover:bg-green-700 gap-2"
+              className="gap-2 bg-whatsapp-strong text-white shadow-none hover:bg-whatsapp-strong/90"
               onClick={handleConfirmSend}
               disabled={sendingId === sendDialogInvoice?._id}
             >
@@ -1005,7 +1005,7 @@ export default function PaymentReminders() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleBulkSend} className="bg-green-600 hover:bg-green-700">
+            <AlertDialogAction onClick={handleBulkSend} className="bg-whatsapp-strong text-white shadow-none hover:bg-whatsapp-strong/90">
               Send All Reminders
             </AlertDialogAction>
           </AlertDialogFooter>

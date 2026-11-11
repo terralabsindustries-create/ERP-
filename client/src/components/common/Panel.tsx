@@ -42,7 +42,7 @@ export function Panel({
       <header className="flex min-h-[52px] items-center justify-between gap-3 border-b px-4 py-3 sm:px-5">
         <div className="flex min-w-0 items-center gap-2.5">
           {Icon && (
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-amber-soft text-brand">
               <Icon className="h-4 w-4" />
             </span>
           )}
@@ -70,7 +70,7 @@ export function PanelLink({ to, children }: { to: string; children: React.ReactN
   return (
     <Link
       to={to}
-      className="inline-flex items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="inline-flex items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-1 text-xs font-semibold text-primary transition-colors duration-200 hover:bg-primary/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       {children}
       <ArrowRight className="h-3.5 w-3.5" />

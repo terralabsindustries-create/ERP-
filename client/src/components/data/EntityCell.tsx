@@ -20,23 +20,23 @@ export function EntityCell({
   icon?: LucideIcon;
   /** Name to draw initials from; leave out for no avatar. */
   avatar?: string;
-  /** Show the title in a monospace face, for codes and numbers. */
+  /** Show the title as a document number: monospace, in the brand colour. */
   mono?: boolean;
   className?: string;
 }) {
   return (
     <div className={cn("flex min-w-0 items-center gap-3", className)}>
       {Icon ? (
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-soft text-brand">
           <Icon className="h-4 w-4" />
         </span>
       ) : avatar !== undefined ? (
-        <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold", tintFor(avatar))} aria-hidden>
+        <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-bold", tintFor(avatar))} aria-hidden>
           {initialsOf(avatar)}
         </span>
       ) : null}
       <div className="min-w-0">
-        <div className={cn("truncate font-medium text-foreground", mono && "font-mono text-[13px]")}>{title}</div>
+        <div className={cn("truncate font-medium text-foreground", mono && "font-mono text-[13px] font-semibold text-primary")}>{title}</div>
         {subtitle && <div className="truncate text-xs text-muted-foreground">{subtitle}</div>}
       </div>
     </div>

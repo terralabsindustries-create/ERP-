@@ -27,7 +27,7 @@ export function PipelineStrip({ counts, loading }: PipelineStripProps) {
     >
       {/* Share of jobs at each stage */}
       <div className="px-4 pt-4 sm:px-5">
-        <div className="flex h-2 w-full gap-px overflow-hidden rounded-full bg-muted" role="img" aria-label="Share of jobs at each stage">
+        <div className="flex h-2 w-full gap-[3px] overflow-hidden rounded-full bg-muted" role="img" aria-label="Share of jobs at each stage">
           {total > 0 &&
             STAGES.map((s) =>
               counts[s.status] ? (
@@ -56,7 +56,7 @@ export function PipelineStrip({ counts, loading }: PipelineStripProps) {
             >
               <div
                 className={cn(
-                  "w-[76px] shrink-0 whitespace-nowrap px-1 text-[10px] font-semibold uppercase tracking-[0.08em] sm:mb-1 sm:w-auto sm:px-2",
+                  "w-[76px] shrink-0 whitespace-nowrap px-1 font-mono text-[10px] font-semibold uppercase tracking-[0.1em] sm:mb-1 sm:w-auto sm:px-2",
                   PHASES[phase].className
                 )}
               >
@@ -69,16 +69,16 @@ export function PipelineStrip({ counts, loading }: PipelineStripProps) {
                     <Link
                       key={s.status}
                       to={`/production?stage=${s.status}`}
-                      className="group min-w-0 rounded-lg px-2 py-1.5 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:py-2"
+                      className="group min-w-0 rounded-lg px-2 py-1.5 transition-colors duration-200 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:py-2"
                       title={s.description}
                     >
                       <div
                         className={cn(
-                          "num text-lg font-semibold leading-none sm:text-2xl",
-                          n === 0 ? "text-muted-foreground/50" : "text-foreground"
+                          "num font-display text-lg font-bold leading-none tracking-[-0.03em] sm:text-2xl",
+                          n === 0 ? "text-ink-3/60" : "text-foreground"
                         )}
                       >
-                        {loading ? <span className="inline-block h-5 w-5 animate-pulse rounded bg-muted sm:h-6 sm:w-6" /> : n}
+                        {loading ? <span className="skeleton inline-block h-5 w-5 rounded sm:h-6 sm:w-6" /> : n}
                       </div>
                       <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground group-hover:text-foreground sm:text-xs">
                         <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", s.dot)} />

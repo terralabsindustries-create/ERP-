@@ -379,7 +379,7 @@ export default function Jobs() {
                 </thead>
                 <tbody>
                   {filteredJobs.map((job) => (
-                    <tr key={job.id} className="border-b hover:bg-muted/30 transition-colors">
+                    <tr key={job.id} className="border-b hover:bg-muted transition-colors">
                       <td className="px-4 py-3">
                         <div className="font-medium">{job.customer}</div>
                         {job.customerCompany && (
@@ -415,7 +415,7 @@ export default function Jobs() {
                             dueState(job.dueDate, job.status) === "overdue"
                               ? "font-medium text-destructive"
                               : dueState(job.dueDate, job.status) === "today"
-                              ? "font-medium text-[hsl(30_90%_32%)]"
+                              ? "font-semibold text-phase-press-text"
                               : ""
                           }`}
                         >

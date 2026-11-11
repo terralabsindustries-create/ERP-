@@ -596,7 +596,7 @@ function DuePill({ due, dueDate }: { due: "overdue" | "today" | "soon"; dueDate:
       className={cn(
         "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-semibold",
         due === "overdue" && "bg-destructive-soft text-destructive-strong",
-        due === "today" && "bg-warning-soft text-warning-strong",
+        due === "today" && "bg-phase-press/10 text-phase-press-text",
         due === "soon" && "bg-muted font-medium text-muted-foreground"
       )}
     >

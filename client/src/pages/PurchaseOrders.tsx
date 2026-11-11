@@ -307,7 +307,7 @@ export default function PurchaseOrders() {
     {
       id: "po",
       header: "Order",
-      cell: (po) => <Stack top={<span className="font-mono text-[13px] font-medium">{po.poNumber}</span>} bottom={`${plural(po.items.length, "item")} · ${fmtDate(po.createdAt)}`} />,
+      cell: (po) => <Stack top={<span className="font-mono text-[13px] font-semibold text-primary">{po.poNumber}</span>} bottom={`${plural(po.items.length, "item")} · ${fmtDate(po.createdAt)}`} />,
       sortValue: (po) => po.poNumber,
       className: "w-[180px]"
     },

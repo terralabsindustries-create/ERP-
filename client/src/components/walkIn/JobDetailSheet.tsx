@@ -81,7 +81,7 @@ export function JobDetailSheet({
           <>
             <SheetHeader className="border-b px-5 py-4 text-left">
               <div className="flex flex-wrap items-center gap-2">
-                <SheetTitle className="font-mono text-base">{job.jobNumber}</SheetTitle>
+                <SheetTitle className="font-mono text-base font-semibold text-primary">{job.jobNumber}</SheetTitle>
                 <StatusPill tone={STATUS_META[job.status].tone}>{STATUS_META[job.status].label}</StatusPill>
                 {job.isOverdue && <StatusPill tone="danger">Overdue</StatusPill>}
               </div>

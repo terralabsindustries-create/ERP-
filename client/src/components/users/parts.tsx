@@ -10,7 +10,7 @@ export function UserAvatar({ name, owner, size = "md", className }: { name: stri
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-full font-semibold",
+        "inline-flex shrink-0 items-center justify-center rounded-full font-bold",
         SIZES[size],
         owner ? "bg-primary text-primary-foreground" : tintFor(name),
         className

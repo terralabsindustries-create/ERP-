@@ -47,8 +47,8 @@ export function ViewTabs<V extends string>({
               aria-selected={active}
               onClick={() => onChange(t.value)}
               className={cn(
-                "relative inline-flex h-10 shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-0.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                active ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:border-border hover:text-foreground"
+                "relative inline-flex h-10 shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-0.5 text-sm font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                active ? "border-amber text-foreground" : "border-transparent text-muted-foreground hover:border-line-strong hover:text-foreground"
               )}
             >
               {Icon && <Icon className="h-4 w-4" />}

@@ -46,7 +46,7 @@ export function AppSidebar() {
 
           return (
             <SidebarGroup key={group.label} className="px-2 py-1.5">
-              <SidebarGroupLabel className="h-6 px-2.5 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-sidebar-muted">
+              <SidebarGroupLabel className="h-6 px-2.5 font-mono text-[10.5px] font-semibold uppercase tracking-[0.1em] text-sidebar-muted/70">
                 {group.label}
               </SidebarGroupLabel>
               <SidebarGroupContent>
@@ -60,11 +60,12 @@ export function AppSidebar() {
                           isActive={isActive}
                           tooltip={item.title}
                           className={cn(
-                            "relative h-9 gap-2.5 rounded-md px-2.5 text-[13px] font-medium text-sidebar-foreground transition-colors md:h-8",
-                            "hover:bg-white/[0.06] hover:text-white",
+                            "relative h-9 gap-2.5 rounded-md px-2.5 text-[13px] font-medium text-sidebar-foreground transition-colors duration-200 md:h-8",
+                            "hover:bg-night-tint/[0.06] hover:text-sidebar-accent-foreground",
                             "focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-                            "data-[active=true]:bg-sidebar-primary/[0.14] data-[active=true]:font-semibold data-[active=true]:text-white",
-                            "[&>svg]:text-sidebar-muted hover:[&>svg]:text-sidebar-foreground data-[active=true]:[&>svg]:text-sidebar-primary"
+                            // Active: a lifted night row, cream text, an amber edge and icon
+                            "data-[active=true]:bg-sidebar-accent data-[active=true]:font-semibold data-[active=true]:text-sidebar-accent-foreground data-[active=true]:shadow-[inset_2px_0_0_hsl(var(--sidebar-primary))]",
+                            "[&>svg]:text-sidebar-muted hover:[&>svg]:text-sidebar-accent-foreground data-[active=true]:[&>svg]:text-sidebar-primary"
                           )}
                         >
                           <Link
@@ -72,12 +73,6 @@ export function AppSidebar() {
                             aria-current={isActive ? "page" : undefined}
                             onClick={() => isMobile && setOpenMobile(false)}
                           >
-                            {isActive && (
-                              <span
-                                className="absolute inset-y-1.5 left-0 w-[3px] rounded-r-full bg-sidebar-primary group-data-[collapsible=icon]:inset-y-1"
-                                aria-hidden
-                              />
-                            )}
                             <item.icon />
                             <span className="truncate">{item.title}</span>
                           </Link>

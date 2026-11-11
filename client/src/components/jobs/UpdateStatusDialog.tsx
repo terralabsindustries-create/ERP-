@@ -116,7 +116,6 @@ export function UpdateStatusDialog({
             <Button 
               onClick={handleSubmit} 
               disabled={loading || !newStatus}
-              className="bg-blue-600 hover:bg-blue-700"
             >
               {loading ? "Updating..." : "Update Status"}
             </Button>

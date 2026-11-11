@@ -3,70 +3,180 @@
 @tailwind utilities;
 
 /*
-  Terralabs ERP design system. Every colour is an HSL triplet so Tailwind can
-  apply opacity to it (bg-primary/10). Components use these tokens, never raw
-  palette classes, so the whole app can be re-themed from this one file.
+  Carbon design tokens — the one place the app's colours, type, shape and depth
+  are defined. They match the Carbon website: a warm "uncoated paper" palette
+  taken from the logo (deep ochre brown, amber, cream), with the process inks
+  marking the production phases.
 
-  The palette is drawn from the press room: an ink-navy chrome, a process-cyan
-  primary, and the four process inks (--cmyk-*) for print-specific accents.
+  Three groups, all in this file:
 
-  Status colours come in three strengths:
+  1. Carbon tokens (--paper, --ink, --brand, --c-*, --night…). The names and
+     values are the website's. Colours are written as HSL channels, the hex in
+     the comment, so Tailwind can put opacity on them (bg-paper-2/60). The
+     light theme is in :root; .dark points the same names at the night palette,
+     so a component written once works in both themes.
+  2. Roles for shadcn/ui and older components (--background, --primary,
+     --muted…). Each is an alias of a Carbon token, never a colour of its own.
+  3. Print constants (--print-*) for documents printed outside the app's CSS
+     (the delivery challan). They stay light in both themes.
+
+  Components use these through Tailwind (tailwind.config.ts): bg-paper-2,
+  text-ink-3, bg-brand, border-line, bg-phase-press, text-success-strong… or
+  through the shadcn roles (bg-background, text-muted-foreground…). Nothing
+  outside this file writes a raw colour.
+
+  Status colours keep their older three strengths:
     --x          solid fill (buttons, dots, bars), paired with --x-foreground
     --x-soft     tinted background for badges, alerts and highlighted rows
     --x-strong   text/icon colour that stays readable (WCAG AA) on --x-soft,
                  on cards and on the page background
+
+  Contrast (measured): --ink-3 is for hints, placeholders and meta only (4.3:1
+  on paper, under 4:1 on paper-2); --amber and --c-yellow are fills, never
+  text on light; cyan text uses --info-fg; green text on --success-bg uses
+  --success-fg.
 */
 
 @layer base {
   :root {
-    /* Surfaces — a cool "paper" grey behind white cards */
-    --background: 220 20% 97%;
-    --background-secondary: 220 16% 94%;
-    --foreground: 222 47% 11%;
-    --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
+    color-scheme: light;
 
-    --muted: 220 16% 95%;
-    --muted-foreground: 220 10% 40%;
+    /* ---------- 1. Carbon tokens (light) ---------- */
 
-    /* Brand — deep process cyan */
-    --primary: 201 90% 35%;
-    --primary-foreground: 0 0% 100%;
-    --primary-hover: 201 90% 30%;
-    --primary-glow: 199 89% 48%;
-    --primary-soft: 199 85% 95%;
-    --primary-strong: 201 90% 29%;
+    /* Paper & surfaces */
+    --paper: 38.2 57.9% 96.3%;        /* #fbf7f0  app background */
+    --paper-2: 37.9 48.7% 92.4%;      /* #f5eee2  subtle fills: tab tracks, hover rows, toolbars */
+    --paper-3: 37.8 45.8% 88.4%;      /* #efe5d4  deeper fill: avatars, pressed states */
+    --card: 0 0% 100%;                /* #ffffff  cards, panels, modals, dropdowns */
+    --line: 37.2 40.8% 86.1%;         /* #eadfcd  default borders and dividers */
+    --line-strong: 37.7 36.1% 76.7%;  /* #d9c9ae  input borders, secondary-button borders, dashed total lines */
 
-    /* Neutral filled surface for secondary buttons */
-    --secondary: 220 14% 93%;
-    --secondary-foreground: 222 47% 11%;
+    /* Ink (text) */
+    --ink: 35.5 55% 7.8%;             /* #1f1609  primary text */
+    --ink-2: 34.1 25.5% 28.4%;        /* #5b4b36  secondary text, labels, table cells */
+    --ink-3: 34.9 19.3% 43.7%;        /* #85735a  hints, meta, placeholders */
 
-    /* Hover / highlighted surface used by menus, ghost buttons, list rows */
-    --accent: 214 32% 94%;
-    --accent-foreground: 222 47% 11%;
+    /* Brand */
+    --brand: 39.6 100% 22%;           /* #704a00  primary buttons, links, IDs, totals, active text */
+    --brand-hover: 39.3 100% 17.6%;   /* #5a3b00 */
+    --brand-soft: 40.4 71.9% 87.5%;   /* #f6e7c8 */
+    --brand-fg: 37.9 100% 96.3%;      /* #fff8ec  text on --brand */
+    --brand-cream: 40 83.5% 81%;      /* #f7dca6  the wordmark on dark backgrounds */
+    --amber: 39.2 100% 48%;           /* #f5a000  accent fill, focus ring, highlight; never body text on light */
+    --amber-hover: 39.5 100% 57.5%;   /* #ffb526 */
+    --amber-soft: 38.4 100% 88%;      /* #ffe9c2  icon chips, selected chips, warning badge bg, ::selection */
+    --peach: 27.9 100% 89%;           /* #ffe1c7 */
+    --lime: 58.3 60% 77.5%;           /* #e8e6a3 */
+    --lilac: 283.6 15.1% 85.7%;       /* #ddd5e0 */
 
-    /* Semantic */
-    --success: 152 64% 30%;
+    /* Process inks = production phases */
+    --c-ink: 35 32.1% 22%;            /* #4a3b26  Sales / enquiry */
+    --c-cyan: 197.6 89.8% 38.6%;      /* #0a87bb  Pre-press */
+    --c-magenta: 324.6 80.3% 41.8%;   /* #c0157a  Press (make-ready, printing) */
+    --c-yellow: 43 100% 44.3%;        /* #e2a200  Post-press / finishing — fill only, never text */
+    --c-green: 158.4 75% 29.8%;       /* #13855c  Dispatch / done / paid / profit */
+
+    /* Status */
+    --success-bg: 147.3 40.7% 94.7%;  /* #ecf7f1 */
+    --success-fg: 159 76.9% 25.5%;    /* #0f7350 */
+    --warning-bg: 38.4 100% 88%;      /* #ffe9c2 */
+    --warning-fg: 36.1 100% 27.1%;    /* #8a5300 */
+    --danger-bg: 6.3 82.6% 95.5%;     /* #fdecea */
+    --danger-fg: 4.2 76.5% 40%;       /* #b42318 */
+    --danger-border: 17.5 88.3% 40.4%;/* #c2410c */
+    --info-bg: 198 66.7% 94.1%;       /* #e6f4fa */
+    --info-fg: 197.6 88.4% 33.9%;     /* #0a76a3 */
+
+    /* Night (sidebar, dark panels, dark mode base) — the same in both themes */
+    --night: 32.3 39.4% 6.5%;         /* #17110a */
+    --night-2: 31.8 34.7% 9.6%;       /* #211910 */
+    --night-3: 31.4 33.3% 12.4%;      /* #2a2015 */
+    --night-tint: 37.3 100% 91.2%;    /* #ffeed2  as an overlay: lines at 12%, hover at 6% */
+    --night-line: hsl(var(--night-tint) / 0.12);
+    --night-text: 39.1 56.1% 92%;     /* #f6eedf */
+    --night-muted: 37.3 26% 66.1%;    /* #bfae92 */
+
+    /* Production phases. Text on light uses the readable variant
+       (cyan → info-fg, yellow → warning-fg, green → success-fg). */
+    --phase-sales: var(--c-ink);
+    --phase-prepress: var(--c-cyan);
+    --phase-press: var(--c-magenta);
+    --phase-postpress: var(--c-yellow);
+    --phase-dispatch: var(--c-green);
+    --phase-sales-text: var(--c-ink);
+    --phase-prepress-text: var(--info-fg);
+    --phase-press-text: var(--c-magenta);
+    --phase-postpress-text: var(--warning-fg);
+    --phase-dispatch-text: var(--success-fg);
+
+    /* WhatsApp keeps its own green */
+    --whatsapp: 145.7 67% 36.9%;      /* #1f9d55  chip border */
+    --whatsapp-strong: 142.9 69.5% 29.6%; /* #17803f  chip text, solid buttons (5:1 with white) */
+
+    /* Type */
+    --font-display: 'Sora', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-body: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    /* Shape & depth (shadows are warm brown, never grey/black) */
+    --radius-sm: 8px;
+    --radius: 0.625rem;               /* 10px  buttons, inputs, table frames */
+    --radius-md: 14px;                /* cards, panels, modals */
+    --radius-lg: 22px;                /* large hero cards */
+    --shadow-sm: 0 1px 2px rgba(60, 40, 10, 0.06), 0 1px 1px rgba(60, 40, 10, 0.04);
+    --shadow: 0 12px 32px -12px rgba(70, 45, 5, 0.22), 0 2px 6px rgba(70, 45, 5, 0.06);
+    --shadow-lg: 0 40px 80px -30px rgba(70, 45, 5, 0.35), 0 8px 24px -8px rgba(70, 45, 5, 0.12);
+    --shadow-brand: 0 10px 24px -10px rgba(112, 74, 0, 0.7);
+    --shadow-rush: 0 0 0 3px rgba(245, 160, 0, 0.15);
+    /* The website's --ring. Renamed because shadcn's --ring is the focus colour. */
+    --focus-ring: 0 0 0 4px rgba(245, 160, 0, 0.22);
+    --signature: linear-gradient(90deg, hsl(var(--amber)), hsl(var(--c-magenta)) 55%, hsl(var(--c-cyan)));
+
+    /* ---------- 2. Roles (shadcn/ui and older components) ---------- */
+
+    --background: var(--paper);
+    --background-secondary: var(--paper-2);
+    --foreground: var(--ink);
+    --card-foreground: var(--ink);
+    --popover: var(--card);
+    --popover-foreground: var(--ink);
+
+    --muted: var(--paper-2);
+    --muted-foreground: var(--ink-2);
+
+    --primary: var(--brand);
+    --primary-foreground: var(--brand-fg);
+    --primary-hover: var(--brand-hover);
+    --primary-glow: var(--amber);
+    --primary-soft: var(--brand-soft);
+    --primary-strong: var(--brand);
+
+    --secondary: var(--paper-2);
+    --secondary-foreground: var(--ink);
+
+    /* Menus, selected items and highlighted rows */
+    --accent: var(--amber-soft);
+    --accent-foreground: var(--brand);
+
+    --success: var(--c-green);
     --success-foreground: 0 0% 100%;
-    --success-soft: 150 50% 95%;
-    --success-strong: 153 70% 24%;
+    --success-soft: var(--success-bg);
+    --success-strong: var(--success-fg);
 
-    --warning: 36 94% 46%;
-    --warning-foreground: 222 47% 11%;
-    --warning-soft: 40 95% 94%;
-    --warning-strong: 28 92% 30%;
+    --warning: var(--amber);
+    --warning-foreground: 35.5 55% 7.8%; /* ink: text on amber is always dark */
+    --warning-soft: var(--warning-bg);
+    --warning-strong: var(--warning-fg);
 
-    --destructive: 0 72% 46%;
+    --destructive: var(--danger-fg);
     --destructive-foreground: 0 0% 100%;
-    --destructive-soft: 0 85% 96%;
-    --destructive-strong: 0 70% 38%;
+    --destructive-soft: var(--danger-bg);
+    --destructive-strong: var(--danger-fg);
 
-    --info: 213 80% 48%;
+    --info: var(--info-fg);
     --info-foreground: 0 0% 100%;
-    --info-soft: 213 90% 96%;
-    --info-strong: 215 75% 38%;
+    --info-soft: var(--info-bg);
+    --info-strong: var(--info-fg);
 
     /* Older aliases, mapped onto the semantic set */
     --urgent: var(--destructive);
@@ -75,130 +185,126 @@
     --pending-foreground: var(--warning-foreground);
     --completed: var(--success);
     --completed-foreground: var(--success-foreground);
-    --walkin: 262 52% 50%;
+    --walkin: var(--c-magenta);
     --walkin-foreground: 0 0% 100%;
     --corporate: var(--primary);
     --corporate-foreground: var(--primary-foreground);
 
-    /* Process inks */
-    --cmyk-c: 196 100% 44%;
-    --cmyk-m: 328 100% 45%;
-    --cmyk-y: 50 100% 50%;
-    --cmyk-k: 222 47% 11%;
+    /* Process inks under their older names */
+    --cmyk-c: var(--c-cyan);
+    --cmyk-m: var(--c-magenta);
+    --cmyk-y: var(--c-yellow);
+    --cmyk-k: var(--c-ink);
 
-    --border: 220 13% 88%;
-    --input: 220 13% 82%;
-    --ring: 201 90% 40%;
+    --border: var(--line);
+    --input: var(--line-strong);
+    --ring: var(--amber);
 
-    /* Gradients are kept as tokens for older components but are flat now —
-       a professional tool doesn't need gradient buttons. */
-    --gradient-primary: linear-gradient(180deg, hsl(201 90% 37%) 0%, hsl(201 90% 33%) 100%);
-    --gradient-secondary: linear-gradient(180deg, hsl(220 14% 96%) 0%, hsl(220 14% 93%) 100%);
-    --gradient-accent: linear-gradient(180deg, hsl(222 47% 18%) 0%, hsl(222 47% 13%) 100%);
-    --gradient-success: linear-gradient(180deg, hsl(152 62% 35%) 0%, hsl(152 62% 31%) 100%);
-    --gradient-warning: linear-gradient(180deg, hsl(35 92% 47%) 0%, hsl(35 92% 43%) 100%);
+    /* Chart series, in order */
+    --chart-1: var(--amber);
+    --chart-2: var(--c-cyan);
+    --chart-3: var(--c-magenta);
+    --chart-4: var(--c-ink);
+    --chart-5: var(--c-green);
+
+    /* Gradients are kept as tokens for older components; they are flat. */
+    --gradient-primary: linear-gradient(180deg, hsl(var(--brand)) 0%, hsl(var(--brand)) 100%);
+    --gradient-secondary: linear-gradient(180deg, hsl(var(--paper-2)) 0%, hsl(var(--paper-2)) 100%);
+    --gradient-accent: linear-gradient(180deg, hsl(var(--night-2)) 0%, hsl(var(--night)) 100%);
+    --gradient-success: linear-gradient(180deg, hsl(var(--c-green)) 0%, hsl(var(--c-green)) 100%);
+    --gradient-warning: linear-gradient(180deg, hsl(var(--amber)) 0%, hsl(var(--amber)) 100%);
     --gradient-orange: var(--gradient-primary);
     --gradient-card: linear-gradient(180deg, hsl(var(--card)) 0%, hsl(var(--card)) 100%);
     --gradient-glass: linear-gradient(180deg, hsl(var(--card) / 0.9) 0%, hsl(var(--card) / 0.75) 100%);
-    --gradient-hero: linear-gradient(135deg, hsl(222 47% 11%) 0%, hsl(215 45% 18%) 100%);
+    --gradient-hero: linear-gradient(135deg, hsl(var(--night)) 0%, hsl(var(--night-2)) 100%);
 
-    --hover-overlay: 210 40% 97%;
-    --hover-glow: 0 2px 8px -2px hsl(222 47% 11% / 0.10);
+    --hover-overlay: var(--paper-2);
+    --hover-glow: var(--shadow-sm);
 
-    --shadow-card: 0 1px 2px 0 hsl(222 47% 11% / 0.05);
-    --shadow-elevated: 0 4px 12px -2px hsl(222 47% 11% / 0.08), 0 2px 4px -2px hsl(222 47% 11% / 0.04);
-    --shadow-float: 0 12px 32px -8px hsl(222 47% 11% / 0.20), 0 2px 6px -2px hsl(222 47% 11% / 0.06);
-    --shadow-glow: 0 0 0 3px hsl(var(--ring) / 0.2);
-    --shadow-inner: inset 0 1px 2px hsl(222 47% 11% / 0.06);
+    --shadow-card: var(--shadow-sm);
+    --shadow-elevated: var(--shadow);
+    --shadow-float: var(--shadow);
+    --shadow-modal: var(--shadow-lg);
+    --shadow-glow: var(--focus-ring);
+    --shadow-inner: inset 0 1px 2px rgba(60, 40, 10, 0.06);
 
-    --radius: 0.5rem;
+    /* Sidebar — night chrome in both themes */
+    --sidebar-background: var(--night);
+    --sidebar-foreground: var(--night-muted);
+    --sidebar-muted: var(--night-muted);
+    --sidebar-primary: var(--amber);
+    --sidebar-primary-foreground: var(--night);
+    --sidebar-accent: var(--night-2);
+    --sidebar-accent-foreground: var(--night-text);
+    --sidebar-border: 35.3 20% 16.7%; /* --night-line over --night, opaque */
+    --sidebar-ring: var(--amber);
 
-    /* Sidebar — ink-navy chrome in both themes */
-    --sidebar-background: 222 47% 10%;
-    --sidebar-foreground: 215 25% 80%;
-    --sidebar-muted: 218 16% 58%;
-    --sidebar-primary: 196 100% 50%;
-    --sidebar-primary-foreground: 222 47% 10%;
-    --sidebar-accent: 220 35% 17%;
-    --sidebar-accent-foreground: 0 0% 100%;
-    --sidebar-border: 220 30% 17%;
-    --sidebar-ring: 196 100% 50%;
+    --scrollbar: var(--line-strong);
+    --scrollbar-hover: var(--ink-3);
 
-    --scrollbar: 220 13% 80%;
-    --scrollbar-hover: 220 13% 68%;
+    /* ---------- 3. Print constants (light in both themes) ---------- */
+    --print-ink: #1f1609;
+    --print-ink-2: #5b4b36;
+    --print-brand: #704a00;
+    --print-brand-fg: #fff8ec;
+    --print-line: #d9c9ae;
+    --print-hair: #eadfcd;
+    --print-paper: #fbf7f0;           /* on screen only, around the sheet */
   }
 
+  /* Dark mode: the same token names on the night palette */
   .dark {
     color-scheme: dark;
 
-    --background: 223 40% 7%;
-    --background-secondary: 222 38% 9%;
-    --foreground: 210 40% 96%;
-    --card: 222 38% 10%;
-    --card-foreground: 210 40% 96%;
-    --popover: 222 36% 12%;
-    --popover-foreground: 210 40% 96%;
+    --paper: var(--night);
+    --paper-2: var(--night-2);
+    --paper-3: 33.9 22.3% 20.2%;      /* #3f3528  tint 10% over night-3 */
+    --card: var(--night-3);
+    --line: 32.5 21.4% 22%;           /* #44392c  --night-line over a card, opaque */
+    --line-strong: 32.3 17.1% 29.8%;  /* #594d3f  the 22% night line, opaque */
 
-    --muted: 222 30% 15%;
-    --muted-foreground: 218 16% 65%;
+    --ink: var(--night-text);
+    --ink-2: var(--night-muted);
+    --ink-3: 36.6 17.2% 53.1%;        /* #9c8c73  4.9:1 on cards */
 
-    --primary: 199 89% 48%;
-    --primary-foreground: 222 47% 8%;
-    --primary-hover: 199 89% 55%;
-    --primary-glow: 199 89% 60%;
-    --primary-soft: 200 60% 16%;
-    --primary-strong: 199 90% 68%;
+    --brand: var(--amber);
+    --brand-hover: var(--amber-hover);
+    --brand-soft: 36.4 60.9% 18%;     /* #4a3412  amber 16% over night-3 */
+    --brand-fg: var(--night);
+    --amber-soft: 37.2 58.1% 16.9%;   /* #443112  amber 13% over night-3 */
 
-    --secondary: 222 28% 17%;
-    --secondary-foreground: 210 40% 96%;
-    --accent: 222 28% 17%;
-    --accent-foreground: 210 40% 96%;
+    --c-ink: 39.3 55.6% 80.6%;        /* #e9d6b2 */
+    --c-cyan: 197.3 80.5% 57.8%;      /* #3db8ea */
+    --c-magenta: 331.4 83.8% 63.7%;   /* #f0559f */
+    --c-yellow: 43 92.3% 54.3%;       /* #f6b91f */
+    --c-green: 156.2 58.9% 49.6%;     /* #34c98e */
 
-    --success: 152 55% 45%;
-    --success-foreground: 222 47% 8%;
-    --success-soft: 152 40% 14%;
-    --success-strong: 150 60% 62%;
+    --success-bg: 107.4 19.2% 19.4%;  /* #2c3b28 */
+    --success-fg: var(--c-green);
+    --warning-bg: 38.1 53.1% 19.2%;   /* #4b3817 */
+    --warning-fg: var(--c-yellow);
+    --danger-bg: 16.1 37.6% 21.4%;    /* #4b2d22 */
+    --danger-fg: 4.1 92.5% 68.8%;     /* #f97066 */
+    --danger-border: var(--danger-fg);
+    --info-bg: 174.5 10.9% 19.8%;     /* #2d3837 */
+    --info-fg: var(--c-cyan);
 
-    --warning: 38 92% 55%;
-    --warning-foreground: 222 47% 8%;
-    --warning-soft: 36 50% 14%;
-    --warning-strong: 40 95% 66%;
+    --phase-prepress-text: var(--c-cyan);
+    --phase-postpress-text: var(--c-yellow);
+    --phase-dispatch-text: var(--c-green);
 
-    --destructive: 0 70% 50%;
-    --destructive-foreground: 0 0% 100%;
-    --destructive-soft: 0 45% 16%;
-    --destructive-strong: 0 85% 72%;
+    /* Fills keep dark text on the brighter dark-mode inks */
+    --success-foreground: var(--night);
+    --info-foreground: var(--night);
+    --walkin-foreground: var(--night);
+    /* A solid danger button stays deep red; the light red is for text */
+    --destructive: 4.2 76.5% 40%;     /* #b42318 */
 
-    --info: 213 85% 60%;
-    --info-foreground: 222 47% 8%;
-    --info-soft: 215 45% 16%;
-    --info-strong: 213 95% 75%;
-
-    --walkin: 262 70% 68%;
-    --walkin-foreground: 222 47% 8%;
-
-    --cmyk-k: 220 20% 70%;
-
-    --border: 222 26% 19%;
-    --input: 222 24% 26%;
-    --ring: 199 89% 55%;
-
-    --gradient-secondary: linear-gradient(180deg, hsl(222 28% 18%) 0%, hsl(222 28% 15%) 100%);
-    --hover-overlay: 222 28% 15%;
-
-    --shadow-card: 0 1px 2px 0 hsl(0 0% 0% / 0.35);
-    --shadow-elevated: 0 4px 12px -2px hsl(0 0% 0% / 0.45), 0 2px 4px -2px hsl(0 0% 0% / 0.3);
-    --shadow-float: 0 16px 40px -8px hsl(0 0% 0% / 0.6), 0 2px 6px -2px hsl(0 0% 0% / 0.4);
-    --shadow-inner: inset 0 1px 2px hsl(0 0% 0% / 0.3);
-
-    --sidebar-background: 223 45% 5.5%;
-    --sidebar-foreground: 215 25% 80%;
-    --sidebar-muted: 218 16% 56%;
-    --sidebar-accent: 222 32% 13%;
-    --sidebar-border: 222 30% 13%;
-
-    --scrollbar: 222 20% 26%;
-    --scrollbar-hover: 222 20% 36%;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 40px 80px -30px rgba(0, 0, 0, 0.65), 0 8px 24px -8px rgba(0, 0, 0, 0.4);
+    --shadow-brand: 0 10px 24px -10px rgba(0, 0, 0, 0.4);
+    --shadow-inner: inset 0 1px 2px rgba(0, 0, 0, 0.3);
   }
 }
 
@@ -218,6 +324,14 @@
     font-feature-settings: "cv11", "ss01";
   }
 
+  /* Headings, page and card titles */
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.12;
+  }
+
   /* Figures line up in tables and KPI tiles */
   td, th, .num {
     font-variant-numeric: tabular-nums;
@@ -225,18 +339,19 @@
 
   /* One header style for every data table, hand-built or <TableHead> */
   thead th {
-    @apply whitespace-nowrap text-[11px] font-semibold uppercase tracking-wider text-muted-foreground;
+    @apply whitespace-nowrap font-mono text-[10.5px] font-semibold uppercase tracking-[0.08em] text-ink-3;
   }
 
   ::selection {
-    background: hsl(var(--primary) / 0.2);
+    background: hsl(var(--amber-soft));
+    color: hsl(var(--ink));
   }
 
   /* Keyboard focus is always visible. Components that draw their own ring
      (buttons, inputs) turn the outline off with focus-visible:outline-none. */
   :focus-visible {
-    outline: 2px solid hsl(var(--ring));
-    outline-offset: 2px;
+    outline: 2px solid hsl(var(--amber));
+    outline-offset: 3px;
   }
 
   /* Quiet, thin scrollbars for dense screens */
@@ -281,25 +396,48 @@
 
   /* Page headings are written as <h1 className="page-title"> across pages */
   .page-title {
-    @apply text-xl font-semibold tracking-tight text-foreground md:text-2xl;
+    @apply font-display text-xl font-semibold tracking-tight text-foreground md:text-2xl;
   }
 
   /* Kept for older components; they no longer scale or glow. */
   .hover-orange {
-    @apply transition-colors duration-150;
+    @apply transition-colors duration-200;
   }
   .hover-lift {
-    @apply transition-shadow duration-150 hover:shadow-elevated;
+    @apply transition-shadow duration-200 hover:shadow-elevated;
   }
   .hover-glow {
-    @apply transition-shadow duration-150 hover:shadow-elevated;
+    @apply transition-shadow duration-200 hover:shadow-elevated;
   }
 }
 
 @layer components {
   /* Small uppercase label above a group of content */
   .section-label {
-    @apply text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground;
+    @apply font-mono text-[10.5px] font-semibold uppercase tracking-[0.1em] text-ink-3;
+  }
+
+  /* The signature accent: a short process-ink bar before a label. Sparingly. */
+  .signature-bar {
+    @apply inline-flex items-center gap-2.5;
+  }
+  .signature-bar::before {
+    content: "";
+    width: 18px;
+    height: 2px;
+    flex: none;
+    border-radius: 2px;
+    background: var(--signature);
+  }
+
+  /* A loading placeholder: a slow paper-2 → paper-3 shimmer. The older
+     `animate-pulse bg-muted` placeholders get the same look. */
+  .skeleton,
+  .animate-pulse.bg-muted {
+    background-color: hsl(var(--paper-2));
+    background-image: linear-gradient(90deg, hsl(var(--paper-2)) 0%, hsl(var(--paper-3)) 50%, hsl(var(--paper-2)) 100%);
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.6s linear infinite;
   }
 
   /*
@@ -349,7 +487,7 @@
   /* A strip of the four process inks, used as a brand accent. The key (black)
      segment turns light on dark surfaces so it stays visible. */
   .cmyk-strip {
-    --cmyk-strip-k: 222 47% 11%;
+    --cmyk-strip-k: var(--c-ink);
     background: linear-gradient(
       90deg,
       hsl(var(--cmyk-c)) 0 25%,
@@ -359,9 +497,23 @@
     );
   }
   .dark .cmyk-strip,
-  [data-sidebar="sidebar"] .cmyk-strip {
-    --cmyk-strip-k: 220 15% 85%;
+  [data-sidebar="sidebar"] .cmyk-strip,
+  .on-night .cmyk-strip {
+    --cmyk-strip-k: var(--night-text);
   }
+}
+
+/* Outside @layer on purpose: Tailwind drops layered rules whose class names it
+   does not find in src/, and `lucide` is added by lucide-react. */
+
+/* Lucide icons at Carbon's 1.75 stroke (icons given their own width keep it) */
+svg.lucide[stroke-width="2"] {
+  stroke-width: 1.75;
+}
+
+@keyframes skeleton-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
 }
 
 @media (max-width: 639px) {
@@ -386,6 +538,33 @@
 }
 
 @media print {
+  /* Printed pages are white paper with dark ink: no paper tints, no shadows,
+     whatever theme is on screen. The brand colour stays for headings, IDs
+     and totals. */
+  :root,
+  .dark {
+    color-scheme: light;
+    --paper: 0 0% 100%;
+    --paper-2: 0 0% 100%;
+    --paper-3: 0 0% 100%;
+    --card: 0 0% 100%;
+    --ink: 35.5 55% 7.8%;
+    --ink-2: 34.1 25.5% 28.4%;
+    --ink-3: 34.9 19.3% 43.7%;
+    --line: 37.2 40.8% 86.1%;
+    --line-strong: 37.7 36.1% 76.7%;
+    --brand: 39.6 100% 22%;
+    --brand-fg: 37.9 100% 96.3%;
+    --brand-soft: 0 0% 100%;
+    --amber-soft: 0 0% 100%;
+  }
+  *,
+  *::before,
+  *::after {
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
   /* Printing a page (an estimate, a job ticket) prints just its content */
   .no-print,
   [data-app-chrome],

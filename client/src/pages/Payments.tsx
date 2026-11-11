@@ -109,7 +109,7 @@ export default function Payments() {
         const onAccount = p.unallocatedAmount || 0;
         return (
           <div className="leading-tight">
-            {label ? <span className="font-mono text-[13px]" title={(p.allocations || []).map((a) => `${a.invoiceNumber}: ${formatINR(a.amount)}`).join("\n")}>{label}</span> : <span className="text-muted-foreground">On account</span>}
+            {label ? <span className="font-mono text-[13px] font-semibold text-primary" title={(p.allocations || []).map((a) => `${a.invoiceNumber}: ${formatINR(a.amount)}`).join("\n")}>{label}</span> : <span className="text-muted-foreground">On account</span>}
             {label && onAccount > 0 && <div className="text-xs text-muted-foreground">{formatINR(onAccount)} on account</div>}
           </div>
         );

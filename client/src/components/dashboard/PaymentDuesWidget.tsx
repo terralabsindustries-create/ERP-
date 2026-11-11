@@ -186,12 +186,12 @@ export function PaymentDuesWidget({ onRefresh }: PaymentDuesWidgetProps) {
                   </div>
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1.5">
-                  <div className="num text-sm font-semibold">{formatINR(balance)}</div>
+                  <div className="num font-mono text-sm font-semibold">{formatINR(balance)}</div>
                   {balance !== due.totalAmount && due.totalAmount > 0 && (
                     <div className="num -mt-1 text-[11px] text-muted-foreground">of {formatINR(due.totalAmount)}</div>
                   )}
                   {canRecord && balance > 0 && (
-                    <Button size="xs" variant="outline" onClick={() => setPaying(due)}>
+                    <Button size="xs" variant="chip" onClick={() => setPaying(due)}>
                       <Check />
                       Mark paid
                     </Button>

@@ -24,10 +24,10 @@ interface Employee {
 type Status = "present" | "half-day" | "absent" | "leave" | "holiday" | "week-off";
 
 const STATUSES: { value: Status; short: string; label: string; on: string }[] = [
-  { value: "present", short: "P", label: "Present", on: "bg-success text-white border-success" },
-  { value: "half-day", short: "½", label: "Half day", on: "bg-info text-white border-info" },
-  { value: "absent", short: "A", label: "Absent", on: "bg-destructive text-white border-destructive" },
-  { value: "leave", short: "L", label: "On leave", on: "bg-warning text-white border-warning" },
+  { value: "present", short: "P", label: "Present", on: "bg-success text-success-foreground border-success" },
+  { value: "half-day", short: "½", label: "Half day", on: "bg-info text-info-foreground border-info" },
+  { value: "absent", short: "A", label: "Absent", on: "bg-destructive text-destructive-foreground border-destructive" },
+  { value: "leave", short: "L", label: "On leave", on: "bg-warning text-warning-foreground border-warning" },
   { value: "holiday", short: "H", label: "Holiday", on: "bg-secondary text-secondary-foreground border-border" },
   { value: "week-off", short: "W", label: "Week off", on: "bg-secondary text-secondary-foreground border-border" }
 ];

@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const PDFDocument = require('pdfkit');
 const { createTransporter } = require('../utils/mailer');
 const { AREA_UNITS, round2, round4, sizeLabel, areaLabel, splitGstAll, gstByRate } = require('../utils/billing');
@@ -14,7 +16,71 @@ const getPuppeteer = () => {
   return puppeteerPromise;
 };
 
+// Carbon's print colours: the light tokens of client/src/index.css (--print-*).
+// Printed pages stay white with ink text; the brand brown marks headings,
+// document numbers and totals. No paper tints and no shadows on paper.
+const PRINT = {
+  ink: '#1f1609',
+  ink2: '#5b4b36',
+  ink3: '#85735a',
+  brand: '#704a00',
+  line: '#d9c9ae',
+  hair: '#eadfcd',
+  success: '#0f7350',
+  danger: '#b42318'
+};
+
+// Carbon's typefaces for PDFs, bundled in src/assets/fonts (SIL OFL, see
+// OFL.txt): Inter for text, Sora for headings, JetBrains Mono for document
+// numbers and labels. If the files are missing the PDF falls back to the
+// built-in Helvetica / Courier rather than failing.
+const FONT_DIR = path.join(__dirname, '..', 'assets', 'fonts');
+const FONT_FILES = {
+  body: 'Inter-Regular.ttf',
+  bold: 'Inter-SemiBold.ttf',
+  display: 'Sora-SemiBold.ttf',
+  displayBold: 'Sora-Bold.ttf',
+  mono: 'JetBrainsMono-SemiBold.ttf'
+};
+const FALLBACK_FONTS = { body: 'Helvetica', bold: 'Helvetica-Bold', display: 'Helvetica-Bold', displayBold: 'Helvetica-Bold', mono: 'Courier-Bold' };
+let fontFilesPresent = null;
+const carbonFontsAvailable = () => {
+  if (fontFilesPresent === null) {
+    fontFilesPresent = Object.values(FONT_FILES).every((file) => fs.existsSync(path.join(FONT_DIR, file)));
+    if (!fontFilesPresent) console.warn('⚠️ Carbon PDF fonts not found in', FONT_DIR, '- using Helvetica');
+  }
+  return fontFilesPresent;
+};
+// Read once; every PDF after the first reuses the bytes.
+const fontBuffers = {};
+const fontBuffer = (file) => (fontBuffers[file] ||= fs.readFileSync(path.join(FONT_DIR, file)));
+
 class PDFService {
+  /** Registers Carbon's fonts on a PDFKit document and returns their names by role. */
+  static carbonFonts(doc) {
+    if (!carbonFontsAvailable()) return FALLBACK_FONTS;
+    const names = {};
+    for (const [role, file] of Object.entries(FONT_FILES)) {
+      names[role] = `Carbon-${role}`;
+      doc.registerFont(names[role], fontBuffer(file));
+    }
+    return names;
+  }
+
+  /** The same fonts as @font-face rules for the HTML (Puppeteer) documents. */
+  static carbonFontFaceCss() {
+    if (!carbonFontsAvailable()) return '';
+    const face = (family, weight, file) =>
+      `@font-face{font-family:'${family}';font-weight:${weight};font-style:normal;src:url(data:font/ttf;base64,${fontBuffer(file).toString('base64')}) format('truetype');}`;
+    return [
+      face('Inter', 400, FONT_FILES.body),
+      face('Inter', 600, FONT_FILES.bold),
+      face('Sora', 600, FONT_FILES.display),
+      face('Sora', 700, FONT_FILES.displayBold),
+      face('JetBrains Mono', 600, FONT_FILES.mono)
+    ].join('\n');
+  }
+
   // Invoices and quotations both render through the shared PDFKit layout
   // (renderSynxDocument), so the two documents stay visually identical and
   // neither depends on a working Chrome install.
@@ -84,33 +150,33 @@ class PDFService {
     const itemsRows = (bill.items || []).map((item, index) => {
       const ratePct = item.gstRate || 0;
       const gstCells = isInterState
-        ? `<td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${num(item.igstAmount)} <span style="color:#888;font-size:8pt;">(${ratePct}%)</span></td>`
-        : `<td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${num(item.sgstAmount)} <span style="color:#888;font-size:8pt;">(${(ratePct / 2)}%)</span></td>
-           <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${num(item.cgstAmount)} <span style="color:#888;font-size:8pt;">(${(ratePct / 2)}%)</span></td>`;
+        ? `<td style="padding:8px 6px;border-bottom:1px solid ${PRINT.hair};text-align:right;font-size:9.5pt;">${num(item.igstAmount)} <span style="color:${PRINT.ink3};font-size:8pt;">(${ratePct}%)</span></td>`
+        : `<td style="padding:8px 6px;border-bottom:1px solid ${PRINT.hair};text-align:right;font-size:9.5pt;">${num(item.sgstAmount)} <span style="color:${PRINT.ink3};font-size:8pt;">(${(ratePct / 2)}%)</span></td>
+           <td style="padding:8px 6px;border-bottom:1px solid ${PRINT.hair};text-align:right;font-size:9.5pt;">${num(item.cgstAmount)} <span style="color:${PRINT.ink3};font-size:8pt;">(${(ratePct / 2)}%)</span></td>`;
       return `
       <tr>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:center;color:#666;font-size:9pt;">${index + 1}</td>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;font-size:9.5pt;">
+        <td style="padding:8px 6px;border-bottom:1px solid ${PRINT.hair};text-align:center;color:${PRINT.ink2};font-size:9pt;">${index + 1}</td>
+        <td style="padding:8px 6px;border-bottom:1px solid ${PRINT.hair};font-size:9.5pt;">
           <div style="font-weight:600;">${item.description || ''}</div>
-          ${item.hsnCode ? `<div style="color:#888;font-size:8pt;margin-top:1px;">HSN/SAC: ${item.hsnCode}</div>` : ''}
+          ${item.hsnCode ? `<div style="color:${PRINT.ink3};font-size:8pt;margin-top:1px;">HSN/SAC: ${item.hsnCode}</div>` : ''}
         </td>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${num(item.rate)}</td>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${item.quantity || 0}</td>
+        <td style="padding:8px 6px;border-bottom:1px solid ${PRINT.hair};text-align:right;font-size:9.5pt;">${num(item.rate)}</td>
+        <td style="padding:8px 6px;border-bottom:1px solid ${PRINT.hair};text-align:right;font-size:9.5pt;">${item.quantity || 0}</td>
         ${gstCells}
-        <td style="padding:8px 6px;border-bottom:1px solid #eee;text-align:right;font-size:9.5pt;">${num(item.total)}</td>
+        <td style="padding:8px 6px;border-bottom:1px solid ${PRINT.hair};text-align:right;font-size:9.5pt;">${num(item.total)}</td>
       </tr>`;
     }).join('');
 
     const gstTotals = isInterState
-      ? `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>IGST Amount</span><span>INR ${num(bill.totalIgstAmount)}</span></div>`
-      : `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>SGST Amount</span><span>INR ${num(bill.totalSgstAmount)}</span></div>
-         <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>CGST Amount</span><span>INR ${num(bill.totalCgstAmount)}</span></div>`;
+      ? `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:${PRINT.ink2};"><span>IGST Amount</span><span>INR ${num(bill.totalIgstAmount)}</span></div>`
+      : `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:${PRINT.ink2};"><span>SGST Amount</span><span>INR ${num(bill.totalSgstAmount)}</span></div>
+         <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:${PRINT.ink2};"><span>CGST Amount</span><span>INR ${num(bill.totalCgstAmount)}</span></div>`;
 
     const paidRows = (bill.paidAmount || 0) > 0 ? `
-      <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#16a34a;">
+      <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:${PRINT.success};">
         <span>Amount Paid</span><span>INR ${num(bill.paidAmount)}</span>
       </div>
-      ${balanceDue > 0 ? `<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:10.5pt;font-weight:700;border-top:1px solid #ccc;margin-top:4px;color:#dc2626;">
+      ${balanceDue > 0 ? `<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:10.5pt;font-weight:700;border-top:1px solid ${PRINT.line};margin-top:4px;color:${PRINT.danger};">
         <span>Balance Due</span><span>INR ${num(balanceDue)}</span>
       </div>` : ''}` : '';
 
@@ -124,7 +190,10 @@ class PDFService {
   <title>Purchase Bill ${bill.billNumber}</title>
   <style>
     * { margin:0; padding:0; box-sizing:border-box; }
-    body { font-family: Arial, Helvetica, sans-serif; color:#333; background:white; font-size:10pt; line-height:1.5; }
+    ${this.carbonFontFaceCss()}
+    body { font-family: Inter, Arial, Helvetica, sans-serif; color:${PRINT.ink}; background:white; font-size:10pt; line-height:1.5; font-feature-settings:'tnum'; }
+    .display { font-family: Sora, Inter, Arial, sans-serif; letter-spacing:-0.02em; }
+    .id { font-family: 'JetBrains Mono', ui-monospace, monospace; font-weight:600; color:${PRINT.brand}; }
     .page { max-width:210mm; margin:0 auto; padding:14mm 18mm; }
   </style>
 </head>
@@ -135,29 +204,29 @@ class PDFService {
   <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:10px;">
     <tr>
       <td style="vertical-align:top;">
-        <div style="font-size:26pt;font-weight:900;color:#8b2fc9;letter-spacing:-1px;line-height:1;">${companyInfo.name || 'Company'}</div>
+        <div class="display" style="font-size:26pt;font-weight:700;color:${PRINT.ink};line-height:1;">${companyInfo.name || 'Company'}</div>
         <div style="margin-top:8px;">
           <div style="font-weight:700;font-size:10.5pt;">${(companyInfo.name || '').toUpperCase()}</div>
-          ${companyInfo.address ? `<div style="font-size:9pt;color:#555;margin-top:3px;">${addressLines}</div>` : ''}
-          ${companyInfo.email ? `<div style="font-size:9pt;color:#555;margin-top:2px;">Email: ${companyInfo.email}</div>` : ''}
-          ${companyInfo.phone ? `<div style="font-size:9pt;color:#555;margin-top:2px;">Mobile: ${companyPhone}</div>` : ''}
-          ${companyInfo.gstNumber ? `<div style="font-size:9pt;color:#555;margin-top:2px;">GSTIN: ${companyInfo.gstNumber}</div>` : ''}
+          ${companyInfo.address ? `<div style="font-size:9pt;color:${PRINT.ink2};margin-top:3px;">${addressLines}</div>` : ''}
+          ${companyInfo.email ? `<div style="font-size:9pt;color:${PRINT.ink2};margin-top:2px;">Email: ${companyInfo.email}</div>` : ''}
+          ${companyInfo.phone ? `<div style="font-size:9pt;color:${PRINT.ink2};margin-top:2px;">Mobile: ${companyPhone}</div>` : ''}
+          ${companyInfo.gstNumber ? `<div style="font-size:9pt;color:${PRINT.ink2};margin-top:2px;">GSTIN: ${companyInfo.gstNumber}</div>` : ''}
         </div>
       </td>
       <td style="vertical-align:top;text-align:right;">
-        <div style="font-size:24pt;font-weight:900;color:#222;letter-spacing:1px;line-height:1;">PURCHASE BILL</div>
-        <div style="font-size:9.5pt;color:#555;margin-top:8px;line-height:2.2;">
-          <div>Bill Number: <strong style="color:#222;">${bill.billNumber}</strong></div>
-          ${bill.vendorInvoiceNumber ? `<div>Invoice Number: <strong style="color:#222;">${bill.vendorInvoiceNumber}</strong></div>` : ''}
-          <div>Date: <strong style="color:#222;">${billDate}</strong></div>
-          <div>Due Date: <strong style="color:#222;">${dueDate}</strong></div>
+        <div class="display" style="font-size:24pt;font-weight:700;color:${PRINT.brand};line-height:1;">PURCHASE BILL</div>
+        <div style="font-size:9.5pt;color:${PRINT.ink2};margin-top:8px;line-height:2.2;">
+          <div>Bill Number: <strong class="id">${bill.billNumber}</strong></div>
+          ${bill.vendorInvoiceNumber ? `<div>Invoice Number: <strong style="color:${PRINT.ink};">${bill.vendorInvoiceNumber}</strong></div>` : ''}
+          <div>Date: <strong style="color:${PRINT.ink};">${billDate}</strong></div>
+          <div>Due Date: <strong style="color:${PRINT.ink};">${dueDate}</strong></div>
         </div>
-        ${isFullyPaid ? `<div style="display:inline-block;border:2px solid #16a34a;color:#16a34a;font-weight:700;padding:3px 12px;font-size:9pt;margin-top:8px;letter-spacing:0.5px;">FULLY PAID</div>` : ''}
+        ${isFullyPaid ? `<div style="display:inline-block;border:2px solid ${PRINT.success};color:${PRINT.success};font-weight:700;padding:3px 12px;font-size:9pt;margin-top:8px;letter-spacing:0.5px;">FULLY PAID</div>` : ''}
       </td>
     </tr>
   </table>
 
-  <hr style="border:none;border-top:1px solid #ccc;margin:10px 0 14px 0;">
+  <hr style="border:none;border-top:1px solid ${PRINT.line};margin:10px 0 14px 0;">
 
   <!-- VENDOR -->
   <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;">
@@ -165,9 +234,9 @@ class PDFService {
       <td style="vertical-align:top;">
         <div style="font-weight:700;font-size:10pt;margin-bottom:5px;">Vendor</div>
         <div style="font-weight:600;font-size:10pt;">${bill.vendorName || 'N/A'}</div>
-        ${bill.vendorGstNumber ? `<div style="font-size:9pt;color:#555;margin-top:2px;">${bill.vendorGstNumber}</div>` : ''}
-        ${vendorAddressLines ? `<div style="font-size:9pt;color:#555;margin-top:2px;">${vendorAddressLines}</div>` : ''}
-        ${bill.vendorState ? `<div style="font-size:9pt;color:#555;margin-top:2px;">${bill.vendorState}</div>` : ''}
+        ${bill.vendorGstNumber ? `<div style="font-size:9pt;color:${PRINT.ink2};margin-top:2px;">${bill.vendorGstNumber}</div>` : ''}
+        ${vendorAddressLines ? `<div style="font-size:9pt;color:${PRINT.ink2};margin-top:2px;">${vendorAddressLines}</div>` : ''}
+        ${bill.vendorState ? `<div style="font-size:9pt;color:${PRINT.ink2};margin-top:2px;">${bill.vendorState}</div>` : ''}
       </td>
     </tr>
   </table>
@@ -175,7 +244,7 @@ class PDFService {
   <!-- ITEMS TABLE -->
   <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:6px;">
     <thead>
-      <tr style="background:#f5f5f5;border-top:1px solid #ddd;border-bottom:1px solid #ddd;">
+      <tr style="border-top:1px solid ${PRINT.line};border-bottom:1px solid ${PRINT.ink};">
         <th style="padding:9px 6px;text-align:center;font-size:9pt;width:6%;font-weight:700;">Sno.</th>
         <th style="padding:9px 6px;text-align:left;font-size:9pt;font-weight:700;">Description</th>
         <th style="padding:9px 6px;text-align:right;font-size:9pt;width:13%;font-weight:700;">Rate</th>
@@ -194,30 +263,30 @@ class PDFService {
     <tr>
       <td style="vertical-align:top;"></td>
       <td style="vertical-align:top;text-align:right;white-space:nowrap;min-width:240px;">
-        <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:#555;"><span>Taxable</span><span>INR ${num(bill.taxableAmount)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:9.5pt;color:${PRINT.ink2};"><span>Taxable</span><span>INR ${num(bill.taxableAmount)}</span></div>
         ${gstTotals}
-        <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:11pt;font-weight:700;border-top:1px solid #ccc;margin-top:4px;"><span>Total Amount</span><span>INR ${num(bill.totalAmount)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:11pt;font-weight:700;border-top:1px dashed ${PRINT.line};margin-top:4px;color:${PRINT.brand};"><span>Total Amount</span><span>INR ${num(bill.totalAmount)}</span></div>
         ${paidRows}
       </td>
     </tr>
   </table>
 
   <!-- AMOUNT IN WORDS -->
-  <div style="border-top:1px solid #ddd;border-bottom:1px solid #ddd;padding:8px 0;font-size:9.5pt;margin:12px 0;">
+  <div style="border-top:1px solid ${PRINT.line};border-bottom:1px solid ${PRINT.line};padding:8px 0;font-size:9.5pt;margin:12px 0;">
     <strong>Total in Words:</strong> Indian Rupees ${amountInWords} Only
   </div>
 
   <!-- FOOTER -->
-  <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:18px;padding-top:14px;border-top:1px solid #ccc;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:18px;padding-top:14px;border-top:1px solid ${PRINT.line};">
     <tr>
       <td style="vertical-align:top;padding-right:30px;">
         ${bill.notes ? `<div style="font-weight:700;font-size:10pt;margin-bottom:6px;">Notes</div>
-          <div style="font-size:9pt;color:#555;line-height:1.8;">${bill.notes}</div>` : ''}
+          <div style="font-size:9pt;color:${PRINT.ink2};line-height:1.8;">${bill.notes}</div>` : ''}
       </td>
       <td style="vertical-align:top;text-align:right;min-width:210px;">
         <div style="font-weight:700;font-size:10pt;">For ${companyInfo.name || 'Company'}</div>
         <div style="height:55px;"></div>
-        <div style="font-size:9.5pt;color:#555;">Authorised Signatory</div>
+        <div style="font-size:9.5pt;color:${PRINT.ink2};">Authorised Signatory</div>
       </td>
     </tr>
   </table>
@@ -534,7 +603,7 @@ class PDFService {
         { label: 'Invoice Date', value: new Date(invoice.invoiceDate || Date.now()).toLocaleDateString('en-GB') },
         ...(invoice.dueDate ? [{ label: 'Due Date', value: new Date(invoice.dueDate).toLocaleDateString('en-GB') }] : [])
       ],
-      badge: total > 0 && paid >= total ? { text: 'FULLY PAID', color: '#2e7d32' } : null,
+      badge: total > 0 && paid >= total ? { text: 'FULLY PAID', color: PRINT.success } : null,
       company: companyInfo,
       customer: { name: custName, lines: custLines },
       billingLines: billing,
@@ -669,7 +738,10 @@ class PDFService {
     const right = pageW - M;
     const W = right - left;
     const bottom = pageH - contentBottom;
-    const C = { ink: '#111111', text: '#262626', muted: '#4d4d4d', rule: '#8c8c8c', hair: '#d6d6d6', fill: '#eeeeee' };
+    const C = { ink: PRINT.ink, text: PRINT.ink, muted: PRINT.ink2, rule: PRINT.ink3, hair: PRINT.line, brand: PRINT.brand };
+    const F = this.carbonFonts(doc);
+    // Figures line up in columns (Inter's tabular numbers); the built-in fonts have none to ask for.
+    const TNUM = F === FALLBACK_FONTS ? undefined : ['tnum'];
     const LINE_GAP = 1.5;
     const docName = d.type.charAt(0) + d.type.slice(1).toLowerCase();
 
@@ -678,21 +750,25 @@ class PDFService {
     // bottom margin it cannot.
     doc.page.margins.bottom = 0;
 
-    const style = (size, bold, color) => doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(size).fillColor(color || C.text);
-    const measure = (text, size, width, bold = false) => {
+    // face: 'display' (Sora) for headings, 'mono' (JetBrains Mono) for document
+    // numbers and labels; text is Inter.
+    const fontOf = (bold, face) =>
+      face === 'display' ? (bold ? F.displayBold : F.display) : face === 'mono' ? F.mono : bold ? F.bold : F.body;
+    const style = (size, bold, color, face) => doc.font(fontOf(bold, face)).fontSize(size).fillColor(color || C.text);
+    const measure = (text, size, width, bold = false, face, features) => {
       if (text == null || text === '') return 0;
-      style(size, bold);
-      return doc.heightOfString(String(text), { width, lineGap: LINE_GAP });
+      style(size, bold, undefined, face);
+      return doc.heightOfString(String(text), { width, lineGap: LINE_GAP, features });
     };
     // Draws text and returns the y just under it.
     const write = (text, x, y, size, o = {}) => {
       if (text == null || text === '') return y;
-      style(size, o.bold, o.color);
-      doc.text(String(text), x, y, { width: o.width, align: o.align || 'left', lineGap: LINE_GAP, characterSpacing: o.spacing || 0, link: o.link || null, underline: !!o.link });
-      return y + measure(text, size, o.width, o.bold);
+      style(size, o.bold, o.color, o.face);
+      doc.text(String(text), x, y, { width: o.width, align: o.align || 'left', lineGap: LINE_GAP, characterSpacing: o.spacing || 0, link: o.link || null, underline: !!o.link, features: o.features });
+      return y + measure(text, size, o.width, o.bold, o.face, o.features);
     };
     const label = (text, x, y, width, align = 'left') =>
-      write(String(text).toUpperCase(), x, y, S.label, { bold: true, color: C.muted, width, align, spacing: 0.4 });
+      write(String(text).toUpperCase(), x, y, S.label, { bold: true, face: 'mono', color: C.muted, width, align, spacing: 0.2 });
     const rule = (y, color = C.hair, weight = 0.75) => {
       doc.moveTo(left, y).lineTo(right, y).lineWidth(weight).strokeColor(color).stroke();
     };
@@ -714,13 +790,13 @@ class PDFService {
     // ---------- HEADER: logo and business (left), the document (right) ----------
     const headR = 160;
     const headL = W - headR - 16;
-    write(d.type, right - headR, y - 3, S.title, { bold: true, color: C.ink, width: headR, align: 'right' });
+    write(d.type, right - headR, y - 3, S.title, { bold: true, face: 'display', color: C.brand, width: headR, align: 'right' });
     let ry = y + 32;
     if (d.type === 'QUOTATION') {
-      for (const row of [{ label: d.numberLabel || 'Number', value: d.number }, ...(d.meta || [])]) {
+      [{ label: d.numberLabel || 'Number', value: d.number, id: true }, ...(d.meta || [])].forEach((row) => {
         write(row.label, right - 210, ry, S.detail, { width: 86, align: 'right', color: C.muted });
-        ry = write(row.value, right - 116, ry, S.meta, { width: 116, align: 'right', bold: true, color: C.ink }) + 2;
-      }
+        ry = write(row.value, right - 116, ry, S.meta, { width: 116, align: 'right', bold: true, ...(row.id ? { face: 'mono', color: C.brand } : { color: C.ink }) }) + 2;
+      });
     }
     if (d.badge) {
       const bw = 104;
@@ -747,7 +823,7 @@ class PDFService {
       }
     }
     const textW = left + headL - textX;
-    let ly = write((d.company.name || 'Company').toUpperCase(), textX, y, S.company, { bold: true, color: C.ink, width: textW }) + 2;
+    let ly = write((d.company.name || 'Company').toUpperCase(), textX, y, S.company, { bold: true, face: 'display', color: C.ink, width: textW }) + 2;
     // Phone and email share a line when it fits; so do GSTIN and PAN.
     const pair = (a, b) => {
       if (!a || !b) return [a || b];
@@ -809,10 +885,11 @@ class PDFService {
 
       let my = y;
       const metaLabelW = 96;
-      for (const row of [{ label: d.numberLabel || 'Number', value: d.number }, ...(d.meta || [])]) {
-        const h = Math.max(measure(row.label, S.detail, metaLabelW), measure(row.value, S.meta, metaW - metaLabelW, true));
+      for (const row of [{ label: d.numberLabel || 'Number', value: d.number, id: true }, ...(d.meta || [])]) {
+        const face = row.id ? 'mono' : undefined;
+        const h = Math.max(measure(row.label, S.detail, metaLabelW), measure(row.value, S.meta, metaW - metaLabelW, true, face));
         write(row.label, metaX, my + 0.5, S.detail, { color: C.muted, width: metaLabelW });
-        write(row.value, metaX + metaLabelW, my, S.meta, { bold: true, color: C.ink, width: metaW - metaLabelW, align: 'right' });
+        write(row.value, metaX + metaLabelW, my, S.meta, { bold: true, face, color: row.id ? C.brand : C.ink, width: metaW - metaLabelW, align: 'right' });
         my += h + 4;
       }
       y = Math.max(py, my) + 14;
@@ -850,20 +927,24 @@ class PDFService {
         ...cols.map((c) => {
           const [main, sub] = cells[c.key];
           const w = c.w - PAD * 2;
-          return measure(main || ' ', S.cell, w) + (sub ? 1.5 + measure(sub, S.sub, w) : 0);
+          const features = c.align === 'right' ? TNUM : undefined;
+          return measure(main || ' ', S.cell, w, false, undefined, features) + (sub ? 1.5 + measure(sub, S.sub, w, false, undefined, features) : 0);
         })
       ) + ROW_PAD * 2;
+    // The heading row is ruled above and below rather than shaded: no tint on paper.
     const tableHead = () => {
-      doc.rect(left, y, W, TH_H).fill(C.fill);
+      rule(y, C.hair, 0.75);
       for (const c of cols) write(c.head, c.x + PAD, y + 6.5, S.th, { bold: true, color: C.ink, width: c.w - PAD * 2, align: c.align });
       y += TH_H;
+      rule(y, C.ink, 0.9);
     };
     const drawRow = (cells, h) => {
       for (const c of cols) {
         const [main, sub] = cells[c.key];
         const w = c.w - PAD * 2;
-        const under = write(main, c.x + PAD, y + ROW_PAD, S.cell, { width: w, align: c.align, color: C.ink });
-        if (sub) write(sub, c.x + PAD, under + 1.5, S.sub, { width: w, align: c.align, color: C.muted });
+        const features = c.align === 'right' ? TNUM : undefined;
+        const under = write(main, c.x + PAD, y + ROW_PAD, S.cell, { width: w, align: c.align, color: C.ink, features });
+        if (sub) write(sub, c.x + PAD, under + 1.5, S.sub, { width: w, align: c.align, color: C.muted, features });
       }
       y += h;
       rule(y, C.hair, 0.6);
@@ -950,15 +1031,16 @@ class PDFService {
     let sy = blockTop;
     for (const s of d.summary) {
       if (s.bold) {
+        // The total: a dashed rule above it and the figure in the brand colour
         sy += 2;
-        doc.rect(sumX, sy, sumW, TOTAL_ROW).fill(C.fill);
-        write(s.label, sumX + 8, sy + 6.5, S.total, { bold: true, color: C.ink, width: 70 });
-        write(s.value, sumX + 78, sy + 6.5, S.total, { bold: true, color: C.ink, width: sumW - 86, align: 'right' });
+        doc.save().moveTo(sumX, sy).lineTo(right, sy).lineWidth(0.9).dash(3, { space: 2 }).strokeColor(PRINT.line).stroke().restore();
+        write(s.label, sumX + 8, sy + 6.5, S.total, { bold: true, color: C.brand, width: 70 });
+        write(s.value, sumX + 78, sy + 6.5, S.total, { bold: true, color: C.brand, width: sumW - 86, align: 'right', features: TNUM });
         sy += TOTAL_ROW + 2;
       } else {
         const color = s.strong ? C.ink : C.text;
         write(s.label, sumX + 8, sy, S.sum, { bold: !!s.strong, color, width: sumW * 0.5 - 8 });
-        write(s.value, sumX + sumW * 0.5, sy, S.sum, { bold: !!s.strong, color, width: sumW * 0.5 - 8, align: 'right' });
+        write(s.value, sumX + sumW * 0.5, sy, S.sum, { bold: !!s.strong, color, width: sumW * 0.5 - 8, align: 'right', features: TNUM });
         sy += SUM_ROW;
       }
     }
@@ -982,7 +1064,7 @@ class PDFService {
         qy = label('UPI ID', payX, qy, payW);
         qy = write(upiText, payX, qy, upiSize, { bold: true, color: C.ink, width: upiW });
       }
-      if (d.paymentLink) qy = write(d.paymentLink, payX, qy + 2, 9, { color: '#1d4ed8', width: payW, link: d.paymentLink });
+      if (d.paymentLink) qy = write(d.paymentLink, payX, qy + 2, 9, { color: C.brand, width: payW, link: d.paymentLink });
     }
 
     // Left: the amount in words, where to pay, and the terms.

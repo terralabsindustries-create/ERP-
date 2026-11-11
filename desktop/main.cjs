@@ -167,7 +167,7 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 640,
     show: false,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#fbf7f0', // Carbon paper (--paper in client/src/index.css), so the first frame matches the app
     title: 'Carbon',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),

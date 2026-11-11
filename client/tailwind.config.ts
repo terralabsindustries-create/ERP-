@@ -112,9 +112,73 @@ export default {
 					'accent-foreground': 'hsl(var(--sidebar-accent-foreground))',
 					border: 'hsl(var(--sidebar-border))',
 					ring: 'hsl(var(--sidebar-ring))'
+				},
+				chart: {
+					1: 'hsl(var(--chart-1))',
+					2: 'hsl(var(--chart-2))',
+					3: 'hsl(var(--chart-3))',
+					4: 'hsl(var(--chart-4))',
+					5: 'hsl(var(--chart-5))'
+				},
+				// Carbon tokens by their own names (src/index.css). They follow the theme.
+				paper: {
+					DEFAULT: 'hsl(var(--paper))',
+					2: 'hsl(var(--paper-2))',
+					3: 'hsl(var(--paper-3))'
+				},
+				ink: {
+					DEFAULT: 'hsl(var(--ink))',
+					2: 'hsl(var(--ink-2))',
+					3: 'hsl(var(--ink-3))'
+				},
+				line: {
+					DEFAULT: 'hsl(var(--line))',
+					strong: 'hsl(var(--line-strong))'
+				},
+				brand: {
+					DEFAULT: 'hsl(var(--brand))',
+					hover: 'hsl(var(--brand-hover))',
+					soft: 'hsl(var(--brand-soft))',
+					fg: 'hsl(var(--brand-fg))',
+					cream: 'hsl(var(--brand-cream))'
+				},
+				amber: {
+					DEFAULT: 'hsl(var(--amber))',
+					hover: 'hsl(var(--amber-hover))',
+					soft: 'hsl(var(--amber-soft))'
+				},
+				peach: 'hsl(var(--peach))',
+				lime: 'hsl(var(--lime))',
+				lilac: 'hsl(var(--lilac))',
+				phase: {
+					sales: { DEFAULT: 'hsl(var(--phase-sales))', text: 'hsl(var(--phase-sales-text))' },
+					prepress: { DEFAULT: 'hsl(var(--phase-prepress))', text: 'hsl(var(--phase-prepress-text))' },
+					press: { DEFAULT: 'hsl(var(--phase-press))', text: 'hsl(var(--phase-press-text))' },
+					postpress: { DEFAULT: 'hsl(var(--phase-postpress))', text: 'hsl(var(--phase-postpress-text))' },
+					dispatch: { DEFAULT: 'hsl(var(--phase-dispatch))', text: 'hsl(var(--phase-dispatch-text))' }
+				},
+				danger: {
+					DEFAULT: 'hsl(var(--destructive))',
+					soft: 'hsl(var(--danger-bg))',
+					strong: 'hsl(var(--danger-fg))',
+					border: 'hsl(var(--danger-border))'
+				},
+				night: {
+					DEFAULT: 'hsl(var(--night))',
+					2: 'hsl(var(--night-2))',
+					3: 'hsl(var(--night-3))',
+					tint: 'hsl(var(--night-tint))',
+					line: 'var(--night-line)',
+					text: 'hsl(var(--night-text))',
+					muted: 'hsl(var(--night-muted))'
+				},
+				whatsapp: {
+					DEFAULT: 'hsl(var(--whatsapp))',
+					strong: 'hsl(var(--whatsapp-strong))'
 				}
 			},
 			borderRadius: {
+				// --radius is 10px: lg 10px (buttons, inputs), xl 14px (cards, = --radius-md)
 				xl: 'calc(var(--radius) + 4px)',
 				lg: 'var(--radius)',
 				md: 'calc(var(--radius) - 2px)',
@@ -204,19 +268,31 @@ export default {
 				'gradient-card': 'var(--gradient-card)',
 				'gradient-glass': 'var(--gradient-glass)',
 				'gradient-hero': 'var(--gradient-hero)',
-				'shimmer-gradient': 'linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent)'
+				'shimmer-gradient': 'linear-gradient(90deg, transparent, hsl(var(--card) / 0.2), transparent)',
+				'signature': 'var(--signature)'
 			},
+			// Warm brown shadows only; Tailwind's grey defaults are replaced too.
 			boxShadow: {
+				sm: 'var(--shadow-sm)',
+				DEFAULT: 'var(--shadow)',
+				md: 'var(--shadow)',
+				lg: 'var(--shadow-lg)',
+				xl: 'var(--shadow-lg)',
 				'card': 'var(--shadow-card)',
+				'modal': 'var(--shadow-modal)',
+				'brand': 'var(--shadow-brand)',
+				'rush': 'var(--shadow-rush)',
+				'ring': 'var(--focus-ring)',
 				'elevated': 'var(--shadow-elevated)',
 				'glow': 'var(--shadow-glow)',
 				'float': 'var(--shadow-float)',
 				'inner': 'var(--shadow-inner)'
 			},
 			fontFamily: {
-				'sans': ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
-				'display': ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
-				'mono': ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace']
+				// Bundled with @fontsource (src/fonts.ts), so the desktop app works offline
+				'sans': ['var(--font-body)'],
+				'display': ['var(--font-display)'],
+				'mono': ['var(--font-mono)']
 			}
 		}
 	},

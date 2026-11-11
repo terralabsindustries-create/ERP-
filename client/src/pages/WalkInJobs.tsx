@@ -274,7 +274,7 @@ export default function WalkInJobs() {
     {
       id: "job",
       header: "Job",
-      cell: (j) => <Stack top={<span className="font-mono text-[13px]">{j.jobNumber}</span>} bottom={JOB_TYPE_LABEL[j.jobType]} />,
+      cell: (j) => <Stack top={<span className="font-mono text-[13px] font-semibold text-primary">{j.jobNumber}</span>} bottom={JOB_TYPE_LABEL[j.jobType]} />,
       sortValue: (j) => j.jobNumber,
       className: "w-[150px]"
     },

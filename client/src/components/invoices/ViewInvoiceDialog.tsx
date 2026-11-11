@@ -387,7 +387,7 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice: listedInvoice, 
   const getPaymentStatusConfig = (status: string) => {
     const configs = {
       "pending": { variant: "secondary" as const, label: "Unpaid" },
-      "partial": { variant: "default" as const, label: "Partially Paid" },
+      "partial": { variant: "warning" as const, label: "Partially Paid" },
       "paid": { variant: "success" as const, label: "Paid" },
       "overdue": { variant: "destructive" as const, label: "Overdue" },
     };
@@ -410,7 +410,7 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice: listedInvoice, 
               <div>
                 <DialogTitle className="text-2xl flex items-center gap-2">
                   <FileText className="h-6 w-6" />
-                  {invoice.invoiceNumber}
+                  <span className="font-mono font-semibold tracking-normal text-primary">{invoice.invoiceNumber}</span>
                 </DialogTitle>
                 <DialogDescription>
                   Invoice details and information
@@ -630,9 +630,9 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice: listedInvoice, 
                     </>
                   );
                 })()}
-                <div className="border-t pt-2 flex justify-between font-semibold">
+                <div className="border-t border-dashed border-input pt-2 flex justify-between font-semibold">
                   <span>Invoice Total{invoice.totalGstAmount > 0 ? " (incl. GST)" : ""}:</span>
-                  <span className="text-lg">{formatINR(invoice.totalAmount || 0)}</span>
+                  <span className="font-mono text-lg text-primary">{formatINR(invoice.totalAmount || 0)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Amount Received:</span>

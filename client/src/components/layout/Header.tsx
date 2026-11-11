@@ -155,7 +155,7 @@ export function Header() {
   return (
     <header
       data-app-chrome
-      className="sticky top-0 z-40 w-full shrink-0 border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/85"
+      className="sticky top-0 z-40 w-full shrink-0 border-b border-border bg-background/[0.86] backdrop-blur-[14px] backdrop-saturate-[1.4]"
     >
       <div className="flex h-14 items-center gap-2 px-3 sm:gap-3 sm:px-4 md:px-6">
         <SidebarTrigger className="h-9 w-9 shrink-0 text-muted-foreground hover:text-foreground" />
@@ -175,13 +175,13 @@ export function Header() {
         <div className="flex min-w-0 flex-1 justify-end md:justify-center">
           {canSearch && (
             <div className="relative w-full max-w-md" ref={searchContainerRef} role="search">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-3" />
             <Input
               ref={searchInputRef}
               type="search"
               placeholder="Search your records…"
               aria-label="Search accessible customers, jobs and invoices"
-              className="h-9 w-full border-transparent bg-muted/80 pl-9 pr-3 shadow-none hover:border-border focus-visible:bg-card sm:pr-12 dark:bg-muted/60"
+              className="h-9 w-full border-border bg-card pl-9 pr-3 hover:border-input sm:pr-12"
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);
@@ -190,7 +190,7 @@ export function Header() {
               onFocus={() => searchQuery.trim() && setSearchOpen(true)}
               onKeyDown={handleSearchKeyDown}
             />
-            <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded border border-border bg-card px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:block" aria-hidden>
+            <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:block" aria-hidden>
               ⌘K
             </kbd>
 
@@ -300,10 +300,10 @@ export function Header() {
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="ml-0.5 flex items-center gap-2 rounded-md p-0.5 text-left transition-colors hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-ring xl:py-1 xl:pl-1 xl:pr-2"
+                className="ml-0.5 flex items-center gap-2 rounded-lg p-0.5 text-left transition-colors duration-200 hover:bg-primary/[0.07] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring xl:py-1 xl:pl-1 xl:pr-2"
                 aria-label="Account menu"
               >
-                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-paper-3 text-xs font-bold text-ink-2">
                   {initials}
                 </span>
                 <span className="hidden min-w-0 leading-tight xl:block">
