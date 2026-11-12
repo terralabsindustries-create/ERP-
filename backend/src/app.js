@@ -47,6 +47,8 @@ const corsOrigins = [...new Set([
   // The Electron desktop app serves the same bundle over its own scheme, so
   // its requests arrive from this fixed origin (see desktop/main.cjs).
   'app://serpy',
+  // Explicitly requested: local web client (localhost:8080) against this API.
+  'http://localhost:8080',
   ...(process.env.NODE_ENV === 'production' ? [] : LOCAL_DEV_ORIGINS)
 ])];
 app.set('corsOrigins', corsOrigins);
