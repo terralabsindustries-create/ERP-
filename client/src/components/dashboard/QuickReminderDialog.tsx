@@ -1,7 +1,7 @@
 import apiClient from "@/lib/apiClient";
 import { useState, useEffect } from "react";
 import { format } from "date-fns";
-import { Calendar, Clock, Bell } from "lucide-react";
+import { Bell, ChevronDown } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -164,22 +164,22 @@ export function QuickReminderDialog({ onReminderCreated }: QuickReminderDialogPr
           {/* Staff Assignment */}
           <div className="space-y-1.5">
             <Label htmlFor="assignedTo">Assign To Staff</Label>
-            <Select
-              value={formData.assignedTo}
-              onValueChange={(value) => setFormData(prev => ({ ...prev, assignedTo: value }))}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Select staff member (optional)" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">No assignment</SelectItem>
+            <div className="relative">
+              <select
+                id="assignedTo"
+                className="block h-9 w-full appearance-none rounded-lg border border-input bg-background px-3 pr-9 py-2 text-sm text-foreground focus:outline-none focus:border-primary focus:bg-card focus:shadow-ring"
+                value={formData.assignedTo}
+                onChange={(event) => setFormData(prev => ({ ...prev, assignedTo: event.target.value }))}
+              >
+                <option value="">No assignment</option>
                 {staffList.map((staff: any) => (
-                  <SelectItem key={staff.id} value={staff.id}>
+                  <option key={staff.id} value={staff.id}>
                     {staff.full_name}
-                  </SelectItem>
+                  </option>
                 ))}
-              </SelectContent>
-            </Select>
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+            </div>
           </div>
 
           <div className="space-y-1.5">

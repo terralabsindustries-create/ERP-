@@ -34,6 +34,8 @@ interface AuthContextType {
   signOut: () => Promise<void>;
   hasPermission: (permission: string) => boolean; // Check if user has a specific permission
   refreshUser: () => Promise<User | undefined>;
+  /** Drop the local session without calling the server (the login no longer exists). */
+  forgetSession: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -196,6 +198,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const forgetSession = () => {
+    signedInRef.current = false;
+    apiClient.clearToken();
+    setUser(null);
+    setSession(null);
+  };
+
   const value = {
     user,
     session,
@@ -205,6 +214,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     signOut,
     hasPermission,
     refreshUser,
+    forgetSession,
   };
 
   return (

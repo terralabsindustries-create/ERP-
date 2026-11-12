@@ -1338,6 +1338,11 @@ class ApiClient {
     return this.delete(`/users/${id}`);
   }
 
+  /** The owner deletes their own account, closing the whole business. */
+  async deleteOwnAccount(password: string) {
+    return this.post<unknown>('/users/me/delete-account', { password, confirmText: 'DELETE' });
+  }
+
   async changeUserPassword(id: string, currentPassword: string, newPassword: string) {
     return this.put(`/users/${id}/password`, { currentPassword, newPassword });
   }

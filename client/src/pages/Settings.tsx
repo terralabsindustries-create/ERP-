@@ -18,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import apiClient from "@/lib/apiClient";
 import { compactSettingsImage } from "@/lib/compactSettingsImage";
 import { useToast } from "@/hooks/use-toast";
+import { DeleteAccountCard } from "@/components/settings/DeleteAccountCard";
 
 const Settings = () => {
   const [settings, setSettings] = useState<any>(null);
@@ -598,6 +599,8 @@ const Settings = () => {
               </div>
             </CardContent>
           </Card>
+
+          <DeleteAccountCard />
         </TabsContent>
 
       </Tabs>

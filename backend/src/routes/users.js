@@ -13,6 +13,7 @@ const { canViewAllStaffData } = require('../utils/dataScopeHelper');
 const { userCan, requirePermission } = require('../middleware/requirePermission');
 const { orgScope } = require('../utils/accessScope');
 const { preserveAccountHistory } = require('../utils/accountScope');
+const { closeBusiness } = require('../utils/closeBusiness');
 const { VIEW_ALL_ROLES, manageableBy, accessFromRole, grantProblem } = require('../utils/userAccess');
 const { setUserTeams, teamsByUser, teamsInOrg } = require('../utils/teamMembership');
 const {
@@ -846,16 +847,55 @@ router.put('/:id/password', protect, [
   }
 });
 
+// @route   POST /api/users/me/delete-account
+// @desc    The owner deletes their own account, closing the whole business:
+//          every login, record and uploaded file in it is removed for good.
+//          Nobody else can delete their own login (the owner removes it).
+// @access  Private (the admin only)
+router.post('/me/delete-account', protect, [
+  body('password').notEmpty().withMessage('Enter your password to confirm'),
+  body('confirmText').equals('DELETE').withMessage('Type DELETE to confirm')
+], validate, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Only the business owner can delete this account. Ask them to remove your login.'
+      });
+    }
+
+    const owner = await User.findById(req.user._id).select('+password');
+    if (!owner?.password || !(await owner.comparePassword(req.body.password))) {
+      return res.status(400).json({ status: 'error', message: 'That password is not right.' });
+    }
+
+    const removed = await closeBusiness(owner);
+    console.log(`Business closed by owner ${owner.email} (${owner.dataScope || owner._id}):`, removed);
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Your account and business data have been deleted.'
+    });
+  } catch (error) {
+    console.error('Delete own account error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error while deleting your account'
+    });
+  }
+});
+
 // @route   DELETE /api/users/:id
 // @desc    Delete user (admin only)
 // @access  Private
 router.delete('/:id', protect, authorize('admin'), async (req, res) => {
   try {
-    // Prevent admin from deleting themselves
+    // The owner deletes their own account from Settings (which closes the
+    // business and asks for their password), not from here.
     if (req.user._id.toString() === req.params.id) {
       return res.status(400).json({
         status: 'error',
-        message: 'Cannot delete your own account'
+        message: 'Delete your own account from Settings → Account.'
       });
     }
 
