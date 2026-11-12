@@ -27,6 +27,19 @@ const { sendWhatsAppMessage, buildTemplateVariables } = require('../utils/metaWh
 
 const router = express.Router();
 
+// A successful delivery issues a draft. Keep the delivery response successful
+// even if this follow-up write fails: the message has already left the system.
+async function markIssuedAfterDelivery(invoice) {
+  if (invoice.status !== 'draft') return true;
+  try {
+    const result = await Invoice.updateOne({ _id: invoice._id, status: 'draft' }, { $set: { status: 'sent' } });
+    return result.modifiedCount === 1;
+  } catch (error) {
+    console.error('Invoice delivered but status could not be updated:', error);
+    return false;
+  }
+}
+
 const INVOICE_CHANGED = {
   status: 'error',
   message: 'This invoice changed while you were working on it (a payment may have been recorded). Reload it and try again.',
@@ -915,6 +928,48 @@ router.patch('/:id/cancel', protect, async (req, res) => {
   }
 });
 
+// @route   PATCH /api/invoices/:id/issue
+// @desc    Move a saved draft into issued invoices and receivables
+// @access  Private (Invoicing: Create & Edit)
+router.patch('/:id/issue', protect, requirePermission('Invoicing: Create & Edit'), async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(404).json({ status: 'error', message: 'Invoice not found' });
+    }
+    const scope = { _id: req.params.id, ...staffScopeQuery(req.user), ...noGstVisibility(req.user) };
+    const invoice = await Invoice.findOneAndUpdate(
+      { ...scope, status: 'draft' },
+      { $set: { status: 'sent' } },
+      { new: true, runValidators: true }
+    );
+    if (!invoice) {
+      const existing = await Invoice.findOne(scope).select('status');
+      return res.status(existing ? 409 : 404).json({
+        status: 'error',
+        message: existing ? 'Only a draft invoice can be issued.' : 'Invoice not found'
+      });
+    }
+
+    ActivityLog.logActivity({
+      action: 'Invoice Issued',
+      description: `Invoice ${invoice.invoiceNumber} was issued`,
+      entityType: 'invoice',
+      entityId: invoice._id,
+      entityName: invoice.invoiceNumber,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (issue invoice) failed:', err.message));
+
+    res.json({ status: 'success', message: 'Invoice issued', data: { invoice } });
+  } catch (error) {
+    console.error('Issue invoice error:', error);
+    res.status(500).json({ status: 'error', message: 'Could not issue invoice' });
+  }
+});
+
 // @route   PATCH /api/invoices/:id/payment-status
 // @desc    Balance correction: set the amount recorded straight on the invoice
 //          (money received before Carbon, or never entered as a payment):
@@ -1140,6 +1195,7 @@ router.post('/:id/send-email', protect, requirePermission('Invoicing: Send Email
     console.log('📧 Preparing to send invoice email...');
     const invoiceName = `Invoice_${invoice.invoiceNumber}`;
     await PDFService.sendInvoiceEmail(pdfBuffer, email, invoiceName, message);
+    const issueStatusUpdated = await markIssuedAfterDelivery(invoice);
 
     ActivityLog.logActivity({
       action: 'Invoice Emailed',
@@ -1161,7 +1217,8 @@ router.post('/:id/send-email', protect, requirePermission('Invoicing: Send Email
       data: {
         invoiceNumber: invoice.invoiceNumber,
         recipientEmail: email,
-        sentAt: new Date()
+        sentAt: new Date(),
+        issueStatusUpdated
       }
     });
 
@@ -1282,6 +1339,8 @@ router.post('/:id/send-whatsapp', protect, requirePermission('WhatsApp: Send Mes
       });
     }
 
+    const issueStatusUpdated = await markIssuedAfterDelivery(invoice);
+
     ActivityLog.logActivity({
       action: 'Invoice Sent via WhatsApp',
       description: `Invoice ${invoice.invoiceNumber} was sent via WhatsApp to ${phone}`,
@@ -1303,7 +1362,8 @@ router.post('/:id/send-whatsapp', protect, requirePermission('WhatsApp: Send Mes
         invoiceNumber: invoice.invoiceNumber,
         recipientPhone: phone,
         messageId: whatsappResult.messageId,
-        sentAt: new Date()
+        sentAt: new Date(),
+        issueStatusUpdated
       }
     });
 

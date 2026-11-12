@@ -12,7 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Eye, EyeOff, AlertCircle, UserCheck, Calculator, SquareKanban, Layers, FileText } from "lucide-react";
+import { Eye, EyeOff, AlertCircle, UserCheck } from "lucide-react";
 import { BrandLogo } from "@/components/brand/BrandMark";
 import { useAuth } from "@/contexts/AuthContext";
 import { OTPVerification } from "@/components/auth/OTPVerification";
@@ -155,7 +155,7 @@ export default function Auth() {
   // when the field is in error.
   const signUpInputClass = (field: string, extra = "") =>
     [
-      "h-10 bg-card",
+      "h-11 bg-card",
       extra,
       fieldErrors[field] ? "border-destructive focus-visible:border-destructive focus-visible:ring-destructive/15" : "",
     ].join(" ");
@@ -194,75 +194,42 @@ export default function Auth() {
   }
 
   const labelClass = "text-[13px] font-medium text-foreground";
-  const inputClass = "h-10 bg-card";
+  const inputClass = "h-11 bg-card";
   const eyeButtonClass =
     "absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 p-0 text-muted-foreground hover:text-foreground";
 
   return (
-    <div className="min-h-screen grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] bg-background">
+    <div className="min-h-screen grid lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] bg-card">
       {/* Brand panel */}
-      <aside className="on-night relative hidden overflow-hidden bg-night text-night-text lg:flex lg:flex-col">
-        {/* crop-mark grid, like the corner of a press sheet */}
-        <svg className="pointer-events-none absolute inset-0 h-full w-full opacity-[0.07]" aria-hidden>
-          <defs>
-            <pattern id="crop" width="96" height="96" patternUnits="userSpaceOnUse">
-              <path d="M0 12 H8 M12 0 V8 M96 84 H88 M84 96 V88" stroke="currentColor" strokeWidth="1" />
-              <circle cx="48" cy="48" r="6" fill="none" stroke="currentColor" strokeWidth="1" />
-              <path d="M48 38 V58 M38 48 H58" stroke="currentColor" strokeWidth="1" />
-            </pattern>
-          </defs>
-          <rect width="100%" height="100%" fill="url(#crop)" />
-        </svg>
-        <div className="absolute -right-32 -top-32 h-96 w-96 rounded-full bg-amber/20 blur-3xl" aria-hidden />
-        <div className="absolute -bottom-40 -left-24 h-96 w-96 rounded-full bg-phase-press/10 blur-3xl" aria-hidden />
-
-        <div className="relative flex flex-1 flex-col justify-between p-10 xl:p-14">
+      <aside className="on-night hidden bg-night text-night-text lg:flex lg:flex-col">
+        <div className="flex flex-1 flex-col justify-between px-10 py-10 xl:px-16 xl:py-14">
           <BrandLogo tone="light" />
 
-          <div className="max-w-lg">
-            <p className="section-label signature-bar !text-amber">Built for printers</p>
-            <h1 className="mt-3 text-3xl font-semibold leading-tight tracking-tight xl:text-[40px]">
-              Run your print shop from estimate to dispatch.
+          <div className="max-w-[490px] py-12">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-cream">Print business management</p>
+            <h1 className="mt-5 text-3xl font-semibold leading-[1.2] tracking-tight xl:text-[42px]">
+              Your entire print workflow, in one place.
             </h1>
-            <p className="mt-4 text-[15px] leading-relaxed text-night-muted">
-              One system for offset, digital and large-format work — quoting, job tickets, the production floor,
-              paper stock and GST billing.
+            <p className="mt-5 max-w-[420px] text-base leading-relaxed text-night-muted">
+              Manage estimates, jobs, inventory and billing with a clear view of your business from start to finish.
             </p>
 
-            <ul className="mt-10 space-y-5">
-              {[
-                { icon: Calculator, title: "Accurate estimates", text: "Imposition, paper, plates, press and finishing priced in seconds." },
-                { icon: SquareKanban, title: "Live production board", text: "Every job ticket from pre-press through press to dispatch." },
-                { icon: Layers, title: "Paper & ink stock", text: "GSM-wise stock, purchase bills and supplier ledgers." },
-                { icon: FileText, title: "GST billing & follow-ups", text: "Invoices, payment reminders and WhatsApp updates." },
-              ].map(({ icon: Icon, title, text }) => (
-                <li key={title} className="flex gap-4">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-night-tint/[0.06] ring-1 ring-night-tint/[0.12]">
-                    <Icon className="h-[18px] w-[18px] text-amber" />
-                  </span>
-                  <div>
-                    <div className="text-sm font-medium">{title}</div>
-                    <div className="text-sm text-night-muted">{text}</div>
-                  </div>
-                </li>
-              ))}
-            </ul>
+            <div className="mt-10 border-t border-night-tint/15 pt-6 text-sm text-night-muted">
+              Built for the way print teams work.
+            </div>
           </div>
 
-          <div className="flex items-center gap-3 text-xs text-night-muted/70">
-            <span className="cmyk-strip h-1 w-12 rounded-full" aria-hidden />
-            Cyan · Magenta · Yellow · Key
-          </div>
+          <p className="text-xs text-night-muted/80">Carbon · Print Flow Engine</p>
         </div>
       </aside>
 
       {/* Form panel */}
       <main className="flex flex-col">
-        <div className="flex flex-1 items-center justify-center px-5 py-10 sm:px-8">
-          <div className="w-full max-w-[400px]">
-            <img src="/brand/carbon-logo.png" alt="Carbon — Print Flow Engine" className="mb-8 h-auto w-44 sm:w-52 lg:w-56" />
+        <div className="flex flex-1 items-center justify-center px-6 py-12 sm:px-10 lg:py-16">
+          <div className="w-full max-w-[440px]">
+            <div className="mb-10 lg:hidden"><BrandLogo /></div>
 
-            <h2 className="text-2xl font-semibold tracking-tight">
+            <h2 className="text-[26px] font-semibold tracking-tight sm:text-[30px]">
               {activeTab === "signin" ? "Sign in to your workspace" : "Create your workspace"}
             </h2>
             <p className="mt-1.5 text-sm text-muted-foreground">
@@ -272,7 +239,7 @@ export default function Auth() {
             </p>
 
             <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-8 w-full">
-              <TabsList className="grid h-10 w-full grid-cols-2">
+              <TabsList className="grid h-11 w-full grid-cols-2">
                 <TabsTrigger value="signin" className="h-full">Sign in</TabsTrigger>
                 <TabsTrigger value="signup" className="h-full">Create account</TabsTrigger>
               </TabsList>
@@ -319,7 +286,7 @@ export default function Auth() {
                       </Button>
                     </div>
                   </div>
-                  <Button type="submit" className="h-10 w-full" disabled={isLoading}>
+                  <Button type="submit" className="mt-2 h-11 w-full" disabled={isLoading}>
                     {isLoading ? "Signing in…" : "Sign in"}
                   </Button>
                 </form>
@@ -429,7 +396,7 @@ export default function Auth() {
                     </div>
                     {renderFieldError("password")}
                   </div>
-                  <Button type="submit" className="h-10 w-full" disabled={isLoading}>
+                  <Button type="submit" className="mt-2 h-11 w-full" disabled={isLoading}>
                     {isLoading ? "Sending verification code…" : "Create account"}
                   </Button>
                   <p className="text-center text-xs text-muted-foreground">

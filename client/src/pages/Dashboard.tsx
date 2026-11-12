@@ -58,6 +58,7 @@ interface DashboardStats {
   openJobs: number | null;
   totalCustomers: number | null;
   unpaidInvoices: number | null;
+  draftInvoices: number | null;
   overdueInvoices: number | null;
   receivables: number | null;
   invoicedThisMonth: number | null;
@@ -207,6 +208,7 @@ export default function Dashboard() {
     has(s?.urgentJobs) && s.urgentJobs > 0 && { tone: "warning", icon: Zap, label: plural(s.urgentJobs, "rush job"), href: "/production" },
     has(s?.lowStockItems) && s.lowStockItems > 0 && { tone: "warning", icon: Layers, label: `${plural(s.lowStockItems, "material")} low on stock`, href: "/inventory" },
     has(s?.overdueInvoices) && s.overdueInvoices > 0 && { tone: "info", icon: FileWarning, label: `${plural(s.overdueInvoices, "invoice")} overdue for payment`, href: hasPermission("Payment Reminders") ? "/payment-reminders" : "/invoices" },
+    has(s?.draftInvoices) && s.draftInvoices > 0 && { tone: "info", icon: FileWarning, label: `${plural(s.draftInvoices, "draft invoice")} awaiting issue`, href: "/invoices?view=draft" },
   ].filter(Boolean) as AttentionItem[];
 
   const shopRows = [
@@ -256,7 +258,7 @@ export default function Dashboard() {
         value={formatINR(invoiced, { compact: true })}
         loading={loadingStats}
         progress={targetPct}
-        hint={target ? `${targetPct}% of your ${formatINR(target, { compact: true })} target` : "Issued invoices"}
+        hint={target ? `${targetPct}% of your ${formatINR(target, { compact: true })} target · issued only` : "Issued invoices only"}
         tone={targetPct >= 100 ? "success" : "default"}
         href="/invoices"
       />

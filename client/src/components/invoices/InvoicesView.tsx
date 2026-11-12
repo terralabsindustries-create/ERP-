@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Download, Eye, FileText, IndianRupee, Mail, MessageSquare, Pencil, Plus, Printer, Trash2 } from "lucide-react";
+import { Download, Eye, FileCheck2, FileText, IndianRupee, Mail, MessageSquare, Pencil, Plus, Printer, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -106,6 +106,7 @@ export function InvoicesView() {
   const [editing, setEditing] = useState<InvoiceRow | null>(null);
   const [paying, setPaying] = useState<InvoiceRow | null>(null);
   const [deleting, setDeleting] = useState<InvoiceRow | null>(null);
+  const [issuing, setIssuing] = useState<InvoiceRow | null>(null);
 
   const canCreate = hasPermission("Invoicing: Create & Edit");
   const canDelete = hasPermission("Invoicing: Delete");
@@ -225,6 +226,18 @@ export function InvoicesView() {
       refresh();
     } catch (error) {
       toast({ title: "Not deleted", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      throw error;
+    }
+  };
+
+  const issue = async () => {
+    if (!issuing) return;
+    try {
+      await apiClient.issueInvoice(issuing._id);
+      toast({ title: `${issuing.invoiceNumber} issued`, description: "It now counts toward invoiced revenue and receivables." });
+      refresh();
+    } catch (error) {
+      toast({ title: "Could not issue invoice", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
       throw error;
     }
   };
@@ -390,6 +403,7 @@ export function InvoicesView() {
             actions={(i) => [
               { label: "Open invoice", icon: Eye, onClick: () => { setSendVia(null); setViewing(i); } },
               { label: "Edit invoice", icon: Pencil, onClick: () => setEditing(i), hidden: !canCreate || i.status === "cancelled" },
+              { label: "Issue invoice", icon: FileCheck2, onClick: () => setIssuing(i), hidden: !canCreate || i.status !== "draft" },
               {
                 label: balanceOf(i) > 0 && canPay ? "Record payment" : "Correct balance",
                 icon: IndianRupee,
@@ -478,6 +492,16 @@ export function InvoicesView() {
         startWith={paying && !(canPay && balanceOf(paying) > 0) ? "correct" : "record"}
         onOpenChange={(o) => !o && setPaying(null)}
         onSaved={refresh}
+      />
+      <ConfirmDialog
+        open={!!issuing}
+        onOpenChange={(o) => !o && setIssuing(null)}
+        title={`Issue ${issuing?.invoiceNumber}?`}
+        description="This moves the draft into issued invoices and includes its amount in dashboard revenue and receivables."
+        confirmLabel="Issue invoice"
+        cancelLabel="Keep draft"
+        destructive={false}
+        onConfirm={issue}
       />
       <ConfirmDialog
         open={!!deleting}

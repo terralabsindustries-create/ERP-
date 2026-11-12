@@ -9,9 +9,11 @@ const desktopApiBase = (globalThis as any).serpyDesktop?.apiBaseUrl;
 // A production build without VITE_API_URL is refused by vite.config.ts, so the
 // hosted app can never fall back to an API on the visitor's own machine.
 const LOCAL_API = 'http://localhost:4001/api';
+const forceLocalDevApi = import.meta.env.DEV && import.meta.env.VITE_FORCE_LOCAL === 'true';
 
 export const BASE_URL: string =
   desktopApiBase ||
+  (forceLocalDevApi ? LOCAL_API : null) ||
   import.meta.env.VITE_API_URL ||
   (import.meta.env.MODE === 'production'
     ? (() => {
@@ -427,6 +429,14 @@ class ApiClient {
     return this.get('/reports/revenue', params);
   }
 
+  async getCustomerReport(month: string) {
+    return this.get('/reports/customers', { month });
+  }
+
+  async getCustomerReportInvoices(customerId: string, month: string, page = 1) {
+    return this.get(`/reports/customers/${customerId}/invoices`, { month, page: String(page) });
+  }
+
   /** Design charges per month of a year, from issued invoices and from quotations (kept apart). */
   async getDesignChargeReport(year: number) {
     return this.get('/reports/design-charges', { year: String(year) });
@@ -738,6 +748,10 @@ class ApiClient {
 
   async updateInvoice(id: string, data: any) {
     return this.put(`/invoices/${id}`, data);
+  }
+
+  async issueInvoice(id: string) {
+    return this.patch(`/invoices/${id}/issue`, {});
   }
 
   async deleteInvoice(id: string) {

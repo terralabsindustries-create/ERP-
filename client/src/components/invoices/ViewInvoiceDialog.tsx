@@ -27,7 +27,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Check,
   ChevronDown,
   Download,
   Mail,
@@ -283,11 +282,14 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice: listedInvoice, 
     try {
       setLoading(true);
       const invoiceId = invoice._id || invoice.id;
-      await apiClient.sendInvoiceEmail(invoiceId, email, message);
+      const response = (await apiClient.sendInvoiceEmail(invoiceId, email, message)) as { issueStatusUpdated?: boolean };
       toast({
-        title: "Success",
-        description: "Invoice sent via email successfully",
+        title: response?.issueStatusUpdated === false ? "Invoice sent; status needs attention" : "Invoice sent",
+        description: response?.issueStatusUpdated === false
+          ? "The email was delivered, but the draft status did not update. Issue it from the invoice list."
+          : "Email delivered and invoice marked as issued.",
       });
+      onInvoiceUpdated();
       setShowEmailDialog(false);
       setEmail("");
       setMessage("");
@@ -339,11 +341,14 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice: listedInvoice, 
     try {
       setLoading(true);
       const invoiceId = invoice._id || invoice.id;
-      await apiClient.sendInvoiceWhatsApp(invoiceId, phone, selectedTemplate, templateMapping);
+      const response = (await apiClient.sendInvoiceWhatsApp(invoiceId, phone, selectedTemplate, templateMapping)) as { issueStatusUpdated?: boolean };
       toast({
-        title: "Success",
-        description: "Invoice sent via WhatsApp successfully",
+        title: response?.issueStatusUpdated === false ? "Invoice sent; status needs attention" : "Invoice sent",
+        description: response?.issueStatusUpdated === false
+          ? "The WhatsApp message was delivered, but the draft status did not update. Issue it from the invoice list."
+          : "WhatsApp message delivered and invoice marked as issued.",
       });
+      onInvoiceUpdated();
       setShowWhatsAppDialog(false);
       setPhone("");
       setSelectedTemplate("");
@@ -739,19 +744,6 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice: listedInvoice, 
               </DropdownMenu>
             </div>
             <div className="flex gap-2">
-              {/* Closes the preview the same way as the X: the page underneath
-                  is where the user came from. Nothing is saved, sent or
-                  changed. Held while a PDF is being made, so a print dialog or
-                  download does not appear after the preview has gone. */}
-              <Button
-                variant="outline"
-                onClick={() => onOpenChange(false)}
-                disabled={loading || printing}
-                className="gap-2"
-              >
-                <Check className="h-4 w-4" />
-                Finished
-              </Button>
               <Button
                 variant="default"
                 onClick={handleEdit}

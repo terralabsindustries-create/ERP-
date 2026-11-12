@@ -46,6 +46,7 @@ router.get('/stats', protect, async (req, res) => {
       openJobs: null,
       totalCustomers: null,
       unpaidInvoices: null,
+      draftInvoices: null,
       overdueInvoices: null,
       receivables: null,
       invoicedThisMonth: null,
@@ -73,6 +74,7 @@ router.get('/stats', protect, async (req, res) => {
     if (userCan(user, 'Invoicing')) {
       const unpaid = { ...staffScopeQuery(user), ...ISSUED, balanceAmount: { $gt: 0 } };
       work.push(
+        Invoice.countDocuments({ ...staffScopeQuery(user), status: 'draft' }).then((n) => (stats.draftInvoices = n)),
         Invoice.countDocuments(unpaid).then((n) => (stats.unpaidInvoices = n)),
         Invoice.countDocuments({ ...unpaid, dueDate: { $lt: today } }).then((n) => (stats.overdueInvoices = n)),
         sum(Invoice, unpaid, 'balanceAmount').then((n) => (stats.receivables = n)),
@@ -121,6 +123,7 @@ router.get('/stats', protect, async (req, res) => {
         todaysJobs: 'Job tickets created today',
         urgentJobs: 'Open job tickets with Rush priority',
         unpaidInvoices: 'Issued invoices with a balance due',
+        draftInvoices: 'Saved invoices that have not been issued yet',
         overdueInvoices: 'Issued invoices with a balance due past their due date',
         receivables: 'Sum of balances due on issued invoices',
         invoicedThisMonth: 'Total of invoices issued this month',

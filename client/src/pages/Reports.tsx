@@ -10,6 +10,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CustomerReport } from "@/components/reports/CustomerReport";
 import { useAuth } from "@/contexts/AuthContext";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
@@ -75,6 +77,7 @@ export default function Reports() {
   const { hasPermission } = useAuth();
   const canExport = hasPermission("Reports: Export");
   const [reportData, setReportData] = useState<MonthlyReportData | null>(null);
+  const [activeReport, setActiveReport] = useState("monthly");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(format(new Date(), "yyyy-MM"));
   const [loading, setLoading] = useState(false);
@@ -226,10 +229,10 @@ export default function Reports() {
     <div className="page-frame">
       <div className="page-heading-row">
         <div>
-          <h1 className="page-title">Monthly Reports</h1>
-          <p>What was invoiced each month, and design charges by month and year</p>
+          <h1 className="page-title">Reports</h1>
+          <p>{activeReport === "monthly" ? "Monthly invoicing, GST and design charges" : "Invoice totals and balances by customer"}</p>
         </div>
-        {canExport && (
+        {canExport && activeReport === "monthly" && (
           <div>
             <Button onClick={exportToCSV} disabled={!reportData} variant="outline">
               <Download />
@@ -242,6 +245,13 @@ export default function Reports() {
           </div>
         )}
       </div>
+
+      <Tabs value={activeReport} onValueChange={setActiveReport}>
+        <TabsList className="h-11 w-full sm:w-auto">
+          <TabsTrigger value="monthly" className="h-full flex-1 sm:flex-none">Monthly Report</TabsTrigger>
+          <TabsTrigger value="customers" className="h-full flex-1 sm:flex-none">Customer Report</TabsTrigger>
+        </TabsList>
+        <TabsContent value="monthly" className="mt-5 space-y-5">
 
       <Card>
         <CardHeader>
@@ -474,6 +484,12 @@ export default function Reports() {
           </Card>
         </>
       )}
+
+        </TabsContent>
+        <TabsContent value="customers" className="mt-5">
+          <CustomerReport month={selectedMonth} onMonthChange={setSelectedMonth} canExport={canExport} />
+        </TabsContent>
+      </Tabs>
 
       <Dialog open={emailDialogOpen} onOpenChange={setEmailDialogOpen}>
         <DialogContent className="max-w-md">

@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const { query, body, validationResult } = require('express-validator');
 const Invoice = require('../models/Invoice');
 const Quotation = require('../models/Quotation');
@@ -323,6 +324,95 @@ router.get('/revenue', protect, requirePermission('Reports'), [validMonth(query(
   } catch (error) {
     console.error('Monthly report error:', error);
     res.status(500).json({ status: 'error', message: 'Server error while building the report' });
+  }
+});
+
+// @route   GET /api/reports/customers?month=YYYY-MM
+// @desc    Customer-wise issued totals, with drafts shown separately
+// @access  Private (Reports)
+router.get('/customers', protect, requirePermission('Reports'), [validMonth(query('month').optional())], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ status: 'error', message: errors.array()[0].msg });
+    const now = new Date();
+    const month = req.query.month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const { start, end, label } = monthRange(month);
+    const match = {
+      ...staffScopeQuery(req.user),
+      invoiceDate: { $gte: start, $lt: end },
+      status: { $nin: ['cancelled', 'refunded'] },
+      noGst: { $ne: true }
+    };
+    const issued = { $ne: ['$status', 'draft'] };
+    const grouped = await Invoice.aggregate([
+      { $match: match },
+      { $sort: { invoiceDate: -1, _id: -1 } },
+      { $group: {
+        _id: '$customerId',
+        customerName: { $first: '$customerName' },
+        invoiceCount: { $sum: { $cond: [issued, 1, 0] } },
+        draftCount: { $sum: { $cond: [issued, 0, 1] } },
+        totalInvoiced: { $sum: { $cond: [issued, '$totalAmount', 0] } },
+        paidToDate: { $sum: { $cond: [issued, { $ifNull: ['$paidAmount', 0] }, 0] } },
+        outstanding: { $sum: { $cond: [issued, { $ifNull: ['$balanceAmount', 0] }, 0] } }
+      } },
+      { $sort: { totalInvoiced: -1, customerName: 1 } }
+    ]);
+    const customers = grouped.map((row) => ({
+      customerId: String(row._id),
+      customerName: row.customerName || 'Unnamed customer',
+      invoiceCount: row.invoiceCount,
+      draftCount: row.draftCount,
+      totalInvoiced: round2(row.totalInvoiced),
+      paidToDate: round2(row.paidToDate),
+      outstanding: round2(row.outstanding)
+    }));
+    const totals = customers.reduce((sum, row) => ({
+      invoiceCount: sum.invoiceCount + row.invoiceCount,
+      draftCount: sum.draftCount + row.draftCount,
+      totalInvoiced: round2(sum.totalInvoiced + row.totalInvoiced),
+      paidToDate: round2(sum.paidToDate + row.paidToDate),
+      outstanding: round2(sum.outstanding + row.outstanding)
+    }), { invoiceCount: 0, draftCount: 0, totalInvoiced: 0, paidToDate: 0, outstanding: 0 });
+    res.json({ status: 'success', data: { month: label, period: month, customers, totals, draftCount: totals.draftCount } });
+  } catch (error) {
+    console.error('Customer report error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error while building the customer report' });
+  }
+});
+
+// @route   GET /api/reports/customers/:customerId/invoices?month=YYYY-MM&page=N
+// @desc    Issued and draft invoices behind one row of the customer report
+// @access  Private (Reports)
+router.get('/customers/:customerId/invoices', protect, requirePermission('Reports'), [
+  validMonth(query('month').optional()),
+  query('page').optional().isInt({ min: 1 }).toInt()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ status: 'error', message: errors.array()[0].msg });
+    if (!mongoose.isValidObjectId(req.params.customerId)) return res.status(400).json({ status: 'error', message: 'Invalid customer' });
+    const now = new Date();
+    const month = req.query.month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const { start, end } = monthRange(month);
+    const match = {
+      ...staffScopeQuery(req.user),
+      customerId: new mongoose.Types.ObjectId(req.params.customerId),
+      invoiceDate: { $gte: start, $lt: end },
+      status: { $nin: ['cancelled', 'refunded'] },
+      noGst: { $ne: true }
+    };
+    const page = Number(req.query.page || 1);
+    const limit = 25;
+    const [invoices, total] = await Promise.all([
+      Invoice.find(match).select('invoiceNumber invoiceDate dueDate totalAmount paidAmount balanceAmount paymentStatus status')
+        .sort({ invoiceDate: -1, _id: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      Invoice.countDocuments(match)
+    ]);
+    res.json({ status: 'success', data: { invoices, pagination: { page, limit, total } } });
+  } catch (error) {
+    console.error('Customer invoice report error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error while loading customer invoices' });
   }
 });
 
