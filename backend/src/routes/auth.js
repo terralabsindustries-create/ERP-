@@ -206,10 +206,6 @@ router.post('/verify-otp', verifyOTPValidation, async (req, res) => {
       });
     }
 
-    // Mark OTP as used
-    otpRecord.isUsed = true;
-    await otpRecord.save();
-
     // Generate unique dataScope for new admin
     const dataScope = `scope_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
 
@@ -231,11 +227,29 @@ router.post('/verify-otp', verifyOTPValidation, async (req, res) => {
       }
     });
 
+    // Burn the OTP only once the account exists, so a failed create does not
+    // force the person to request a new code.
+    otpRecord.isUsed = true;
+    await otpRecord.save();
+
     // Generate token and send response
     sendTokenResponse(user, 201, res, 'Account created successfully!');
 
   } catch (error) {
-    console.error('❌ Verify OTP error:', error);
+    console.error('❌ Verify OTP error:', error.name, error.code || '', error.message, error.keyValue || '', error.errors ? Object.keys(error.errors) : '');
+    if (error.code === 11000) {
+      return res.status(409).json({
+        status: 'error',
+        message: 'An account already exists with these details. Please sign in instead.'
+      });
+    }
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: Object.values(error.errors).map((e) => ({ msg: e.message, path: e.path }))
+      });
+    }
     res.status(500).json({
       status: 'error',
       message: 'Server error during OTP verification',
