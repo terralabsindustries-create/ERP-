@@ -118,7 +118,7 @@ export default function UserManagement() {
     [me, hasPermission]
   );
 
-  const seatsFull = !!seats && seats.remaining <= 0;
+  const seatsFull = false; // no seat limit: admins can add unlimited logins
   const states = users.map(userState);
   const activeCount = states.filter((x) => x === "active" || x === "owner").length;
   const inactiveCount = states.filter((x) => x === "inactive").length;
@@ -217,8 +217,8 @@ export default function UserManagement() {
           { label: "Roles", value: roles.length + 1, hint: `${customCount} on custom access`, onClick: () => setTab("roles") },
           {
             label: "Login seats",
-            value: seats ? `${seats.used} / ${seats.limit}` : "—",
-            hint: seats ? (seatsFull ? "All seats in use" : `${seats.remaining} available`) : undefined,
+            value: seats ? `${seats.used}` : "—",
+            hint: seats ? "No limit" : undefined,
             tone: seatsFull ? "danger" : "default"
           }
         ]}

@@ -81,8 +81,7 @@ const withoutUndefined = (object) =>
   Object.fromEntries(Object.entries(object).filter(([, value]) => value !== undefined));
 
 // An admin is minted by signup and owns one dataScope. Inside that scope they can
-// hand out a limited number of manager/staff logins.
-const MAX_STAFF_LOGINS = parseInt(process.env.MAX_STAFF_LOGINS, 10) || 20;
+// hand out any number of manager/staff logins — there is no seat limit.
 
 // Everyone in the admin's dataScope except the admins themselves occupies a seat.
 const staffSeatQuery = (user) => ({
@@ -316,16 +315,6 @@ router.post('/', protect, requirePermission('User Management: Create Login'), us
       return res.status(403).json({
         status: 'error',
         message: 'Admin accounts can only be created through signup. Choose the manager, accountant or staff role.'
-      });
-    }
-
-    // Enforce the seat limit before creating anything. A re-invite reuses the
-    // seat the pending invitation already holds, so it is exempt.
-    const seatsUsed = await User.countDocuments(staffSeatQuery(req.user));
-    if (!isReinvite && seatsUsed >= MAX_STAFF_LOGINS) {
-      return res.status(403).json({
-        status: 'error',
-        message: `Staff limit reached — an admin can create up to ${MAX_STAFF_LOGINS} staff/manager logins. Delete an existing login to free a slot.`
       });
     }
 
@@ -1056,8 +1045,8 @@ router.get('/stats/summary', protect, canListUsers, async (req, res) => {
           recentUsers,
           staffSeats: {
             used: staffSeatsUsed,
-            limit: MAX_STAFF_LOGINS,
-            remaining: Math.max(0, MAX_STAFF_LOGINS - staffSeatsUsed)
+            limit: null,
+            remaining: null
           }
         }
       }
