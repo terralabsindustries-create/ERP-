@@ -62,3 +62,24 @@ test('a successfully emailed draft becomes issued', async () => {
     email.mockRestore();
   }
 });
+
+test('an invoice created as issued immediately enters dashboard totals', async () => {
+  const stats = () => request(app).get('/api/dashboard/stats').set(auth(org.tokens.admin));
+  const before = (await stats()).body.stats;
+  const created = await request(app)
+    .post('/api/invoices')
+    .set(auth(org.tokens.admin))
+    .send({
+      customerId: String(customer._id),
+      status: 'sent',
+      items: [{ itemName: 'Printed cards', quantity: 10, unitPrice: 20, gstRate: 18 }]
+    });
+
+  expect(created.status).toBe(201);
+  expect(created.body.data.invoice.status).toBe('sent');
+  const amount = created.body.data.invoice.totalAmount;
+  const after = (await stats()).body.stats;
+  expect(after.invoicedThisMonth).toBe(before.invoicedThisMonth + amount);
+  expect(after.receivables).toBe(before.receivables + amount);
+  expect(after.unpaidInvoices).toBe(before.unpaidInvoices + 1);
+});

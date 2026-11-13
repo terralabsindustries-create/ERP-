@@ -452,6 +452,7 @@ export function CreateJobDialog({
         items: items,
         designCharge: createdJob.designCharge?.amount || 0,
         designChargeGstRate: createdJob.designCharge?.amount ? createdJob.designCharge.gstRate ?? 0 : 0,
+        status: 'sent',
         paymentTerms: 'Immediate',
         notes: createdJob.notes || ''
       };

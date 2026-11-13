@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CustomerReport } from "@/components/reports/CustomerReport";
+import { VendorReport } from "@/components/reports/VendorReport";
 import { useAuth } from "@/contexts/AuthContext";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
@@ -76,6 +77,8 @@ const csvCell = (v: unknown) => {
 export default function Reports() {
   const { hasPermission } = useAuth();
   const canExport = hasPermission("Reports: Export");
+  // The vendor report shows purchase bills, so it follows that permission too.
+  const canSeeVendors = hasPermission("Purchase Bills");
   const [reportData, setReportData] = useState<MonthlyReportData | null>(null);
   const [activeReport, setActiveReport] = useState("monthly");
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -230,7 +233,13 @@ export default function Reports() {
       <div className="page-heading-row">
         <div>
           <h1 className="page-title">Reports</h1>
-          <p>{activeReport === "monthly" ? "Monthly invoicing, GST and design charges" : "Invoice totals and balances by customer"}</p>
+          <p>
+            {activeReport === "monthly"
+              ? "Monthly invoicing, GST and design charges"
+              : activeReport === "vendors"
+                ? "Purchase bill totals and balances by vendor"
+                : "Invoice totals and balances by customer"}
+          </p>
         </div>
         {canExport && activeReport === "monthly" && (
           <div>
@@ -250,6 +259,7 @@ export default function Reports() {
         <TabsList className="h-11 w-full sm:w-auto">
           <TabsTrigger value="monthly" className="h-full flex-1 sm:flex-none">Monthly Report</TabsTrigger>
           <TabsTrigger value="customers" className="h-full flex-1 sm:flex-none">Customer Report</TabsTrigger>
+          {canSeeVendors && <TabsTrigger value="vendors" className="h-full flex-1 sm:flex-none">Vendor Report</TabsTrigger>}
         </TabsList>
         <TabsContent value="monthly" className="mt-5 space-y-5">
 
@@ -489,6 +499,11 @@ export default function Reports() {
         <TabsContent value="customers" className="mt-5">
           <CustomerReport month={selectedMonth} onMonthChange={setSelectedMonth} canExport={canExport} />
         </TabsContent>
+        {canSeeVendors && (
+          <TabsContent value="vendors" className="mt-5">
+            <VendorReport month={selectedMonth} onMonthChange={setSelectedMonth} canExport={canExport} />
+          </TabsContent>
+        )}
       </Tabs>
 
       <Dialog open={emailDialogOpen} onOpenChange={setEmailDialogOpen}>

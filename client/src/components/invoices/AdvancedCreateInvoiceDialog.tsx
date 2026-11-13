@@ -271,9 +271,7 @@ export function AdvancedCreateInvoiceDialog({
     return "";
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
+  const submitInvoice = async (status: "draft" | "sent") => {
     const problem = !formData.customerId
       ? "Select a customer."
       : formData.items.length === 0
@@ -301,6 +299,7 @@ export function AdvancedCreateInvoiceDialog({
         designChargeGstRate: Number(formData.designChargeGstRate) || 0,
         discountAmount: Number(formData.discountAmount) || 0,
         isInterState: formData.isInterState,
+        status,
         notes: formData.notes,
         termsAndConditions: formData.termsAndConditions
       };
@@ -308,7 +307,7 @@ export function AdvancedCreateInvoiceDialog({
       const response: any = await apiClient.createInvoice(invoiceData);
 
       toast({
-        title: "Invoice created",
+        title: status === "draft" ? "Draft saved" : "Invoice issued",
         description: response?.invoice?.invoiceNumber || undefined,
       });
 
@@ -377,7 +376,7 @@ export function AdvancedCreateInvoiceDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form onSubmit={(e) => { e.preventDefault(); void submitInvoice("sent"); }} className="space-y-6">
           {/* Customer and Job Selection */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
@@ -718,10 +717,13 @@ export function AdvancedCreateInvoiceDialog({
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
+            <Button type="button" variant="outline" disabled={loading} onClick={() => void submitInvoice("draft")}>
+              Save draft
+            </Button>
             <Button type="submit" disabled={loading}>
               {loading
-                ? (preselectedJob ? "Generating..." : "Creating...")
-                : (preselectedJob ? "Generate Invoice" : "Create Invoice")}
+                ? "Creating..."
+                : "Create and issue invoice"}
             </Button>
           </DialogFooter>
         </form>

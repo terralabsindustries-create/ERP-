@@ -109,6 +109,7 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
         designCharge,
         designChargeGstRate,
         isInterState: formData.isInterState,
+        status: 'sent',
         paymentTerms: formData.payment_terms,
         notes: [formData.notes, formData.po_reference ? `PO: ${formData.po_reference}` : ''].filter(Boolean).join('\n'),
         termsAndConditions: formData.terms_conditions

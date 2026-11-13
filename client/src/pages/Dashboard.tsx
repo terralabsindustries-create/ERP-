@@ -258,9 +258,11 @@ export default function Dashboard() {
         value={formatINR(invoiced, { compact: true })}
         loading={loadingStats}
         progress={targetPct}
-        hint={target ? `${targetPct}% of your ${formatINR(target, { compact: true })} target · issued only` : "Issued invoices only"}
+        hint={has(s?.draftInvoices) && s.draftInvoices > 0
+          ? `${plural(s.draftInvoices, "draft invoice")} awaiting issue`
+          : target ? `${targetPct}% of your ${formatINR(target, { compact: true })} target · issued only` : "Issued invoices only"}
         tone={targetPct >= 100 ? "success" : "default"}
-        href="/invoices"
+        href={has(s?.draftInvoices) && s.draftInvoices > 0 ? "/invoices?view=draft" : "/invoices"}
       />
     );
   }

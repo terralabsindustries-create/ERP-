@@ -3,10 +3,12 @@ const mongoose = require('mongoose');
 const { query, body, validationResult } = require('express-validator');
 const Invoice = require('../models/Invoice');
 const Quotation = require('../models/Quotation');
+const PurchaseBill = require('../models/PurchaseBill');
 const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 const { requirePermission, userCan } = require('../middleware/requirePermission');
-const { staffScopeQuery } = require('../utils/dataScopeHelper');
+const { staffScopeQuery, canViewAllStaffData } = require('../utils/dataScopeHelper');
+const { orgUserFilter } = require('../utils/accessScope');
 // Called through the module so tests can stand in for the SMTP transport.
 const mailer = require('../utils/mailer');
 
@@ -413,6 +415,103 @@ router.get('/customers/:customerId/invoices', protect, requirePermission('Report
   } catch (error) {
     console.error('Customer invoice report error:', error);
     res.status(500).json({ status: 'error', message: 'Server error while loading customer invoices' });
+  }
+});
+
+/*
+  Vendor report: purchase bills dated in the month, grouped by vendor. The
+  caller sees the bills the Purchase Bills page shows them — the whole
+  business for the admin and "view all staff data" logins, otherwise the bills
+  they recorded. Cancelled bills are left out; drafts are counted separately
+  and kept out of the money totals.
+*/
+const billScope = async (user) => (canViewAllStaffData(user) ? orgUserFilter(user) : { userId: user._id });
+const currentMonth = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+};
+
+// @route   GET /api/reports/vendors?month=YYYY-MM
+// @desc    Vendor-wise purchase bill totals, with drafts shown separately
+// @access  Private (Reports + Purchase Bills)
+router.get('/vendors', protect, requirePermission('Reports'), requirePermission('Purchase Bills'), [validMonth(query('month').optional())], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ status: 'error', message: errors.array()[0].msg });
+    const month = req.query.month || currentMonth();
+    const { start, end, label } = monthRange(month);
+    const match = {
+      ...(await billScope(req.user)),
+      billDate: { $gte: start, $lt: end },
+      status: { $ne: 'cancelled' }
+    };
+    const recorded = { $ne: ['$status', 'draft'] };
+    const onRecorded = (field) => ({ $sum: { $cond: [recorded, { $ifNull: [field, 0] }, 0] } });
+    const grouped = await PurchaseBill.aggregate([
+      { $match: match },
+      { $sort: { billDate: -1, _id: -1 } },
+      { $group: {
+        _id: '$vendorId',
+        vendorName: { $first: '$vendorName' },
+        billCount: { $sum: { $cond: [recorded, 1, 0] } },
+        draftCount: { $sum: { $cond: [recorded, 0, 1] } },
+        taxableAmount: onRecorded('$taxableAmount'),
+        gstAmount: onRecorded('$totalGstAmount'),
+        totalBilled: onRecorded('$totalAmount'),
+        paidToDate: onRecorded('$paidAmount'),
+        outstanding: onRecorded('$balanceAmount')
+      } },
+      { $sort: { totalBilled: -1, vendorName: 1 } }
+    ]);
+    const fields = ['billCount', 'draftCount', 'taxableAmount', 'gstAmount', 'totalBilled', 'paidToDate', 'outstanding'];
+    const vendors = grouped.map((row) => ({
+      vendorId: String(row._id),
+      vendorName: row.vendorName || 'Unnamed vendor',
+      billCount: row.billCount,
+      draftCount: row.draftCount,
+      taxableAmount: round2(row.taxableAmount),
+      gstAmount: round2(row.gstAmount),
+      totalBilled: round2(row.totalBilled),
+      paidToDate: round2(row.paidToDate),
+      outstanding: round2(row.outstanding)
+    }));
+    const totals = Object.fromEntries(fields.map((key) => [key, round2(vendors.reduce((sum, row) => sum + row[key], 0))]));
+    res.json({ status: 'success', data: { month: label, period: month, vendors, totals, draftCount: totals.draftCount } });
+  } catch (error) {
+    console.error('Vendor report error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error while building the vendor report' });
+  }
+});
+
+// @route   GET /api/reports/vendors/:vendorId/bills?month=YYYY-MM&page=N
+// @desc    Recorded and draft purchase bills behind one row of the vendor report
+// @access  Private (Reports + Purchase Bills)
+router.get('/vendors/:vendorId/bills', protect, requirePermission('Reports'), requirePermission('Purchase Bills'), [
+  validMonth(query('month').optional()),
+  query('page').optional().isInt({ min: 1 }).toInt()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ status: 'error', message: errors.array()[0].msg });
+    if (!mongoose.isValidObjectId(req.params.vendorId)) return res.status(400).json({ status: 'error', message: 'Invalid vendor' });
+    const { start, end } = monthRange(req.query.month || currentMonth());
+    const match = {
+      ...(await billScope(req.user)),
+      vendorId: new mongoose.Types.ObjectId(req.params.vendorId),
+      billDate: { $gte: start, $lt: end },
+      status: { $ne: 'cancelled' }
+    };
+    const page = Number(req.query.page || 1);
+    const limit = 25;
+    const [bills, total] = await Promise.all([
+      PurchaseBill.find(match).select('billNumber vendorInvoiceNumber billDate dueDate totalAmount totalGstAmount paidAmount balanceAmount paymentStatus status')
+        .sort({ billDate: -1, _id: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      PurchaseBill.countDocuments(match)
+    ]);
+    res.json({ status: 'success', data: { bills, pagination: { page, limit, total } } });
+  } catch (error) {
+    console.error('Vendor bill report error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error while loading vendor bills' });
   }
 });
 

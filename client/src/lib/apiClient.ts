@@ -437,6 +437,14 @@ class ApiClient {
     return this.get(`/reports/customers/${customerId}/invoices`, { month, page: String(page) });
   }
 
+  async getVendorReport(month: string) {
+    return this.get('/reports/vendors', { month });
+  }
+
+  async getVendorReportBills(vendorId: string, month: string, page = 1) {
+    return this.get(`/reports/vendors/${vendorId}/bills`, { month, page: String(page) });
+  }
+
   /** Design charges per month of a year, from issued invoices and from quotations (kept apart). */
   async getDesignChargeReport(year: number) {
     return this.get('/reports/design-charges', { year: String(year) });

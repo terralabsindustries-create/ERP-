@@ -123,6 +123,8 @@ function Field({
   min?: number;
   className?: string;
 }) {
+  const [editingValue, setEditingValue] = useState<string | null>(null);
+
   return (
     <label className={cn("block", className)}>
       <span className="mb-1.5 block text-xs font-medium text-muted-foreground">{label}</span>
@@ -133,8 +135,16 @@ function Field({
           inputMode="decimal"
           min={min}
           step={step}
-          value={Number.isFinite(value) ? value : ""}
-          onChange={(e) => onChange(e.target.value === "" ? 0 : Number(e.target.value))}
+          value={editingValue ?? (Number.isFinite(value) ? value : "")}
+          onFocus={() => {
+            if (value === 0) setEditingValue("");
+          }}
+          onChange={(e) => {
+            const next = e.target.value;
+            setEditingValue(next);
+            onChange(next === "" ? 0 : Number(next));
+          }}
+          onBlur={() => setEditingValue(null)}
           className={cn("num", prefix && "pl-7", suffix && "pr-12")}
         />
         {suffix && <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{suffix}</span>}
