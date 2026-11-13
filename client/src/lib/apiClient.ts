@@ -381,6 +381,10 @@ class ApiClient {
     return this.get('/tasks', params);
   }
 
+  async getTaskAssignees() {
+    return this.get<Array<{ _id: string; fullName: string; role?: string }>>('/tasks/assignees');
+  }
+
   async getTask(taskId: string) {
     return this.get(`/tasks/${taskId}`);
   }

@@ -22,9 +22,10 @@ interface CreateTaskDialogProps {
     dueDate: string;
     priority: string;
   };
+  defaultDueDate?: Date;
 }
 
-export function CreateTaskDialog({ open, onOpenChange, onTaskCreated, preselectedJob }: CreateTaskDialogProps) {
+export function CreateTaskDialog({ open, onOpenChange, onTaskCreated, preselectedJob, defaultDueDate }: CreateTaskDialogProps) {
   const [formData, setFormData] = useState({
     title: "",
     description: "",
@@ -78,11 +79,16 @@ export function CreateTaskDialog({ open, onOpenChange, onTaskCreated, preselecte
     }
   }, [open, preselectedJob]);
 
+  useEffect(() => {
+    if (open && !preselectedJob && defaultDueDate) {
+      setFormData((prev) => ({ ...prev, dueDate: localDate(defaultDueDate) }));
+    }
+  }, [open, preselectedJob, defaultDueDate]);
+
   // Everyone who can be given a task: active logins of the business.
   const fetchStaff = async () => {
     try {
-      const users = await apiClient.listAll<{ _id: string; isActive?: boolean; status?: string }>('/users', 'users', { sortBy: 'fullName', sortOrder: 'asc' });
-      setStaff(users.filter((u) => u.isActive !== false && u.status !== 'invited'));
+      setStaff(await apiClient.getTaskAssignees());
     } catch (error) {
       console.error('Error fetching staff:', error);
       setStaff([]);

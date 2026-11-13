@@ -9,6 +9,7 @@ import { ConfirmDialog, DataCard, MetricBar } from "@/components/data";
 import { MonthGrid } from "@/components/calendar/MonthGrid";
 import { AgendaList } from "@/components/calendar/AgendaList";
 import { CreateEventDialog } from "@/components/calendar/CreateEventDialog";
+import { CreateTaskDialog } from "@/components/staff/CreateTaskDialog";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
@@ -34,6 +35,7 @@ export default function CalendarPage() {
   const { user, hasPermission } = useAuth();
   const { toast } = useToast();
   const canEdit = hasPermission("Calendar: Create & Edit");
+  const canAssignTask = hasPermission("Staff & Tasks: Assign Tasks");
   const canDelete = hasPermission("Calendar: Delete");
 
   const [month, setMonth] = useState(() => startOfMonth(new Date()));
@@ -47,6 +49,7 @@ export default function CalendarPage() {
   const [show, setShow] = useState<Show>("all");
   const [panel, setPanel] = useState<Panel>("day");
   const [editor, setEditor] = useState<{ open: boolean; event: RawEvent | null }>({ open: false, event: null });
+  const [taskOpen, setTaskOpen] = useState(false);
   const [deleting, setDeleting] = useState<CalItem | null>(null);
 
   // Everything due or happening in the weeks the grid shows.
@@ -125,6 +128,12 @@ export default function CalendarPage() {
     if (!isSameMonth(d, month)) setMonth(startOfMonth(d));
   };
   const goToday = () => select(new Date());
+  const creatingTask = show === "tasks";
+  const canCreate = creatingTask ? canAssignTask : canEdit;
+  const createForView = () => {
+    if (creatingTask) setTaskOpen(true);
+    else setEditor({ open: true, event: null });
+  };
 
   const shown = useMemo(() => items.filter((i) => show === "all" || (show === "tasks" ? i.source === "task" : i.source === "event")), [items, show]);
   const dayItems = shown.filter((i) => onDay(i, selected)).sort(byTime);
@@ -147,10 +156,10 @@ export default function CalendarPage() {
         title="Calendar & reminders"
         description="Task due dates, reminders, meetings and deliveries in one place."
         actions={
-          canEdit && (
-            <Button onClick={() => setEditor({ open: true, event: null })}>
+          canCreate && (
+            <Button onClick={createForView}>
               <Plus />
-              New event
+              {creatingTask ? "New task" : "New event"}
             </Button>
           )
         }
@@ -272,8 +281,8 @@ export default function CalendarPage() {
                     <div className="text-sm font-semibold">{format(selected, "EEEE")}</div>
                     <div className="text-xs text-muted-foreground">{format(selected, "d MMMM yyyy")}</div>
                   </div>
-                  {canEdit && (
-                    <Button variant="ghost" size="sm" onClick={() => setEditor({ open: true, event: null })}>
+                  {canCreate && (
+                    <Button variant="ghost" size="sm" onClick={createForView}>
                       <Plus />
                       Add
                     </Button>
@@ -323,6 +332,7 @@ export default function CalendarPage() {
       </div>
 
       <CreateEventDialog open={editor.open} onOpenChange={(o) => setEditor((s) => ({ ...s, open: o }))} defaultDate={selected} event={editor.event} onEventCreated={refresh} />
+      <CreateTaskDialog open={taskOpen} onOpenChange={setTaskOpen} onTaskCreated={refresh} defaultDueDate={selected} />
       <ConfirmDialog
         open={!!deleting}
         onOpenChange={(o) => !o && setDeleting(null)}

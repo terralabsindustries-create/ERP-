@@ -307,6 +307,12 @@ export default function Discounts() {
           ]}
         />
 
+        <p className="text-sm text-muted-foreground">
+          {view === "rules"
+            ? "Create offers for every customer, new customers, or returning customers. Use Customer rates for an individual discount."
+            : "Set a standing percentage discount for one customer. If an offer also applies, the larger discount is suggested on the invoice."}
+        </p>
+
         <DataCard toolbar={<Toolbar search={<SearchField value={search} onChange={setSearch} placeholder={view === "rules" ? "Search discounts" : "Search customers"} />} />}>
           {view === "rules" ? (
             <DataTable
@@ -393,7 +399,7 @@ export default function Discounts() {
         open={ruleEditor.open}
         onOpenChange={(open) => setRuleEditor((s) => ({ ...s, open }))}
         title={ruleEditor.rule ? "Edit discount" : "New discount"}
-        description="Suggested on invoices whenever it applies."
+        description="An offer for all, new, or returning customers, with optional order limits and dates."
         onSubmit={saveRule}
         footer={
           <>
@@ -449,8 +455,12 @@ export default function Discounts() {
         </EditorSection>
 
         <EditorSection title="Who gets it">
-          <div className="grid grid-cols-2 gap-1.5" role="radiogroup" aria-label="Who gets it">
-            {(Object.keys(AUDIENCE) as Audience[]).map((a) => (
+          <div className={cn("grid gap-1.5", ruleEditor.rule?.customerType === "specific" ? "grid-cols-2" : "grid-cols-3")} role="radiogroup" aria-label="Who gets it">
+            {(Object.keys(AUDIENCE) as Audience[])
+              // Keep saved selected-customer offers editable, but direct new
+              // individual discounts to the dedicated Customer rates tab.
+              .filter((a) => a !== "specific" || ruleEditor.rule?.customerType === "specific")
+              .map((a) => (
               <button
                 key={a}
                 type="button"
@@ -463,9 +473,19 @@ export default function Discounts() {
               </button>
             ))}
           </div>
+          {!ruleEditor.rule && (
+            <Button type="button" variant="link" className="h-auto px-0 text-sm" onClick={() => {
+              setRuleEditor({ open: false, rule: null });
+              setView("rates");
+              openRate(null);
+            }}>
+              Set a rate for one customer
+            </Button>
+          )}
           {ruleForm.customerType === "new" && <p className="text-xs text-muted-foreground">Customers with no invoice yet.</p>}
           {ruleForm.customerType === "specific" && (
             <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">Apply this offer only to the customers you select below.</p>
               <Input value={customerQuery} onChange={(e) => setCustomerQuery(e.target.value)} placeholder="Search customers" aria-label="Search customers" />
               <div className="max-h-56 overflow-y-auto rounded-md border">
                 {pickable.length === 0 ? (
@@ -515,7 +535,7 @@ export default function Discounts() {
         open={rateEditor.open}
         onOpenChange={(open) => setRateEditor((s) => ({ ...s, open }))}
         title={rateEditor.rate ? `Rate for ${rateEditor.rate.customerName}` : "New customer rate"}
-        description="A standing discount for one customer, suggested on their invoices."
+        description="A standing percentage discount for one customer, suggested on their invoices."
         onSubmit={saveRate}
         footer={
           <>
