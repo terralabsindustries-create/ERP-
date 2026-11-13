@@ -5,11 +5,12 @@ const User = require('../models/User');
 const OTP = require('../models/OTP');
 const { protect, sendTokenResponse } = require('../middleware/auth');
 const crypto = require('crypto');
-const { generateOTP, hashOTP, verifyOTP, getOTPEmailTemplate } = require('../utils/otpUtils');
-const { createTransporter, getFromAddress, sendMailErrorResponse } = require('../utils/mailer');
+const { generateOTP, hashOTP, verifyOTP, getOTPEmailTemplate, getPasswordResetEmailTemplate } = require('../utils/otpUtils');
+const mailer = require('../utils/mailer');
+const { createTransporter, getFromAddress, sendMailErrorResponse } = mailer;
 const { hashInvitationToken, isLive } = require('../utils/invitationUtils');
 const { syncEmployeeForUser } = require('../utils/employeeSync');
-const { loginRateLimit } = require('../middleware/loginRateLimit');
+const { loginRateLimit, forgotPasswordRateLimit, resetPasswordRateLimit } = require('../middleware/loginRateLimit');
 
 const router = express.Router();
 
@@ -439,6 +440,122 @@ router.post('/invitation/:token/accept', [
       status: 'error',
       message: 'Server error while setting your password'
     });
+  }
+});
+
+/*
+  Forgot password: a 6-digit code is emailed, then the code and a new password
+  are sent back. The request step answers the same way whether or not the
+  address has an account, so it cannot be used to find out who is registered.
+  Invited logins (no password yet) and deactivated ones get no code.
+*/
+const PASSWORD_RESET_MAX_ATTEMPTS = 5;
+const PASSWORD_RESET_SENT = {
+  status: 'success',
+  message: 'If an account exists for this email, a 6-digit code has been sent to it.',
+  data: { expiresIn: 10, resendIn: OTP_RESEND_COOLDOWN_SECONDS }
+};
+const canResetPassword = (user) => Boolean(user && user.isActive && user.status !== 'invited');
+
+// @route   POST /api/auth/forgot-password
+// @desc    Email a password reset code
+// @access  Public
+router.post('/forgot-password', forgotPasswordRateLimit, [
+  body('email').isEmail().normalizeEmail().withMessage('Please provide a valid email')
+], validate, async (req, res) => {
+  const { email } = req.body;
+  let otpId = null;
+  try {
+    // Fails the same way for every address when email isn't set up. Called
+    // through the module so tests can stand in for the SMTP transport.
+    const transporter = mailer.createTransporter();
+
+    const user = await User.findOne({ email });
+    if (!canResetPassword(user)) return res.status(200).json(PASSWORD_RESET_SENT);
+
+    // One code a minute per address; a repeat inside the minute is ignored.
+    const last = await OTP.findOne({ email, type: 'password_reset' }).sort({ createdAt: -1 });
+    if (last && Date.now() - last.createdAt.getTime() < OTP_RESEND_COOLDOWN_SECONDS * 1000) {
+      return res.status(200).json(PASSWORD_RESET_SENT);
+    }
+
+    await OTP.deleteMany({ email, type: 'password_reset' });
+    const otp = generateOTP();
+    const record = await OTP.create({
+      email,
+      otp: hashOTP(otp),
+      type: 'password_reset',
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+      maxAttempts: PASSWORD_RESET_MAX_ATTEMPTS
+    });
+    otpId = record._id;
+
+    const template = getPasswordResetEmailTemplate(otp, user.fullName);
+    await transporter.sendMail({
+      from: getFromAddress('Carbon'),
+      to: email,
+      subject: template.subject,
+      html: template.html,
+      text: template.text
+    });
+
+    res.status(200).json(PASSWORD_RESET_SENT);
+  } catch (error) {
+    // A code that never arrived must not hold up the next request.
+    if (otpId) await OTP.deleteOne({ _id: otpId }).catch(() => {});
+    sendMailErrorResponse(res, error, 'Password reset email');
+  }
+});
+
+// @route   POST /api/auth/reset-password
+// @desc    Set a new password with an emailed reset code
+// @access  Public
+router.post('/reset-password', resetPasswordRateLimit, [
+  body('email').isEmail().normalizeEmail().withMessage('Please provide a valid email'),
+  body('otp').matches(/^\d{6}$/).withMessage('Enter the 6-digit code from the email'),
+  body('newPassword').isLength({ min: 6 }).withMessage('Password must be at least 6 characters')
+], validate, async (req, res) => {
+  const refuse = (message, code = 'RESET_CODE_INVALID') => res.status(400).json({ status: 'error', code, message });
+  try {
+    const { email, otp, newPassword } = req.body;
+    const record = await OTP.findOne({ email, type: 'password_reset', isUsed: false });
+    if (!record || record.isExpired()) {
+      return refuse('This code has expired or is not valid. Request a new code.', 'RESET_CODE_EXPIRED');
+    }
+
+    // Spend one attempt atomically before checking, so parallel guesses
+    // can't get more tries than the code allows.
+    const attempt = await OTP.findOneAndUpdate(
+      { _id: record._id, isUsed: false, attempts: { $lt: record.maxAttempts } },
+      { $inc: { attempts: 1 } },
+      { new: true }
+    );
+    if (!attempt) return refuse('Too many incorrect attempts. Request a new code.', 'RESET_CODE_LOCKED');
+
+    if (!verifyOTP(otp, attempt.otp)) {
+      const left = attempt.maxAttempts - attempt.attempts;
+      return left > 0
+        ? refuse(`That code is not correct. ${left} attempt${left === 1 ? '' : 's'} left.`)
+        : refuse('Too many incorrect attempts. Request a new code.', 'RESET_CODE_LOCKED');
+    }
+
+    const user = await User.findOne({ email }).select('+password');
+    if (!canResetPassword(user)) {
+      return refuse('This code has expired or is not valid. Request a new code.', 'RESET_CODE_EXPIRED');
+    }
+
+    // Only one request may use the code.
+    const claimed = await OTP.findOneAndUpdate({ _id: record._id, isUsed: false }, { isUsed: true });
+    if (!claimed) return refuse('This code has already been used. Request a new code.', 'RESET_CODE_EXPIRED');
+
+    user.password = newPassword;
+    await user.save();
+    await OTP.deleteMany({ email, type: 'password_reset' });
+
+    res.status(200).json({ status: 'success', message: 'Your password has been changed. You can now sign in.' });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error while resetting your password' });
   }
 });
 

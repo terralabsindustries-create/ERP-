@@ -24,6 +24,12 @@ import {
 } from "@/components/ui/select";
 
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
+
+interface Assignee {
+  _id: string;
+  fullName: string;
+}
 
 interface QuickReminderDialogProps {
   onReminderCreated?: () => void;
@@ -32,7 +38,7 @@ interface QuickReminderDialogProps {
 export function QuickReminderDialog({ onReminderCreated }: QuickReminderDialogProps) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [staffList, setStaffList] = useState<unknown[]>([]);
+  const [staffList, setStaffList] = useState<Assignee[]>([]);
   const [formData, setFormData] = useState({
     title: "",
     description: "",
@@ -43,6 +49,7 @@ export function QuickReminderDialog({ onReminderCreated }: QuickReminderDialogPr
     reminder_type: "task"
   });
   const { toast } = useToast();
+  const { user } = useAuth();
 
   // Fetch staff list when dialog opens
   useEffect(() => {
@@ -53,10 +60,8 @@ export function QuickReminderDialog({ onReminderCreated }: QuickReminderDialogPr
 
   const fetchStaffList = async () => {
     try {
-      const staff: any[] = await apiClient.listAll('/users', 'users');
-      const staffOnly = staff.filter((u: any) => u.role === 'staff');
-      setStaffList(staffOnly);
-      console.log('👥 Staff list fetched:', staffOnly);
+      const staff = await apiClient.get<Assignee[]>('/tasks/assignees');
+      setStaffList(staff);
     } catch (error) {
       console.error('Error fetching staff list:', error);
       toast({
@@ -76,10 +81,10 @@ export function QuickReminderDialog({ onReminderCreated }: QuickReminderDialogPr
       const reminderData = {
         title: formData.title,
         description: formData.description,
-        reminder_date: formData.reminder_date,
+        dueDate: new Date(formData.reminder_date).toISOString(),
         priority: formData.priority,
         category: formData.category,
-        assignedTo: formData.assignedTo || undefined,
+        assignedTo: formData.assignedTo || user?.id,
         reminder_type: formData.reminder_type
       };
 
@@ -110,7 +115,7 @@ export function QuickReminderDialog({ onReminderCreated }: QuickReminderDialogPr
       console.error('Error creating reminder:', error);
       toast({
         title: "Error",
-        description: "Failed to create reminder",
+        description: error instanceof Error ? error.message : "Failed to create reminder",
         variant: "destructive",
       });
     } finally {
@@ -163,18 +168,18 @@ export function QuickReminderDialog({ onReminderCreated }: QuickReminderDialogPr
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Staff Assignment */}
           <div className="space-y-1.5">
-            <Label htmlFor="assignedTo">Assign To Staff</Label>
+            <Label htmlFor="assignedTo">Assign to</Label>
             <div className="relative">
               <select
                 id="assignedTo"
                 className="block h-9 w-full appearance-none rounded-lg border border-input bg-background px-3 pr-9 py-2 text-sm text-foreground focus:outline-none focus:border-primary focus:bg-card focus:shadow-ring"
-                value={formData.assignedTo}
+                value={formData.assignedTo || user?.id || ""}
                 onChange={(event) => setFormData(prev => ({ ...prev, assignedTo: event.target.value }))}
               >
-                <option value="">No assignment</option>
-                {staffList.map((staff: any) => (
-                  <option key={staff.id} value={staff.id}>
-                    {staff.full_name}
+                {user && <option value={user.id}>Myself</option>}
+                {staffList.filter((staff) => staff._id !== user?.id).map((staff) => (
+                  <option key={staff._id} value={staff._id}>
+                    {staff.fullName}
                   </option>
                 ))}
               </select>

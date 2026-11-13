@@ -36,6 +36,17 @@ const notificationsFor = (user) => Notification.find({ recipient: user._id }).so
 describe('assigning work', () => {
   let taskId;
 
+  test('the assignee picker lists active team members with usable IDs and names', async () => {
+    const res = await as('manager').get('/api/tasks/assignees');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ _id: String(org.manager._id), fullName: org.manager.fullName }),
+      expect.objectContaining({ _id: String(org.staff1._id), fullName: org.staff1.fullName })
+    ]));
+    expect(res.body.data[0]).not.toHaveProperty('email');
+    expect((await as('staff1').get('/api/tasks/assignees')).status).toBe(403);
+  });
+
   test('a manager with Assign Tasks assigns a task to a staff member, who is notified', async () => {
     const due = new Date(Date.now() + 2 * 864e5).toISOString();
     const res = await as('manager').post('/api/tasks', { title: 'Approve proof for Lotus brochure', assignedTo: String(org.staff1._id), dueDate: due, priority: 'high' });

@@ -60,3 +60,25 @@ const perAddress = rateLimit({
 });
 
 module.exports = { loginRateLimit: [perAccount, perAddress], LOGIN_WINDOW_MS: WINDOW_MS };
+
+/**
+ * Forgot / reset password, per client address over 15 minutes: 20 code
+ * requests and 30 reset attempts. Each email address is also limited to one
+ * code a minute in the route, and each code to five guesses, so these only
+ * stop bulk use.
+ */
+const resetLimiter = (limit) => rateLimit({
+  ...common,
+  skipSuccessfulRequests: false,
+  limit,
+  keyGenerator: (req) => req.ip,
+  skip: addressUnknown,
+  handler: (req, res) => res.status(429).json({
+    status: 'error',
+    code: 'TOO_MANY_RESET_REQUESTS',
+    message: 'Too many password reset requests. Try again in a few minutes.'
+  })
+});
+
+module.exports.forgotPasswordRateLimit = resetLimiter(20);
+module.exports.resetPasswordRateLimit = resetLimiter(30);

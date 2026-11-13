@@ -125,6 +125,24 @@ async function validJob(user, jobId) {
   return { ok: !!job, job };
 }
 
+// Task assigners need names and IDs without access to full User Management records.
+router.get('/assignees', async (req, res) => {
+  if (!userCan(req.user, 'Staff & Tasks: Assign Tasks')) {
+    return forbidden(res, 'You do not have permission to assign tasks');
+  }
+  try {
+    const users = await User.find({
+      _id: { $in: await orgMemberIds(req.user) },
+      isActive: true,
+      status: { $ne: 'invited' }
+    }).select('_id fullName role').sort({ fullName: 1 }).lean();
+    res.json({ success: true, data: users });
+  } catch (error) {
+    console.error('Task assignees error:', error);
+    res.status(500).json({ success: false, message: 'Failed to load task assignees' });
+  }
+});
+
 // GET /api/tasks - Get all tasks with advanced filtering
 router.get('/', [
   query('status').optional().isIn(['pending', 'in_progress', 'completed', 'cancelled', 'on_hold', 'all']),

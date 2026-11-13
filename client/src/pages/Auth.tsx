@@ -16,6 +16,7 @@ import { Eye, EyeOff, AlertCircle, UserCheck } from "lucide-react";
 import { BrandLogo } from "@/components/brand/BrandMark";
 import { useAuth } from "@/contexts/AuthContext";
 import { OTPVerification } from "@/components/auth/OTPVerification";
+import { ForgotPassword } from "@/components/auth/ForgotPassword";
 import { BASE_URL } from "@/lib/apiClient";
 
 // Form field name -> the suffix of its input id on the sign-up tab.
@@ -33,6 +34,7 @@ export default function Auth() {
   const [showPassword, setShowPassword] = useState(false);
   const [showOTPVerification, setShowOTPVerification] = useState(false);
   const [activeTab, setActiveTab] = useState("signin");
+  const [forgotPassword, setForgotPassword] = useState(false);
   // Signup failures are shown in a dialog. `existingAccount` gets its own
   // treatment because the fix is an action (sign in), not just a message.
   const [signUpError, setSignUpError] = useState<
@@ -229,6 +231,17 @@ export default function Auth() {
           <div className="w-full max-w-[440px]">
             <div className="mb-10 lg:hidden"><BrandLogo /></div>
 
+            {forgotPassword ? (
+              <ForgotPassword
+                initialEmail={formData.email}
+                onBack={(email) => {
+                  setFormData((prev) => ({ ...prev, email, password: "" }));
+                  setActiveTab("signin");
+                  setForgotPassword(false);
+                }}
+              />
+            ) : (
+            <>
             <h2 className="text-[26px] font-semibold tracking-tight sm:text-[30px]">
               {activeTab === "signin" ? "Sign in to your workspace" : "Create your workspace"}
             </h2>
@@ -261,7 +274,16 @@ export default function Auth() {
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label htmlFor="signin-password" className={labelClass}>Password</Label>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="signin-password" className={labelClass}>Password</Label>
+                      <button
+                        type="button"
+                        onClick={() => setForgotPassword(true)}
+                        className="text-[13px] font-medium text-primary hover:underline underline-offset-2"
+                      >
+                        Forgot password?
+                      </button>
+                    </div>
                     <div className="relative">
                       <Input
                         id="signin-password"
@@ -405,6 +427,8 @@ export default function Auth() {
                 </form>
               </TabsContent>
             </Tabs>
+            </>
+            )}
           </div>
         </div>
 

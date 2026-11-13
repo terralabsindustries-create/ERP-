@@ -126,6 +126,15 @@ class ApiClient {
     return response;
   }
 
+  /** Emails a 6-digit reset code. Answers the same whether or not the address has an account. */
+  async requestPasswordReset(email: string) {
+    return this.post<{ message: string; data?: { expiresIn: number; resendIn: number } }>('/auth/forgot-password', { email });
+  }
+
+  async resetPassword(email: string, otp: string, newPassword: string) {
+    return this.post<{ message: string }>('/auth/reset-password', { email, otp, newPassword });
+  }
+
   async register(email: string, password: string, fullName: string, phone?: string, companyName?: string) {
     const response = await this.request<{ user: any; token: string }>('/auth/register', {
       method: 'POST',
