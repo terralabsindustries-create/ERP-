@@ -103,10 +103,12 @@ describe('the invitation email', () => {
     const saved = process.env.FRONTEND_URL;
     try {
       process.env.FRONTEND_URL = 'app://serpy';
-      expect(buildAcceptUrl('abc')).toBe('https://erp-delta-one-83.vercel.app/accept-invitation/abc');
+      expect(buildAcceptUrl('abc')).toBe('https://app.carbonprintflow.com/accept-invitation/abc');
       // The retired SerpY app is still online but must never receive a Carbon link.
       process.env.FRONTEND_URL = 'https://app.serpy.in';
-      expect(buildAcceptUrl('abc')).toBe('https://erp-delta-one-83.vercel.app/accept-invitation/abc');
+      expect(buildAcceptUrl('abc')).toBe('https://app.carbonprintflow.com/accept-invitation/abc');
+      process.env.FRONTEND_URL = 'https://erp-delta-one-83.vercel.app';
+      expect(buildAcceptUrl('abc')).toBe('https://app.carbonprintflow.com/accept-invitation/abc');
       process.env.FRONTEND_URL = 'https://erp.example.test/';
       expect(buildAcceptUrl('abc')).toBe('https://erp.example.test/accept-invitation/abc');
     } finally {

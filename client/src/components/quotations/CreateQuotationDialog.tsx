@@ -12,7 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { CreateCustomerDialog } from "@/components/customers/CreateCustomerDialog";
 import { BillingTotals } from "@/components/billing/BillingTotals";
 import { LinePricingFields } from "@/components/billing/LinePricingFields";
-import { draftTotals, gstRateProblem, lineDraftFrom, lineInput, lineProblem, newLineDraft, type LineDraft } from "@/components/billing/lineDraft";
+import { draftTotals, gstRateProblem, lineDraftFrom, lineDraftFromJobItem, lineInput, lineProblem, newLineDraft, type LineDraft } from "@/components/billing/lineDraft";
 import { useHsnGstRates } from "@/components/billing/useHsnGstRates";
 import { isAreaUnit } from "@/lib/billing";
 import { localDate } from "@/lib/format";
@@ -55,6 +55,29 @@ export interface CreateQuotationDialogProps {
   onQuotationCreated?: () => void;
   /** Line items to start the quotation with, e.g. from the print estimator. */
   initialItems?: QuotationItem[];
+  /** Start a new quotation with the customer and priced work on a job ticket. */
+  initialJob?: {
+    id?: string;
+    _id?: string;
+    title: string;
+    customerId: string | { _id: string };
+    items?: Array<{
+      itemName: string;
+      description?: string;
+      hsnCode?: string;
+      quantity?: number;
+      unit?: string;
+      unitPrice?: number;
+      length?: number;
+      width?: number;
+      itemType?: string;
+      gstRate?: number;
+    }>;
+    designCharge?: { amount: number; gstRate: number } | null;
+    notes?: string;
+    description?: string;
+    pricingDetails?: { discountAmount?: number };
+  };
   /** Edit this quotation (PUT /api/quotations/:id) instead of creating one. */
   quotation?: QuotationRecord | null;
   /** Controlled open state, e.g. when editing from a row action. */
@@ -77,6 +100,7 @@ export const CreateQuotationDialog = ({
   children,
   onQuotationCreated,
   initialItems,
+  initialJob,
   quotation,
   open: openProp,
   onOpenChange,
@@ -151,6 +175,34 @@ export const CreateQuotationDialog = ({
     // fetchCustomers / fetchInventoryItems only read setters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, quotation]);
+
+  // A controlled dialog does not go through DialogTrigger. Prefill it when a
+  // job is chosen, and only once per opening so edits in the form stay put.
+  const prefilledJobFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!open || quotation || !initialJob) {
+      prefilledJobFor.current = null;
+      return;
+    }
+    const jobId = initialJob.id || initialJob._id || "";
+    if (prefilledJobFor.current === jobId) return;
+    prefilledJobFor.current = jobId;
+    fetchCustomers();
+    fetchInventoryItems();
+    setFormData({
+      ...emptyForm,
+      customer_id: typeof initialJob.customerId === "string" ? initialJob.customerId : initialJob.customerId?._id || "",
+      notes: initialJob.notes || initialJob.description || "",
+      design_charge: initialJob.designCharge?.amount ? String(initialJob.designCharge.amount) : "",
+      design_charge_tax_rate: initialJob.designCharge?.amount ? String(initialJob.designCharge.gstRate ?? 0) : "",
+      discount_amount: initialJob.pricingDetails?.discountAmount ? String(initialJob.pricingDetails.discountAmount) : "",
+    });
+    setItems(initialJob.items?.length
+      ? initialJob.items.map((item) => lineDraftFromJobItem(nextKey.current++, item))
+      : [newLineDraft(nextKey.current++, { itemName: initialJob.title })]);
+    // fetchCustomers / fetchInventoryItems only read setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialJob, quotation]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -255,6 +307,7 @@ export const CreateQuotationDialog = ({
     try {
       const payload = {
         customer_id: formData.customer_id,
+        ...(!quotation && initialJob ? { jobId: initialJob._id || initialJob.id } : {}),
         valid_until: formData.valid_until,
         shipping_address: formData.shipping_address,
         payment_link: formData.payment_link,

@@ -40,6 +40,7 @@ import { CreateTaskDialog } from "@/components/staff/CreateTaskDialog";
 import { UpdateStatusDialog } from "@/components/jobs/UpdateStatusDialog";
 import { AdvancedCreateInvoiceDialog } from "@/components/invoices/AdvancedCreateInvoiceDialog";
 import { EditInvoiceDialog } from "@/components/invoices/EditInvoiceDialog";
+import { CreateQuotationDialog } from "@/components/quotations/CreateQuotationDialog";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
@@ -64,6 +65,8 @@ export default function Jobs() {
   const [updateStatusDialog, setUpdateStatusDialog] = useState({ open: false, jobId: "", currentStatus: "" });
   const [showInvoiceDialog, setShowInvoiceDialog] = useState(false);
   const [selectedJob, setSelectedJob] = useState<any>(null);
+  const [quotationJob, setQuotationJob] = useState<any>(null);
+  const [showQuotationDialog, setShowQuotationDialog] = useState(false);
   const [invoiceToEdit, setInvoiceToEdit] = useState<any>(null);
   const [showEditInvoiceDialog, setShowEditInvoiceDialog] = useState(false);
   const { toast } = useToast();
@@ -71,6 +74,7 @@ export default function Jobs() {
   // A login may see job tickets without being able to change them (e.g. the
   // accountant, who bills them); only the actions it holds are offered.
   const canInvoice = hasPermission("Invoicing: Create & Edit");
+  const canQuote = hasPermission("Quotations: Create & Edit");
   const canCreateJob = hasPermission("Jobs: Create & Edit");
   const canChangeStatus = hasPermission("Jobs: Change Status");
   const canAssign = hasPermission("Staff & Tasks: Assign Tasks");
@@ -450,7 +454,7 @@ export default function Jobs() {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        {(canInvoice || canChangeStatus || canAssign || canDeleteJob) && (
+                        {(canInvoice || canQuote || canChangeStatus || canAssign || canDeleteJob) && (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="icon" className="h-8 w-8">
@@ -458,6 +462,15 @@ export default function Jobs() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
+                            {canQuote && job.status !== "cancelled" && (
+                              <DropdownMenuItem onClick={() => {
+                                setQuotationJob(job);
+                                setShowQuotationDialog(true);
+                              }}>
+                                <FileEdit className="h-4 w-4" />
+                                Create quotation
+                              </DropdownMenuItem>
+                            )}
                             {canInvoice && (
                               <>
                                 <DropdownMenuItem onClick={() => handleGenerateInvoice(job)}>
@@ -555,6 +568,17 @@ export default function Jobs() {
             phone: selectedJob.customerPhone,
             company: selectedJob.customerCompany
           }}
+        />
+      )}
+
+      {quotationJob && (
+        <CreateQuotationDialog
+          open={showQuotationDialog}
+          onOpenChange={(open) => {
+            setShowQuotationDialog(open);
+            if (!open) setQuotationJob(null);
+          }}
+          initialJob={quotationJob}
         />
       )}
 

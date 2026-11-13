@@ -214,6 +214,11 @@ const getInvitationEmailTemplate = ({
               <span style="font-weight:700;letter-spacing:2px;color:${BRAND.brown};">CARBON</span>&nbsp;&nbsp;·&nbsp;&nbsp;Print Flow Engine
             </td>
           </tr>
+          <tr>
+            <td align="center" style="padding:8px 24px 0;font-family:${FONT};font-size:12px;line-height:18px;color:${BRAND.muted};">
+              Part of <a href="https://terralabsindustries.com/" target="_blank" style="color:${BRAND.brown};text-decoration:underline;">TerraLabs Industries</a>
+            </td>
+          </tr>
         </table>
       </td>
     </tr>
@@ -238,7 +243,8 @@ const getInvitationEmailTemplate = ({
     '',
     reason,
     '',
-    'Carbon · Print Flow Engine'
+    'Carbon · Print Flow Engine',
+    'Parent company: TerraLabs Industries · https://terralabsindustries.com/'
   ].join('\n');
 
   return { subject, html, text };

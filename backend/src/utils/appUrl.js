@@ -4,13 +4,13 @@
  */
 
 // Where the Carbon web app lives when the server has not been told otherwise.
-const DEFAULT_APP_URL = 'https://erp-delta-one-83.vercel.app';
+const DEFAULT_APP_URL = 'https://app.carbonprintflow.com';
 
 // The SerpY-era web app is still online at these addresses, but it is a
 // different, retired application: it shows a "SerpY desktop" page instead of
 // Carbon's. Older .env files still name it in FRONTEND_URL, so a link must
 // never be built on it.
-const RETIRED_APP_HOST = /(^|\.)serpy\.in$|^serpy\.synxautomate\.com$|^serpy-silk\.vercel\.app$/i;
+const RETIRED_APP_HOST = /(^|\.)serpy\.in$|^serpy\.synxautomate\.com$|^serpy-silk\.vercel\.app$|^erp-delta-one-83\.vercel\.app$/i;
 
 let warnedAbout = null;
 

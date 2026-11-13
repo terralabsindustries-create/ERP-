@@ -5,6 +5,7 @@ const { validate } = require('../middleware/validate');
 const { validationResult } = require('express-validator');
 const Quotation = require('../models/Quotation');
 const Customer = require('../models/Customer');
+const Job = require('../models/Job');
 const Settings = require('../models/Settings');
 const { settingsOwnerId, businessSettings } = require('../utils/businessSettings');
 const PDFService = require('../services/PDFService');
@@ -59,6 +60,7 @@ const router = express.Router();
 
 const quotationValidation = [
   body('customer_id').notEmpty().withMessage('Customer is required'),
+  body('jobId').optional({ values: 'falsy' }).isMongoId().withMessage('Valid job ID is required'),
   body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
   body('items.*.item_name').notEmpty().withMessage('Item name is required'),
   body('items.*.quantity').isFloat({ min: 0.01 }).withMessage('Quantity must be greater than 0'),
@@ -184,6 +186,17 @@ router.post('/', protect, requirePermission('Quotations: Create & Edit'), quotat
     const customer = await Customer.findOne(customerFilter);
     if (!customer) return res.status(404).json({ status: 'error', message: 'Customer not found' });
 
+    let job = null;
+    if (req.body.jobId) {
+      job = await Job.findOne({ _id: req.body.jobId, ...(
+        req.user.dataScope ? { dataScope: req.user.dataScope } : { userId: req.user._id }
+      ) });
+      if (!job) return res.status(404).json({ status: 'error', message: 'Job not found' });
+      if (String(job.customerId) !== String(customer._id)) {
+        return res.status(400).json({ status: 'error', message: 'Job and quotation must have the same customer' });
+      }
+    }
+
     // Priced on the server with the same arithmetic as invoices (area lines
     // are length × width × quantity × rate; the discount comes off before tax;
     // GST at each line's rate and the design charge's own). Client totals are
@@ -196,6 +209,7 @@ router.post('/', protect, requirePermission('Quotations: Create & Edit'), quotat
     const quotation = await Quotation.create({
       quotationNumber,
       customer_id,
+      jobId: job?._id,
       ...priced.fields,
       valid_until: valid_until || null,
       shipping_address: shipping_address || '',
@@ -250,6 +264,8 @@ router.put('/:id', protect, requirePermission('Quotations: Create & Edit'), quot
       {
         $set: {
           customer_id: customer._id,
+          // Editing the customer detaches the quotation from its old job.
+          jobId: existing.jobId && String(existing.customer_id) === String(customer._id) ? existing.jobId : null,
           ...priced.fields,
           valid_until: valid_until || null,
           shipping_address: shipping_address || '',
@@ -374,6 +390,7 @@ router.post('/:id/convert-to-invoice', protect, requirePermission('Quotations: C
     // concurrent invoice takes the number first.
     const invoiceData = {
       customerId: customer._id,
+      ...(quotation.jobId ? { jobId: quotation.jobId } : {}),
       customerName: customer.name,
       customerGstNumber: customer.gstNumber || '',
       customerAddress: customer.address || '',

@@ -2,6 +2,8 @@ import { cn } from "@/lib/utils";
 
 export const PRODUCT_NAME = "Carbon";
 export const PRODUCT_TAGLINE = "Print Flow Engine";
+export const PARENT_COMPANY_NAME = "TerraLabs Industries";
+export const PARENT_COMPANY_URL = "https://terralabsindustries.com/";
 
 export function BrandMark({ className, title = PRODUCT_NAME }: { className?: string; title?: string }) {
   return (

@@ -21,6 +21,7 @@ const { orgScope } = require('../utils/accessScope');
 // Called through the module so tests can stand in for the SMTP transport.
 const mailer = require('../utils/mailer');
 const { appBaseUrl } = require('../utils/appUrl');
+const { getPortalEmailTemplate } = require('../utils/portalEmailTemplate');
 
 /*
   Customer portal
@@ -121,12 +122,17 @@ router.post('/access', protect, requirePermission('Customer Portal: Manage Acces
       } else {
         try {
           const company = req.user.companyName || 'Carbon';
+          const template = getPortalEmailTemplate({
+            customerName: customer.name,
+            companyName: company,
+            link,
+            expiresAt: access.expiresAt
+          });
           await mailer.createTransporter().sendMail({
             from: mailer.getFromAddress(company),
             to: customer.email,
             replyTo: req.user.email,
-            subject: `Your order portal at ${company}`,
-            text: `Hello ${customer.name},\n\nYou can follow your orders, invoices and deliveries with ${company} here:\n${link}\n\nThe link is personal to you and works until ${access.expiresAt.toDateString()}. Please don't forward it.\n\n${company}`
+            ...template
           });
           emailed = true;
         } catch (mailError) {

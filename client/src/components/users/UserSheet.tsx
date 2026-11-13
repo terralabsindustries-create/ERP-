@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, Loader2, Lock, Mail, Send, UsersRound } from "lucide-react";
+import { ChevronDown, Loader2, Lock, Mail, Plus, Send, UsersRound } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -73,6 +73,14 @@ export function UserSheet({ open, onOpenChange, user, roles, teams, onSaved }: U
   const canGrantViewAll = me?.role === "admin" || me?.canViewAllData === true;
   const selectedRole = roles.find((r) => r._id === roleChoice) || null;
   const isCustom = roleChoice === CUSTOM;
+
+  const customizeSelectedRole = () => {
+    if (!selectedRole?.editable) return;
+    setCustomRole(selectedRole.baseRole);
+    setCustomPerms([...selectedRole.permissions]);
+    setCustomViewAll(selectedRole.canViewAllData);
+    setRoleChoice(CUSTOM);
+  };
 
   const unchangedRole = !!user && user.accessRole === roleChoice;
   const changeSummary = useMemo(() => {
@@ -260,6 +268,16 @@ export function UserSheet({ open, onOpenChange, user, roles, teams, onSaved }: U
                 <PermissionMatrix value={selectedRole.permissions} readOnly />
               </CollapsibleContent>
             </Collapsible>
+            {selectedRole.editable && (
+              <div className="border-t px-3 py-3 sm:px-4">
+                <Button type="button" variant="outline" size="sm" onClick={customizeSelectedRole} className="gap-1.5">
+                  <Plus className="h-3.5 w-3.5" /> Add permissions for this person
+                </Button>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Starts with {selectedRole.name}'s permissions. Changes here apply only to this person; later edits to the role won't update their custom access.
+                </p>
+              </div>
+            )}
           </div>
         )}
 

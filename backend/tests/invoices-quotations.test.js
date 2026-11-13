@@ -250,6 +250,49 @@ describe('quotations', () => {
     expect(res.status).toBe(400);
   });
 
+  test('a quotation made from a job keeps that job on its invoice', async () => {
+    const createdJob = await admin().post('/api/jobs', {
+      title: 'Quoted cards', customerId: String(cust._id),
+      items: [{ itemName: 'Cards', quantity: 100, unitPrice: 2, gstRate: 18 }]
+    });
+    expect(createdJob.status).toBe(201);
+    const jobId = createdJob.body.data.job._id;
+    const createdQuote = await admin().post('/api/quotations', {
+      customer_id: String(cust._id), jobId,
+      items: [{ item_name: 'Cards', quantity: 100, unit_price: 2, tax_rate: 18 }]
+    });
+    expect(createdQuote.status).toBe(201);
+    expect(createdQuote.body.data.quotation.jobId).toBe(jobId);
+
+    const converted = await admin().post(`/api/quotations/${createdQuote.body.data.quotation._id}/convert-to-invoice`, {});
+    expect(converted.status).toBe(201);
+    expect(converted.body.data.invoice.jobId).toBe(jobId);
+    const listed = await admin().get('/api/jobs?limit=100');
+    expect(listed.body.data.jobs.find((job) => job._id === jobId).invoices).toEqual(
+      expect.arrayContaining([expect.objectContaining({ _id: converted.body.data.invoice._id })])
+    );
+  });
+
+  test('a quotation cannot attach another customer or business\'s job', async () => {
+    const ownJob = await admin().post('/api/jobs', { title: 'Own job', customerId: String(cust._id) });
+    const anotherCustomer = await make.customer(org.admin, { name: 'Another customer' });
+    const line = [{ item_name: 'Cards', quantity: 1, unit_price: 100 }];
+    const mismatched = await admin().post('/api/quotations', {
+      customer_id: String(anotherCustomer._id), jobId: ownJob.body.data.job._id, items: line
+    });
+    expect(mismatched.status).toBe(400);
+
+    const otherOrg = await createOrg('quote-other');
+    const otherCustomer = await make.customer(otherOrg.admin, { name: 'Other business customer' });
+    const otherJob = await as(otherOrg.tokens.admin).post('/api/jobs', {
+      title: 'Other business job', customerId: String(otherCustomer._id)
+    });
+    const forbidden = await admin().post('/api/quotations', {
+      customer_id: String(cust._id), jobId: otherJob.body.data.job._id, items: line
+    });
+    expect(forbidden.status).toBe(404);
+  });
+
   test('the PDF shows the dimensions and the design charge', async () => {
     const stored = await Quotation.findById(quotation._id).populate('customer_id');
     const d = PDFService.quotationDocument(stored, company);

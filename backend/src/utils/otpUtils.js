@@ -92,7 +92,7 @@ const getOTPEmailTemplate = (otp, fullName) => {
             </td></tr>
           </table>
         </td></tr>
-        <tr><td align="center" style="padding:22px 24px 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:18px;color:#85735a;">This is an automated message from Carbon · Print Flow Engine.</td></tr>
+        <tr><td align="center" style="padding:22px 24px 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:18px;color:#85735a;">Carbon is part of <a href="https://terralabsindustries.com/" style="color:#704a00;text-decoration:underline;">TerraLabs Industries</a>.<br>This is an automated message from Carbon · Print Flow Engine.</td></tr>
       </table>
     </td></tr>
   </table>
@@ -110,7 +110,8 @@ const getOTPEmailTemplate = (otp, fullName) => {
       'This code expires in 10 minutes. Never share it with anyone.',
       "If you didn't sign up for Carbon, you can ignore this email.",
       '',
-      'Carbon · Print Flow Engine'
+      'Carbon · Print Flow Engine',
+      'Parent company: TerraLabs Industries · https://terralabsindustries.com/'
     ].join('\n')
   };
 };

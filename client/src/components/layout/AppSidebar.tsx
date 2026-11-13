@@ -13,7 +13,7 @@ import {
   SidebarMenuButton,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { BrandLogo, BrandMark, PRODUCT_NAME } from "@/components/brand/BrandMark";
+import { BrandLogo, BrandMark, PARENT_COMPANY_NAME, PARENT_COMPANY_URL, PRODUCT_NAME } from "@/components/brand/BrandMark";
 import { NAVIGATION } from "./navigation";
 import { cn } from "@/lib/utils";
 
@@ -101,6 +101,14 @@ export function AppSidebar() {
               <span>{PRODUCT_NAME} · v2.0</span>
               <span className="cmyk-strip h-1 w-8 rounded-full" aria-hidden />
             </div>
+            <a
+              href={PARENT_COMPANY_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block text-[11px] text-sidebar-muted underline-offset-2 hover:text-sidebar-foreground hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+            >
+              Parent company: {PARENT_COMPANY_NAME}
+            </a>
           </div>
         )}
       </SidebarFooter>

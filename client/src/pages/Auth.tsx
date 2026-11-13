@@ -13,7 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Eye, EyeOff, AlertCircle, UserCheck } from "lucide-react";
-import { BrandLogo } from "@/components/brand/BrandMark";
+import { BrandLogo, PARENT_COMPANY_NAME, PARENT_COMPANY_URL } from "@/components/brand/BrandMark";
 import { useAuth } from "@/contexts/AuthContext";
 import { OTPVerification } from "@/components/auth/OTPVerification";
 import { ForgotPassword } from "@/components/auth/ForgotPassword";
@@ -482,7 +482,13 @@ export default function Auth() {
         {/* Footer */}
         <footer className="border-t px-5 py-4 sm:px-8">
           <div className="mx-auto flex max-w-[400px] flex-col items-center gap-2 text-xs text-muted-foreground sm:max-w-none sm:flex-row sm:justify-between">
-            <p>© 2026 TerraLabs Industries. All rights reserved.</p>
+            <p>
+              Carbon is part of{" "}
+              <a href={PARENT_COMPANY_URL} target="_blank" rel="noopener noreferrer" className="font-medium text-foreground hover:underline underline-offset-2">
+                {PARENT_COMPANY_NAME}
+              </a>
+              .
+            </p>
             <nav className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
               <Link to="/terms-and-conditions" className="hover:text-foreground hover:underline underline-offset-2">Terms</Link>
               <Link to="/privacy-policy" className="hover:text-foreground hover:underline underline-offset-2">Privacy</Link>

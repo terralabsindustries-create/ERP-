@@ -41,6 +41,8 @@ const quotationSchema = new mongoose.Schema({
     ref: 'Customer',
     required: [true, 'Customer is required']
   },
+  // A quotation started from a job remains attached when converted to an invoice.
+  jobId: { type: mongoose.Schema.Types.ObjectId, ref: 'Job' },
   // 'gst' when the quotation carries any GST. is_interstate: the GST is IGST
   // (supply to another state) rather than CGST + SGST.
   gst_type: {

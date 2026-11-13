@@ -11,6 +11,8 @@ const PortalSession = require('../src/models/PortalSession');
 const { connectTestDb, disconnectTestDb } = require('./helpers/db');
 const { createOrg, auth } = require('./helpers/fixtures');
 const make = require('./helpers/factories');
+const mailer = require('../src/utils/mailer');
+const { getPortalEmailTemplate } = require('../src/utils/portalEmailTemplate');
 
 let org;
 let lotus;
@@ -61,6 +63,40 @@ describe('issuing links', () => {
     expect(stored.tokenHash).toBe(PortalSession.hashToken(token));
     expect(stored.tokenHash).not.toContain(token);
     expect(JSON.stringify(res.body.data.access)).not.toContain('tokenHash');
+  });
+
+  test('emails a branded portal link on the Carbon domain', async () => {
+    const previousUrl = process.env.FRONTEND_URL;
+    const sendMail = jest.fn().mockResolvedValue({});
+    const transport = jest.spyOn(mailer, 'createTransporter').mockReturnValue({ sendMail });
+    try {
+      process.env.FRONTEND_URL = 'https://erp-delta-one-83.vercel.app';
+      const res = await createLink(org.tokens.admin, lotus, { sendEmail: true, expiresInDays: 7 });
+      expect(res.status).toBe(201);
+      expect(res.body.data.emailed).toBe(true);
+      expect(res.body.data.link).toMatch(/^https:\/\/app\.carbonprintflow\.com\/customer-portal\//);
+      expect(sendMail).toHaveBeenCalledTimes(1);
+      const message = sendMail.mock.calls[0][0];
+      expect(message.html).toContain(res.body.data.link);
+      expect(message.text).toContain(res.body.data.link);
+      expect(message.html).toContain('Open customer portal');
+      expect(message.text).toContain('Keep it to yourself');
+    } finally {
+      process.env.FRONTEND_URL = previousUrl;
+      transport.mockRestore();
+    }
+  });
+
+  test('the portal email escapes customer and business names', () => {
+    const { html } = getPortalEmailTemplate({
+      customerName: '<script>alert(1)</script>',
+      companyName: 'Print & Co',
+      link: 'https://app.carbonprintflow.com/customer-portal/test',
+      expiresAt: new Date('2026-11-20T00:00:00Z')
+    });
+    expect(html).toContain('&lt;script&gt;');
+    expect(html).toContain('Print &amp; Co');
+    expect(html).not.toContain('<script>');
   });
 });
 
