@@ -121,6 +121,7 @@ app.use('/api', (req, res, next) => {
 });
 
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/proof-share', require('./routes/proofShare'));
 
 guarded('/api/customers', require('./routes/customers'), {
   read: SALES_LOOKUPS,

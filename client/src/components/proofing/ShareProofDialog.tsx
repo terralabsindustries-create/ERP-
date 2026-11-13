@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Copy, Download, Loader2, MessageCircle, Send } from "lucide-react";
+import { Copy, Download, Loader2, Mail, MessageCircle, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -8,12 +9,12 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { downloadProofFile, proofsApi, type Proof, type SendChannel } from "@/lib/api/proofs";
-import { SEND_CHANNELS, customerPhoneOf, fmtPhone, proofMessage, waLink, waNumber } from "./proofMeta";
+import { ProofFiles } from "./ProofFiles";
+import { SEND_CHANNELS, customerEmailOf, customerPhoneOf, fmtPhone, proofMessage, waLink, waNumber } from "./proofMeta";
 
 /**
- * Send a proof to the customer. Nothing is sent from here: it prepares the
- * message for WhatsApp (or to copy), offers the files to attach, and — when
- * `markSent` — records that the proof went out.
+ * Send a proof by email with attachments, or share signed artwork links by
+ * WhatsApp. WhatsApp opens a prepared chat; its final send stays with the user.
  */
 export function ShareProofDialog({
   proof,
@@ -35,6 +36,8 @@ export function ShareProofDialog({
   const [via, setVia] = useState<SendChannel>("whatsapp");
   const [saving, setSaving] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [loadingLinks, setLoadingLinks] = useState(false);
+  const [email, setEmail] = useState("");
 
   const phone = proof ? customerPhoneOf(proof) : "";
   const canWhatsApp = !!waNumber(phone);
@@ -42,9 +45,19 @@ export function ShareProofDialog({
   useEffect(() => {
     if (open && proof) {
       setMessage(proofMessage(proof, user?.companyName));
+      setEmail(customerEmailOf(proof));
       setVia(waNumber(customerPhoneOf(proof)) ? "whatsapp" : "other");
+      setLoadingLinks(true);
+      let active = true;
+      proofsApi.shareLinks(proof._id)
+        .then((links) => { if (active) setMessage(proofMessage(proof, user?.companyName, links)); })
+        .catch((error) => {
+          if (active) toast({ title: "Artwork links unavailable", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+        })
+        .finally(() => { if (active) setLoadingLinks(false); });
+      return () => { active = false; };
     }
-  }, [open, proof, user?.companyName]);
+  }, [open, proof, user?.companyName, toast]);
 
   if (!proof) return null;
 
@@ -82,6 +95,25 @@ export function ShareProofDialog({
     }
   };
 
+  const sendEmail = async () => {
+    if (!email.trim()) {
+      toast({ title: "Enter the customer's email", variant: "destructive" });
+      return;
+    }
+    setSaving(true);
+    try {
+      const emailMessage = message.replace("Attach the proof files before sending this message.", "The proof files are attached to this email.");
+      const updated = await proofsApi.sendEmail(proof._id, email.trim(), emailMessage);
+      toast({ title: "Proof emailed", description: `${proof.files.length} artwork file${proof.files.length === 1 ? "" : "s"} attached for ${email.trim()}.` });
+      onSent?.(updated);
+      onOpenChange(false);
+    } catch (error) {
+      toast({ title: "Email not sent", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={(o) => !saving && onOpenChange(o)}>
       <DialogContent className="max-h-[92vh] max-w-lg overflow-y-auto">
@@ -95,17 +127,21 @@ export function ShareProofDialog({
 
         <div className="space-y-3">
           <div className="space-y-1.5">
+            <Label>Uploaded artwork</Label>
+            <ProofFiles files={proof.files} />
+          </div>
+          <div className="space-y-1.5">
             <Label htmlFor="share-message">Message</Label>
             <Textarea id="share-message" rows={10} value={message} onChange={(e) => setMessage(e.target.value)} className="text-sm" />
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={copy}>
+            <Button type="button" variant="outline" size="sm" onClick={copy} disabled={loadingLinks}>
               <Copy />
               Copy message
             </Button>
             {canWhatsApp ? (
               <Button type="button" variant="outline" size="sm" asChild>
-                <a href={waLink(phone, message)} target="_blank" rel="noopener noreferrer" onClick={() => setVia("whatsapp")}>
+                <a href={loadingLinks ? undefined : waLink(phone, message)} target="_blank" rel="noopener noreferrer" onClick={(e) => { if (loadingLinks) e.preventDefault(); else setVia("whatsapp"); }}>
                   <MessageCircle />
                   Open WhatsApp
                 </a>
@@ -121,9 +157,19 @@ export function ShareProofDialog({
               {proof.files.length === 1 ? "Download file" : `Download ${proof.files.length} files`}
             </Button>
           </div>
+          <div className="flex flex-wrap items-end gap-2 border-t pt-3">
+            <div className="min-w-48 flex-1 space-y-1.5">
+              <Label htmlFor="proof-email">Customer email</Label>
+              <Input id="proof-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="customer@example.com" />
+            </div>
+            <Button type="button" onClick={sendEmail} disabled={saving || loadingLinks || !email.trim()}>
+              {saving ? <Loader2 className="animate-spin" /> : <Mail />}
+              Email with artwork
+            </Button>
+          </div>
           <p className="text-xs text-muted-foreground">
             {canWhatsApp
-              ? "WhatsApp opens with this message filled in. Attach the proof file in the chat before sending."
+              ? "WhatsApp opens with links to the uploaded artwork. Check the chat and send the message there."
               : "This customer has no usable phone number. Add one on the customer to send by WhatsApp, or copy the message."}
           </p>
           {markSent && (

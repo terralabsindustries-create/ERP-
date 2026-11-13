@@ -163,6 +163,9 @@ export const proofsApi = {
   update: (id: string, input: Partial<ProofInput>) => apiClient.put<One>(`/proofs/${id}`, input).then((r) => r.proof),
   remove: (id: string) => apiClient.delete<unknown>(`/proofs/${id}`),
   send: (id: string, sentVia?: SendChannel) => apiClient.post<One>(`/proofs/${id}/send`, { sentVia }).then((r) => r.proof),
+  shareLinks: (id: string) => apiClient.get<{ files: Array<{ fileId: string; fileName: string; path: string }> }>(`/proofs/${id}/share-links`)
+    .then((r) => r.files.map((file) => ({ name: file.fileName, url: `${BASE_URL}${file.path}` }))),
+  sendEmail: (id: string, email: string, message: string) => apiClient.post<One>(`/proofs/${id}/send-email`, { email, message }).then((r) => r.proof),
   approve: (id: string, input: { approvedByName?: string; channel?: ApprovalChannel; approvalNotes?: string }) =>
     apiClient.put<One>(`/proofs/${id}/approve`, input).then((r) => r.proof),
   reject: (id: string, rejectionReason: string) => apiClient.put<One>(`/proofs/${id}/reject`, { rejectionReason }).then((r) => r.proof),

@@ -7,6 +7,8 @@
  */
 const express = require('express');
 const mongoose = require('mongoose');
+const fs = require('fs');
+const path = require('path');
 const { body, query, param } = require('express-validator');
 const Proof = require('../models/Proof');
 const Job = require('../models/Job');
@@ -16,6 +18,8 @@ const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { orgUserFilter, orgScope } = require('../utils/accessScope');
+const { sharePath } = require('../utils/proofShare');
+const { createTransporter, getFromAddress, sendMailErrorResponse } = require('../utils/mailer');
 
 const router = express.Router();
 
@@ -344,6 +348,72 @@ router.put('/:id', protect, updateRules, validate, async (req, res) => {
     return respondWithProof(res, proof._id, 'Proof updated');
   } catch (error) {
     serverError(res, 'Updating proof', error);
+  }
+});
+
+// @route   POST /api/proofs/:id/send
+// @route   GET /api/proofs/:id/share-links
+// @desc    Signed, expiring links to the current proof files for customers
+router.get('/:id/share-links', protect, idParam, validate, async (req, res) => {
+  try {
+    const proof = await findProof(req);
+    if (!proof) return notFound(res);
+    const files = proof.files.filter((file) => file.fileId).map((file) => ({
+      fileId: String(file.fileId),
+      fileName: file.fileName,
+      path: sharePath(proof, file)
+    }));
+    return res.json({ status: 'success', data: { files } });
+  } catch (error) {
+    return serverError(res, 'Creating proof links', error);
+  }
+});
+
+// @route   POST /api/proofs/:id/send-email
+// @desc    Email the current artwork as attachments, then mark it sent
+router.post('/:id/send-email', protect, [
+  ...idParam,
+  body('email').isEmail().withMessage('Enter a valid customer email'),
+  body('message').isString().trim().notEmpty().isLength({ max: 10000 }).withMessage('Enter a message under 10,000 characters')
+], validate, async (req, res) => {
+  try {
+    const proof = await findProof(req);
+    if (!proof) return notFound(res);
+    if (proof.status === 'approved' || proof.status === 'rejected') {
+      return res.status(400).json({ status: 'error', message: 'This proof cannot be sent. Upload a new version if changes were requested.' });
+    }
+    const attachments = [];
+    for (const file of proof.files) {
+      if (!file.fileUrl?.startsWith('/uploads/files/')) {
+        return res.status(404).json({ status: 'error', message: `The proof file ${file.fileName} is unavailable` });
+      }
+      const filePath = path.join(process.cwd(), 'uploads/files', path.basename(file.fileUrl));
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ status: 'error', message: `The proof file ${file.fileName} is missing from the server` });
+      }
+      attachments.push({ filename: file.fileName, path: filePath, contentType: file.mimeType || undefined });
+    }
+    const safe = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+    const transporter = createTransporter();
+    await transporter.sendMail({
+      from: getFromAddress(req.user.companyName || 'Carbon'),
+      to: req.body.email,
+      subject: `Artwork approval needed · ${proof.proofNumber}`,
+      text: req.body.message,
+      html: `<div style="font-family:Arial,sans-serif;max-width:640px;margin:auto;color:#201810"><h2 style="color:#795000">Artwork approval</h2><p style="white-space:pre-wrap;line-height:1.6">${safe(req.body.message)}</p></div>`,
+      attachments
+    });
+    const resend = ACTIVE.includes(proof.status);
+    proof.markSent(req.user, 'email');
+    proof.customerEmail = req.body.email;
+    proof.notifications.emailSent = true;
+    if (resend) proof.notifications.reminderSentAt = new Date();
+    await proof.save();
+    log(req, proof, resend ? 'Proof Re-sent' : 'Proof Sent', 'send', `Proof ${proof.proofNumber} v${proof.version} emailed to ${req.body.email}`);
+    return respondWithProof(res, proof._id, 'Proof emailed with artwork attached');
+  } catch (error) {
+    if (error.code || error.responseCode) return sendMailErrorResponse(res, error, 'Sending proof email');
+    return serverError(res, 'Sending proof email', error);
   }
 });
 

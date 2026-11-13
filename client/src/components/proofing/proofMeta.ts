@@ -31,6 +31,7 @@ export const jobTitleOf = (p: Proof) => jobOf(p)?.title || p.jobTitle || "Remove
 export const customerOf = (p: Proof): ProofCustomerRef | null => (p.customerId && typeof p.customerId === "object" ? p.customerId : null);
 export const jobCustomerName = (j: JobOption) => (j.customerId && typeof j.customerId === "object" ? j.customerId.name : j.customerName || "");
 export const customerPhoneOf = (p: Proof) => customerOf(p)?.phone || p.customerPhone || "";
+export const customerEmailOf = (p: Proof) => customerOf(p)?.email || p.customerEmail || "";
 
 /** Indian numbers as "+91 98470 00000"; anything else is shown as typed. */
 export function fmtPhone(raw?: string) {
@@ -105,7 +106,7 @@ export function replyDue(p: Proof): { text: string; overdue: boolean } | null {
 }
 
 /** The message a person sends the customer with the proof (WhatsApp or copied). */
-export function proofMessage(p: Proof, company?: string) {
+export function proofMessage(p: Proof, company?: string, links: Array<{ name: string; url: string }> = []) {
   const files = p.files?.length || 0;
   const specs = specLine(p.specifications);
   const lines: (string | null)[] = [
@@ -119,7 +120,9 @@ export function proofMessage(p: Proof, company?: string) {
     specs ? `Specs: ${specs}` : null,
     p.version > 1 && p.versionNotes ? `What changed: ${p.versionNotes}` : null,
     "",
-    files ? `${files === 1 ? "The proof file is" : `The ${files} proof files are`} shared with this message.` : null,
+    files ? "View the uploaded artwork:" : null,
+    ...links.map((file) => `${file.name}: ${file.url}`),
+    files && !links.length ? "Attach the proof files before sending this message." : null,
     'Please check the text, spelling, colours and layout carefully. Reply "Approved" to go ahead with printing, or tell us what to change.',
     "",
     "Thank you,",

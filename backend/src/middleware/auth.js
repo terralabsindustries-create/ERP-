@@ -176,6 +176,7 @@ const sendTokenResponse = (user, statusCode, res, message = 'Success') => {
 };
 
 module.exports = {
+  jwtSecret,
   protect,
   authorize,
   optionalAuth,

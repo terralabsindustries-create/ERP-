@@ -4,9 +4,13 @@
  * counts, validation, and isolation between businesses.
  */
 const request = require('supertest');
+const fs = require('fs');
+const path = require('path');
+const nodemailer = require('nodemailer');
 const app = require('../src/app');
 const Proof = require('../src/models/Proof');
 const File = require('../src/models/File');
+const { validShare } = require('../src/utils/proofShare');
 const { connectTestDb, disconnectTestDb } = require('./helpers/db');
 const { createOrg, auth } = require('./helpers/fixtures');
 const make = require('./helpers/factories');
@@ -141,6 +145,60 @@ describe('creating a proof', () => {
     const otherFile = await asA('post', '/api/proofs').send({ jobId: aJob._id, title: 'Steal file', files: [{ fileId: fb._id }] });
     expect(otherFile.status).toBe(400);
     expect(otherFile.body.message).toMatch(/not found/i);
+  });
+});
+
+describe('sharing artwork', () => {
+  const filePath = path.join(process.cwd(), 'uploads/files/artwork.pdf');
+
+  beforeAll(() => {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, '%PDF-1.4 proof artwork');
+  });
+  afterAll(() => fs.rmSync(filePath, { force: true }));
+
+  test('a signed link opens the uploaded file, but a changed link or another business cannot issue one', async () => {
+    const proof = (await newProof()).body.data.proof;
+    const links = await asA('get', `/api/proofs/${proof._id}/share-links`);
+    expect(links.status).toBe(200);
+    expect(links.body.data.files).toHaveLength(1);
+    const link = `/api${links.body.data.files[0].path}`;
+    const artwork = await request(app).get(link);
+    expect(artwork.status).toBe(200);
+    expect(artwork.body.toString()).toContain('proof artwork');
+    expect((await request(app).get(`${link.slice(0, -1)}${link.endsWith('0') ? '1' : '0'}`)).status).toBe(404);
+    expect((await asB('get', `/api/proofs/${proof._id}/share-links`)).status).toBe(404);
+    const [, , , , fileId, expires, signature] = link.split('/');
+    const saved = await Proof.findById(proof._id);
+    expect(validShare(saved, fileId, expires, signature, Number(expires) + 1)).toBe(false);
+    saved.version += 1;
+    expect(validShare(saved, fileId, expires, signature)).toBe(false);
+  });
+
+  test('email includes the uploaded file and only then marks the proof sent', async () => {
+    const proof = (await newProof()).body.data.proof;
+    const oldUser = process.env.EMAIL_USER;
+    const oldPass = process.env.EMAIL_PASS;
+    process.env.EMAIL_USER = 'carbon@example.test';
+    process.env.EMAIL_PASS = 'test-app-password';
+    const sendMail = jest.fn().mockResolvedValue({ accepted: ['customer@example.test'] });
+    const transport = jest.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail });
+    try {
+      const sent = await asA('post', `/api/proofs/${proof._id}/send-email`).send({
+        email: 'customer@example.test', message: 'Please review the attached artwork.'
+      });
+      expect(sent.status).toBe(200);
+      expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({
+        to: 'customer@example.test',
+        attachments: [expect.objectContaining({ filename: 'artwork.pdf', path: filePath })]
+      }));
+      expect(sent.body.data.proof.status).toBe('sent');
+      expect(sent.body.data.proof.notifications.emailSent).toBe(true);
+    } finally {
+      transport.mockRestore();
+      if (oldUser === undefined) delete process.env.EMAIL_USER; else process.env.EMAIL_USER = oldUser;
+      if (oldPass === undefined) delete process.env.EMAIL_PASS; else process.env.EMAIL_PASS = oldPass;
+    }
   });
 });
 
