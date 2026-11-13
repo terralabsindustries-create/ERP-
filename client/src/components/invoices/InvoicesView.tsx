@@ -10,6 +10,7 @@ import { AdvancedCreateInvoiceDialog } from "@/components/invoices/AdvancedCreat
 import { ViewInvoiceDialog, type InvoiceSendChannel } from "@/components/invoices/ViewInvoiceDialog";
 import { EditInvoiceDialog } from "@/components/invoices/EditInvoiceDialog";
 import { InvoicePaymentDialog } from "@/components/invoices/InvoicePaymentDialog";
+import { InvoicePaymentReconciliation, type InvoicePaymentBreakdown } from "@/components/invoices/InvoicePaymentReconciliation";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useDebounced } from "@/hooks/useDebounced";
@@ -51,7 +52,7 @@ interface PendingJob {
 type View = "all" | "unpaid" | "overdue" | "paid" | "draft" | "cancelled" | "to_invoice";
 const PAGE_SIZE = 25;
 
-interface ViewStats {
+interface ViewStats extends InvoicePaymentBreakdown {
   all: number;
   unpaid: number;
   overdue: number;
@@ -349,10 +350,12 @@ export function InvoicesView() {
             onClick: () => setView(view === "overdue" ? "all" : "overdue"),
             active: view === "overdue"
           },
-          { label: "Collected", value: compact(s?.collected), hint: `Of ${compact(s?.invoiced)} invoiced`, tone: "success" },
+          { label: "Paid against invoices", value: compact(s?.collected), hint: `${compact(s?.recordedOnInvoices)} receipts · ${compact(s?.recordedOutsidePayments)} direct`, tone: "success" },
           { label: "This month", value: compact(s?.invoicedThisMonth), hint: `${s?.countThisMonth || 0} invoice${s?.countThisMonth === 1 ? "" : "s"} issued` }
         ]}
       />
+
+      <InvoicePaymentReconciliation breakdown={s} />
 
       <div className="space-y-4">
         <ViewTabs<View>

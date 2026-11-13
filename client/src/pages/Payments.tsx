@@ -7,6 +7,7 @@ import { PageShell } from "@/components/layout/PageShell";
 import { ConfirmDialog, DataCard, DataTable, EntityCell, FilterSelect, MetricBar, Pagination, SearchField, StatusPill, Toolbar, ViewTabs, type Column, type PillTone } from "@/components/data";
 import { CreatePaymentDialog } from "@/components/payments/CreatePaymentDialog";
 import { ApplyPaymentDialog } from "@/components/payments/ApplyPaymentDialog";
+import { InvoicePaymentReconciliation, type InvoicePaymentBreakdown } from "@/components/invoices/InvoicePaymentReconciliation";
 import { METHOD_LABELS, STATUS_META, appliedToLabel, type PaymentRecord, type PaymentStatus, type PaymentSummary } from "@/components/payments/paymentMeta";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -33,6 +34,7 @@ export default function Payments() {
   const canRecord = hasPermission("Payments: Record Payment");
   const canDelete = hasPermission("Payments: Delete");
   const [data, setData] = useState<PaymentsResponse | null>(null);
+  const [invoiceBreakdown, setInvoiceBreakdown] = useState<InvoicePaymentBreakdown | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const q = useDebounced(search.trim());
@@ -61,6 +63,11 @@ export default function Payments() {
   useEffect(() => {
     load();
   }, [load]);
+  useEffect(() => {
+    apiClient.getInvoiceViewStats()
+      .then((response) => setInvoiceBreakdown(response.stats as unknown as InvoicePaymentBreakdown))
+      .catch(() => setInvoiceBreakdown(null));
+  }, [data]);
   useEffect(() => setPage(1), [q, view, method]);
 
   const setStatus = async (p: PaymentRecord, status: PaymentStatus) => {
@@ -172,6 +179,8 @@ export default function Payments() {
           }
         ]}
       />
+
+      <InvoicePaymentReconciliation breakdown={invoiceBreakdown} />
 
       <div className="space-y-4">
         <ViewTabs<View>

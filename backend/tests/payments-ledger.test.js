@@ -515,6 +515,9 @@ describe('balance correction (amounts recorded outside payments)', () => {
     // An older invoice: 500 paid on it, of which 300 are payments → 200 manual.
     await Invoice.updateOne({ _id: inv._id }, { $inc: { paidAmount: 200, balanceAmount: -200 } });
     expect((await details(inv)).paymentSummary).toEqual({ recordedAmount: 300, manualPaidAmount: 200 });
+    const beforeViews = (await admin.get('/api/invoices/stats/views')).body.data.stats;
+    expect(beforeViews.directEntries).toContainEqual({ invoiceNumber: inv.invoiceNumber, amount: 200 });
+    expect(beforeViews.recordedOutsidePayments).toBeCloseTo(200, 2);
 
     const url = `/api/invoices/${inv._id}/payment-status`;
     expect((await admin.patch(url, { manualPaidAmount: 100 })).body.code).toBe('REASON_REQUIRED');
@@ -526,6 +529,10 @@ describe('balance correction (amounts recorded outside payments)', () => {
     const fixed = await admin.patch(url, { manualPaidAmount: 700, reason: 'Cash received in October, before Carbon' });
     expect(fixed.status).toBe(200);
     expect(fixed.body.data.paymentSummary).toEqual({ recordedAmount: 300, manualPaidAmount: 700 });
+    const afterViews = (await admin.get('/api/invoices/stats/views')).body.data.stats;
+    expect(afterViews.directEntries).toContainEqual({ invoiceNumber: inv.invoiceNumber, amount: 700 });
+    expect(afterViews.recordedOnInvoices).toBeCloseTo(beforeViews.recordedOnInvoices, 2);
+    expect(afterViews.recordedOutsidePayments).toBeCloseTo(700, 2);
     expect(await state(inv)).toMatchObject({ paidAmount: 1000, balanceAmount: 0, paymentStatus: 'paid', status: 'paid' });
 
     // Payments still move it as before, around the manual part.

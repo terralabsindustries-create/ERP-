@@ -827,9 +827,33 @@ router.get('/stats/views', protect, async (req, res) => {
         }
       }
     ]);
+    // paidAmount also includes direct balance entries, including old invoices
+    // created before manualPaidAmount was stored. Reconcile against actual
+    // completed payment allocations so the UI can explain the difference.
+    const paidInvoices = await Invoice.find({ $and: [staffScopeQuery(req.user), noGstVisibility(req.user), ISSUED, { paidAmount: { $gt: 0 } }] })
+      .select('_id invoiceNumber paidAmount')
+      .lean();
+    const invoiceIds = paidInvoices.map((invoice) => invoice._id);
+    const receipts = invoiceIds.length ? await Payment.find({
+      status: 'completed',
+      $or: [{ invoiceId: { $in: invoiceIds } }, { 'allocations.invoiceId': { $in: invoiceIds } }]
+    }).select('invoiceId allocations amount').lean() : [];
+    const recordedByInvoice = new Map(invoiceIds.map((id) => [String(id), 0]));
+    for (const receipt of receipts) {
+      for (const allocation of ledger.allocationsOf(receipt)) {
+        const id = String(allocation.invoiceId);
+        if (recordedByInvoice.has(id)) recordedByInvoice.set(id, ledger.round2(recordedByInvoice.get(id) + allocation.amount));
+      }
+    }
+    const directEntries = paidInvoices.map((invoice) => ({
+      invoiceNumber: invoice.invoiceNumber,
+      amount: Math.max(0, ledger.round2(invoice.paidAmount - (recordedByInvoice.get(String(invoice._id)) || 0)))
+    })).filter((entry) => entry.amount > 0);
+    const recordedOnInvoices = ledger.round2(paidInvoices.reduce((total, invoice) => total + (recordedByInvoice.get(String(invoice._id)) || 0), 0));
+    const recordedOutsidePayments = ledger.round2(directEntries.reduce((total, entry) => total + entry.amount, 0));
     const empty = { all: 0, draft: 0, cancelled: 0, paid: 0, unpaid: 0, overdue: 0, invoiced: 0, outstanding: 0, overdueAmount: 0, collected: 0, invoicedThisMonth: 0, countThisMonth: 0 };
     const { _id, ...stats } = row || {};
-    res.json({ status: 'success', data: { stats: { ...empty, ...stats } } });
+    res.json({ status: 'success', data: { stats: { ...empty, ...stats, recordedOnInvoices, recordedOutsidePayments, directEntries } } });
   } catch (error) {
     console.error('Invoice view stats error:', error);
     res.status(500).json({ status: 'error', message: 'Server error while fetching invoice statistics' });
