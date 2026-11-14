@@ -5,7 +5,7 @@ import { EmptyState } from "@/components/common/EmptyState";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { PageShell } from "@/components/layout/PageShell";
 import { DataCard, DataTable, FilterSelect, MetricBar, Pagination, SearchField, Stack, Tag, Toolbar, ViewTabs, type Column } from "@/components/data";
-import { QuickReceivePaymentDialog } from "@/components/accounts/QuickReceivePaymentDialog";
+import { CreatePaymentDialog } from "@/components/payments/CreatePaymentDialog";
 import { NewTransactionDialog } from "@/components/accounts/NewTransactionDialog";
 import { AccountsReports } from "@/components/accounts/AccountsReports";
 import { BankReconciliation } from "@/components/accounts/BankReconciliation";
@@ -293,7 +293,7 @@ export default function Accounts() {
       </div>
 
       <NewTransactionDialog open={dialog === "new"} onOpenChange={(o) => !o && setDialog(null)} onTransactionCreated={refresh} />
-      <QuickReceivePaymentDialog open={dialog === "receive"} onOpenChange={(o) => !o && setDialog(null)} onPaymentRecorded={refresh} />
+      <CreatePaymentDialog open={dialog === "receive"} onOpenChange={(o) => !o && setDialog(null)} onPaymentCreated={refresh} />
     </PageShell>
   );
 }

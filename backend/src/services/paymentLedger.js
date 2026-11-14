@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const Invoice = require('../models/Invoice');
 const Payment = require('../models/Payment');
+const AccountTransaction = require('../models/AccountTransaction');
 const transactions = require('../utils/transactions');
 
 /**
@@ -209,6 +210,36 @@ async function commitPaymentChange({ before, after, write, undoWrite }) {
       await movePaid(invoiceId, delta, { session });
       onUndo(() => movePaid(invoiceId, -delta));
     }
+    // The cash/bank side belongs to the same write as the receipt and its
+    // invoice allocations. Standalone MongoDB uses the same undo stack.
+    const source = after ? result : before;
+    const accountId = source._id;
+    const existing = await AccountTransaction.findOne({ sourcePaymentId: accountId }).session(session).lean();
+    // Existing receipts may already have a manually entered account entry.
+    // Do not invent a second one when an old receipt is edited or deleted.
+    if (before && !existing) return result;
+    if (existing?.reconciled) throw new LedgerError('This payment has a reconciled account entry. Undo its reconciliation before changing the payment.', 409, 'PAYMENT_RECONCILED');
+    const allocations = allocationsOf(source);
+    const singleInvoice = allocations.length === 1 ? idOf(allocations[0].invoiceId) : null;
+    const accountData = {
+      transactionType: 'income', category: 'sales', amount: round2(source.amount),
+      description: `Customer payment from ${source.customerName || 'customer'} (${source.paymentId})`,
+      postedAt: source.paymentDate || new Date(), paymentMethod: source.paymentMethod,
+      accountType: source.paymentMethod === 'cash' ? 'cash' : 'bank',
+      accountName: source.paymentMethod === 'cash' ? 'Cash Account' : 'Bank Account',
+      reference: source.paymentId, referenceNumber: source.referenceNumber,
+      customerId: idOf(source.customerId), invoiceId: singleInvoice,
+      sourcePaymentId: accountId, userId: idOf(source.userId), dataScope: source.dataScope,
+      status: after ? source.status === 'completed' ? 'completed' : source.status === 'pending' ? 'pending' : 'reversed' : 'reversed'
+    };
+    await AccountTransaction.findOneAndUpdate(
+      { sourcePaymentId: accountId },
+      { $set: accountData, $setOnInsert: { transactionNumber: `TXN-PAY-${accountId}` } },
+      { upsert: true, new: true, runValidators: true, session }
+    );
+    onUndo(() => existing
+      ? AccountTransaction.replaceOne({ _id: existing._id }, existing)
+      : AccountTransaction.deleteOne({ sourcePaymentId: accountId }));
     return result;
   });
 }

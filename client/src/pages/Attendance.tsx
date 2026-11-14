@@ -71,6 +71,7 @@ export default function Attendance() {
   const [date, setDate] = useState(() => ymd(new Date()));
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [saved, setSaved] = useState<Record<string, Status>>({});
+  const [approvedLeaveIds, setApprovedLeaveIds] = useState<Set<string>>(new Set());
   const [marked, setMarked] = useState(false);
   const [statusMap, setStatusMap] = useState<Record<string, Status>>({});
   const [loading, setLoading] = useState(true);
@@ -82,7 +83,7 @@ export default function Attendance() {
     try {
       const [empRes, attRes] = (await Promise.all([apiClient.getEmployees({ status: "active" }), apiClient.getAttendance({ date })])) as [
         { employees?: Employee[] },
-        { attendance?: { employeeId: { _id: string } | string; status: Status }[] }
+        { attendance?: { employeeId: { _id: string } | string; status: Status; fromApprovedLeave?: boolean }[]; approvedLeaveEmployeeIds?: string[] }
       ];
       const emps = empRes?.employees || [];
       const records = attRes?.attendance || [];
@@ -92,10 +93,13 @@ export default function Attendance() {
         const id = typeof a.employeeId === "object" ? a.employeeId?._id : a.employeeId;
         if (id) map[id] = a.status;
       });
+      const leaveIds = new Set(attRes?.approvedLeaveEmployeeIds || []);
+      leaveIds.forEach((id) => (map[id] = "leave"));
       setEmployees(emps);
+      setApprovedLeaveIds(leaveIds);
       setSaved(map);
       setStatusMap(map);
-      setMarked(records.length > 0);
+      setMarked(records.some((r) => !r.fromApprovedLeave) || (emps.length > 0 && emps.every((e) => leaveIds.has(e._id))));
     } catch (error) {
       toast({ title: "Attendance could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     } finally {
@@ -108,14 +112,14 @@ export default function Attendance() {
   }, [load]);
 
   const changed = employees.filter((e) => statusMap[e._id] !== saved[e._id]).length;
-  const dirty = changed > 0 || (!marked && employees.length > 0);
+  const dirty = changed > 0 || (!marked && employees.some((e) => !approvedLeaveIds.has(e._id)));
 
   const save = async () => {
     setSaving(true);
     try {
-      const records = employees.map((e) => ({ employeeId: e._id, status: statusMap[e._id] || "present" }));
+      const records = employees.filter((e) => !approvedLeaveIds.has(e._id)).map((e) => ({ employeeId: e._id, status: statusMap[e._id] || "present" }));
       await apiClient.markAttendanceBulk(date, records);
-      toast({ title: "Attendance saved", description: `${records.length} people for ${format(new Date(date), "d MMM yyyy")}` });
+      toast({ title: "Attendance saved", description: `${records.length} marked for ${format(new Date(date), "d MMM yyyy")}; approved leave is shown automatically.` });
       setSaved(statusMap);
       setMarked(true);
     } catch (error) {
@@ -125,7 +129,7 @@ export default function Attendance() {
     }
   };
 
-  const setAll = (s: Status) => setStatusMap(Object.fromEntries(employees.map((e) => [e._id, s])));
+  const setAll = (s: Status) => setStatusMap(Object.fromEntries(employees.map((e) => [e._id, approvedLeaveIds.has(e._id) ? "leave" : s])));
   const shift = (days: number) => setDate(ymd(addDays(new Date(date), days)));
 
   const rows = useMemo(() => {
@@ -152,7 +156,8 @@ export default function Attendance() {
       cell: (e) => (
         <div className="flex items-center justify-end gap-2">
           {statusMap[e._id] !== saved[e._id] && <span className="h-1.5 w-1.5 rounded-full bg-warning" title="Not saved yet" />}
-          <StatusPicker value={statusMap[e._id] || "present"} onChange={(s) => setStatusMap((m) => ({ ...m, [e._id]: s }))} label={e.name} readOnly={!canEdit} />
+          <StatusPicker value={statusMap[e._id] || "present"} onChange={(s) => setStatusMap((m) => ({ ...m, [e._id]: s }))} label={e.name} readOnly={!canEdit || approvedLeaveIds.has(e._id)} />
+          {approvedLeaveIds.has(e._id) && <span className="sr-only">Approved leave</span>}
         </div>
       ),
       className: "w-[300px]"
@@ -232,7 +237,7 @@ export default function Attendance() {
             <div className="flex items-center justify-between gap-3">
               <span>{STATUSES.map((s) => `${s.short} ${s.label}`).join(" · ")}</span>
               <span className={cn(dirty && "font-medium text-warning-strong")}>
-                {changed ? `${changed} not saved` : marked ? "Saved for this day" : canEdit ? "Not marked yet — everyone starts as present" : "Not marked yet"}
+                {changed ? `${changed} not saved` : marked ? "Saved for this day" : approvedLeaveIds.size ? "Approved leave shown automatically; other attendance not marked yet" : canEdit ? "Not marked yet — everyone starts as present" : "Not marked yet"}
               </span>
             </div>
           )
@@ -248,7 +253,8 @@ export default function Attendance() {
           mobile={(e) => (
             <div className="space-y-2">
               <EntityCell avatar={e.name} title={e.name} subtitle={e.department} />
-              <StatusPicker value={statusMap[e._id] || "present"} onChange={(s) => setStatusMap((m) => ({ ...m, [e._id]: s }))} label={e.name} readOnly={!canEdit} />
+              <StatusPicker value={statusMap[e._id] || "present"} onChange={(s) => setStatusMap((m) => ({ ...m, [e._id]: s }))} label={e.name} readOnly={!canEdit || approvedLeaveIds.has(e._id)} />
+              {approvedLeaveIds.has(e._id) && <span className="text-xs text-muted-foreground">Approved leave</span>}
             </div>
           )}
           empty={<EmptyState icon={CalendarCheck} title={search ? "No one matches" : "No active employees"} description={search ? undefined : "Add employees on the Employees page to mark their attendance."} />}

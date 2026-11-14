@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { addDays, differenceInCalendarDays } from "date-fns";
-import { BarChart3, Calendar, CheckCircle, ClipboardList, ExternalLink, KeyRound, Mail, MessageSquare, Pencil, Play, Plus, ShieldCheck, Trash2, Users } from "lucide-react";
+import { BarChart3, Calendar, CheckCircle, ClipboardList, Clock3, ExternalLink, KeyRound, Mail, MessageSquare, Pencil, Play, Plus, ShieldCheck, Trash2, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -17,6 +17,8 @@ import { StaffCredentialsDialog } from "@/components/staff/StaffCredentialsDialo
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
+import { timeEntriesApi, type OnClock } from "@/lib/api/timeEntries";
+import { todayRange, weekRange } from "@/components/time-entries/timeMeta";
 import { dueLabel, fmtDate, humanize, plural } from "@/lib/format";
 import { userState, type ManagedUser } from "@/lib/userAdmin";
 import { cn } from "@/lib/utils";
@@ -111,6 +113,7 @@ export default function Staff() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [people, setPeople] = useState<ManagedUser[]>([]);
   const [shifts, setShifts] = useState<Shift[]>([]);
+  const [onClock, setOnClock] = useState<OnClock[]>([]);
   const [loadingTasks, setLoadingTasks] = useState(true);
   const [loadingTeam, setLoadingTeam] = useState(true);
 
@@ -170,6 +173,35 @@ export default function Staff() {
   useEffect(() => {
     loadTeam();
   }, [loadTeam]);
+
+  const loadOnClock = useCallback(async () => {
+    try {
+      const { stats } = await timeEntriesApi.stats(todayRange().from, weekRange().from);
+      if (stats.team) {
+        setOnClock(stats.team.onClock);
+      } else {
+        const { activeTimer } = await timeEntriesApi.active();
+        setOnClock(activeTimer ? [{
+          _id: activeTimer._id,
+          staffId: activeTimer.staffId,
+          staffName: activeTimer.staffName,
+          status: activeTimer.status,
+          jobTitle: activeTimer.jobTitle,
+          taskName: activeTimer.taskName,
+          startTime: activeTimer.startTime,
+          minutesSoFar: activeTimer.minutesSoFar
+        }] : []);
+      }
+    } catch {
+      // Task management remains usable if the design-time service is unavailable.
+    }
+  }, []);
+
+  useEffect(() => {
+    loadOnClock();
+    const poll = window.setInterval(loadOnClock, 30000);
+    return () => window.clearInterval(poll);
+  }, [loadOnClock]);
 
   const setTaskStatus = async (t: Task, status: TaskStatus) => {
     try {
@@ -358,6 +390,16 @@ export default function Staff() {
       },
       sortValue: (p) => workload.get(p._id)?.open || 0
     },
+    {
+      id: "onClock",
+      header: "Design work",
+      cell: (p) => {
+        const entry = onClock.find((e) => e.staffId === p._id);
+        return entry ? <Stack top={<StatusPill tone={entry.status === "running" ? "success" : "warning"}>{entry.status === "running" ? "Working now" : "Paused"}</StatusPill>} bottom={entry.jobTitle} /> : <span className="text-muted-foreground">—</span>;
+      },
+      sortValue: (p) => onClock.some((e) => e.staffId === p._id) ? 1 : 0,
+      hideBelow: "xl"
+    },
     { id: "done", header: "Done", align: "right", cell: (p) => workload.get(p._id)?.done || <span className="text-muted-foreground">—</span>, sortValue: (p) => workload.get(p._id)?.done || 0, hideBelow: "lg" },
     {
       id: "shift",
@@ -463,6 +505,25 @@ export default function Staff() {
       />
 
       <div className="space-y-4">
+        {onClock.length > 0 && (
+          <DataCard>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3 sm:px-5">
+              <div className="flex items-center gap-2 font-semibold"><Clock3 className="h-4 w-4 text-primary" /> Design work on the clock <span className="text-sm font-normal text-muted-foreground">({onClock.length})</span></div>
+              {hasPermission("Designer Timer") && <Button variant="outline" size="sm" asChild><Link to="/designer-timer">View design time <ExternalLink className="h-3.5 w-3.5" /></Link></Button>}
+            </div>
+            <div className="grid gap-3 p-4 sm:grid-cols-2 sm:p-5">
+              {onClock.map((entry) => (
+                <div key={entry._id} className="flex items-start justify-between gap-3 rounded-lg border border-border bg-background p-3">
+                  <div className="min-w-0">
+                    <div className="font-medium">{entry.staffName}</div>
+                    <div className="truncate text-sm text-muted-foreground">{entry.taskName} · {entry.jobTitle}</div>
+                  </div>
+                  <StatusPill tone={entry.status === "running" ? "success" : "warning"}>{entry.status === "running" ? "Working now" : "Paused"}</StatusPill>
+                </div>
+              ))}
+            </div>
+          </DataCard>
+        )}
         <ViewTabs<Section>
           value={section}
           onChange={setSection}
@@ -546,8 +607,8 @@ export default function Staff() {
                 tasks.length === 0 ? (
                   <EmptyState
                     icon={ClipboardList}
-                    title="No tasks yet"
-                    description="Create a task, assign it to someone and set a due date. They're notified and can comment on it."
+                    title="No assigned tasks yet"
+                    description={onClock.length ? "Designers can track time against a job without an assigned task. Their active work appears above. Create a task when someone needs an assignment, due date or comments." : "Designers can track time against a job without an assigned task. Create a task when someone needs an assignment, due date or comments."}
                     action={
                       <Button onClick={() => setCreateOpen(true)}>
                         <Plus />

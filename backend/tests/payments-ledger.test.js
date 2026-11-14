@@ -11,6 +11,7 @@ const app = require('../src/app');
 const Invoice = require('../src/models/Invoice');
 const Payment = require('../src/models/Payment');
 const ActivityLog = require('../src/models/ActivityLog');
+const AccountTransaction = require('../src/models/AccountTransaction');
 const User = require('../src/models/User');
 const transactions = require('../src/utils/transactions');
 const { connectTestDb, disconnectTestDb } = require('./helpers/db');
@@ -102,6 +103,38 @@ test('the suite knows which write path it is exercising', async () => {
 });
 
 describe('recording receipts against invoices', () => {
+  test('an account posting failure leaves no receipt or invoice payment behind', async () => {
+    const inv = await invoiceFor(300);
+    const before = await Payment.countDocuments({ dataScope: org.dataScope });
+    jest.spyOn(AccountTransaction, 'findOneAndUpdate').mockRejectedValueOnce(new Error('account write failed'));
+    expect((await pay({ invoiceId: String(inv._id), amount: 100 })).status).toBe(500);
+    expect(await Payment.countDocuments({ dataScope: org.dataScope })).toBe(before);
+    expect(await state(inv)).toMatchObject({ paidAmount: 0, balanceAmount: 300 });
+  });
+
+  test('one receipt also posts one protected cash entry and reverses with the payment', async () => {
+    const inv = await invoiceFor(500);
+    const created = await pay({ invoiceId: String(inv._id), amount: 200, paymentMethod: 'cash', paymentDate: '2026-11-14' });
+    expect(created.status).toBe(201);
+    const id = created.body.data.payment._id;
+    const account = async () => AccountTransaction.findOne({ sourcePaymentId: id });
+    expect(await account()).toMatchObject({ transactionType: 'income', amount: 200, accountType: 'cash', status: 'completed' });
+    expect(String((await account()).invoiceId)).toBe(String(inv._id));
+
+    // A replay must not create a second cash entry.
+    expect(await AccountTransaction.countDocuments({ sourcePaymentId: id })).toBe(1);
+    const entryId = (await account())._id;
+    expect((await admin.delete(`/api/accounts/transactions/${entryId}`)).status).toBe(409);
+
+    expect((await admin.put(`/api/payments/${id}`, { status: 'pending' })).status).toBe(200);
+    expect((await account()).status).toBe('pending');
+    expect((await admin.put(`/api/payments/${id}`, { status: 'completed' })).status).toBe(200);
+    expect((await account()).status).toBe('completed');
+    expect((await admin.delete(`/api/payments/${id}`)).status).toBe(200);
+    expect((await account()).status).toBe('reversed');
+    expect(await state(inv)).toMatchObject({ paidAmount: 0, balanceAmount: 500 });
+  });
+
   test('unpaid → partial → full, with the history on the invoice', async () => {
     const inv = await invoiceFor(1000);
     expect(await state(inv)).toEqual({ paidAmount: 0, balanceAmount: 1000, paymentStatus: 'pending', status: 'sent' });
@@ -483,6 +516,7 @@ describe('records made before allocations existed', () => {
     const inv = await invoiceFor(1000);
     // As older code stored it: invoiceId, no allocations, invoice moved by hand.
     const old = await make.payment(org.admin, cust, { invoiceId: inv._id, invoiceNumber: inv.invoiceNumber, amount: 300 });
+    expect(await AccountTransaction.countDocuments({ sourcePaymentId: old._id })).toBe(0);
     await Invoice.updateOne({ _id: inv._id }, { paidAmount: 300, balanceAmount: 700, paymentStatus: 'partial' });
 
     const listed = (await admin.get('/api/payments?limit=100')).body.data.payments.find((p) => p._id === String(old._id));
@@ -490,6 +524,7 @@ describe('records made before allocations existed', () => {
     expect((await details(inv)).paymentHistory[0]).toMatchObject({ appliedAmount: 300 });
 
     expect((await admin.put(`/api/payments/${old._id}`, { status: 'refunded' })).status).toBe(200);
+    expect(await AccountTransaction.countDocuments({ sourcePaymentId: old._id })).toBe(0);
     expect(await state(inv)).toMatchObject({ paidAmount: 0 });
     expect((await admin.put(`/api/payments/${old._id}`, { status: 'completed' })).status).toBe(200);
     expect(await state(inv)).toMatchObject({ paidAmount: 300 });
@@ -572,6 +607,14 @@ describe('permissions', () => {
     // Correct Balance is its own grant.
     await User.updateOne({ _id: org.staff1._id }, { permissions: ['Dashboard', 'Invoicing', 'Invoicing: View', 'Invoicing: Correct Balance'] });
     expect((await staff.patch(`/api/invoices/${own._id}/payment-status`, { manualPaidAmount: 0, reason: 'test reason' })).status).toBe(200);
+
+    // The Accounts receive flow uses the same receipt endpoint and can find
+    // invoices, without needing an unrelated Payments role grant.
+    await User.updateOne({ _id: org.staff1._id }, { permissions: ['Dashboard', 'Accounts', 'Accounts: Create & Edit'] });
+    expect((await staff.get(`/api/invoices?customerId=${cust._id}`)).status).toBe(200);
+    const fromAccounts = await staff.post('/api/payments', { ...body, invoiceId: String(own._id) });
+    expect(fromAccounts.status).toBe(201);
+    expect(await AccountTransaction.findOne({ sourcePaymentId: fromAccounts.body.data.payment._id })).toMatchObject({ amount: 100, status: 'completed' });
   });
 
   test('another business cannot see or change these payments', async () => {

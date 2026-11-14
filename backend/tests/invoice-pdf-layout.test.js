@@ -255,3 +255,23 @@ test('the PDF file itself is A4, as downloaded', async () => {
   expect(pdf.toString('latin1')).toMatch(/\/MediaBox \[0 0 595\.28 841\.89\]/);
   expect(SIZE.cell).toBeGreaterThanOrEqual(10.5);
 });
+
+test('purchase bill downloads without Chrome and keeps supplier and tax details', async () => {
+  const bill = {
+    billNumber: 'PB-2026-0042', vendorInvoiceNumber: 'SUP-918',
+    billDate: new Date('2026-11-14'), dueDate: new Date('2026-12-14'),
+    vendorName: 'Paper House', vendorGstNumber: '32ABCDE1234F1Z5',
+    vendorAddress: 'Market Road, Kozhikode', vendorState: 'Kerala',
+    items: [{ description: 'Art card 350 GSM', hsnCode: '4802', quantity: 10, rate: 100, taxableAmount: 1000, gstRate: 18, total: 1180 }],
+    taxableAmount: 1000, totalCgstAmount: 90, totalSgstAmount: 90,
+    totalAmount: 1180, paidAmount: 180, notes: 'Supplier reference 42'
+  };
+  const data = PDFService.purchaseBillDocument(bill, company);
+  const out = render(data);
+  for (const part of ['PURCHASE BILL', 'PB-2026-0042', 'SUP-918', 'VENDOR', 'Paper House', 'Art card 350 GSM', 'CGST', 'SGST', 'Balance Due', 'INR 1,180.00']) {
+    expect(out.find(part).length).toBeGreaterThan(0);
+  }
+  const pdf = await PDFService.generatePurchaseBillPDFFromHTML(bill, company);
+  expect(pdf.subarray(0, 4).toString()).toBe('%PDF');
+  expect(pdf.length).toBeGreaterThan(2000);
+});

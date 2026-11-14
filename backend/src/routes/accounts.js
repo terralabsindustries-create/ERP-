@@ -377,11 +377,12 @@ router.put('/transactions/:id', protect, requirePermission('Accounts: Create & E
     const invalidRelated = await validRelatedRecords(req.user, req.body);
     if (invalidRelated) return res.status(400).json({ status: 'error', message: `${invalidRelated} must belong to this business` });
     const scope = await accountScope(req.user);
-    const existing = await AccountTransaction.findOne({ _id: req.params.id, ...scope }).select('reconciled');
+    const existing = await AccountTransaction.findOne({ _id: req.params.id, ...scope }).select('reconciled sourcePaymentId');
+    if (existing?.sourcePaymentId) return res.status(409).json({ status: 'error', message: 'This entry belongs to a customer payment. Change it in Payments.' });
     if (existing?.reconciled) return res.status(409).json({ status: 'error', message: 'A reconciled entry cannot be edited.' });
     const changes = entryFields(req.body);
     const transaction = await AccountTransaction.findOneAndUpdate(
-      { _id: req.params.id, ...scope, reconciled: { $ne: true } },
+      { _id: req.params.id, ...scope, reconciled: { $ne: true }, sourcePaymentId: { $exists: false } },
       changes,
       { new: true, runValidators: true }
     ).populate(await accountReferences(req.user));
@@ -432,12 +433,14 @@ router.put('/transactions/:id', protect, requirePermission('Accounts: Create & E
 router.delete('/transactions/:id', protect, requirePermission('Accounts: Delete'), async (req, res) => {
   try {
     const scope = await accountScope(req.user);
-    const existing = await AccountTransaction.findOne({ _id: req.params.id, ...scope }).select('reconciled');
+    const existing = await AccountTransaction.findOne({ _id: req.params.id, ...scope }).select('reconciled sourcePaymentId');
+    if (existing?.sourcePaymentId) return res.status(409).json({ status: 'error', message: 'This entry belongs to a customer payment. Delete or reverse it in Payments.' });
     if (existing?.reconciled) return res.status(409).json({ status: 'error', message: 'A reconciled entry cannot be deleted.' });
     const transaction = await AccountTransaction.findOneAndDelete({
       _id: req.params.id,
       ...scope,
-      reconciled: { $ne: true }
+      reconciled: { $ne: true },
+      sourcePaymentId: { $exists: false }
     });
     
     if (!transaction) {

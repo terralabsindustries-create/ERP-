@@ -153,7 +153,7 @@ guarded('/api/quotations', require('./routes/quotations'), {
   ]
 });
 guarded('/api/invoices', require('./routes/invoices'), {
-  read: ['Invoicing', 'Invoicing (View No GST)', 'Payments'],
+  read: ['Invoicing', 'Invoicing (View No GST)', 'Payments', 'Accounts'],
   write: 'Invoicing: Create & Edit',
   remove: 'Invoicing: Delete',
   rules: [
@@ -169,7 +169,7 @@ guarded('/api/payments', require('./routes/payments'), {
   remove: 'Payments: Delete',
   // Invoice logins may record a payment applied in full to invoices (the
   // route refuses them money on account).
-  rules: [{ method: 'POST', path: /^\/?$/, allow: ['Payments: Record Payment', 'Invoicing: Record Payment'] }]
+  rules: [{ method: 'POST', path: /^\/?$/, allow: ['Payments: Record Payment', 'Invoicing: Record Payment', 'Accounts: Create & Edit'] }]
 });
 guarded('/api/inventory', require('./routes/inventory'), {
   read: ITEM_READERS,

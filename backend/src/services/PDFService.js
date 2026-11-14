@@ -4,18 +4,6 @@ const PDFDocument = require('pdfkit');
 const { createTransporter } = require('../utils/mailer');
 const { AREA_UNITS, round2, round4, sizeLabel, areaLabel, splitGstAll, gstByRate } = require('../utils/billing');
 
-// Puppeteer ships as ES-module only. require() of ESM is unsupported on Node 20
-// (which is what Electron bundles), so it is imported on demand instead. That
-// keeps this file loadable on every runtime, and Chromium is only touched when
-// a PDF is actually rendered.
-let puppeteerPromise = null;
-const getPuppeteer = () => {
-  if (!puppeteerPromise) {
-    puppeteerPromise = import('puppeteer').then((m) => m.default || m);
-  }
-  return puppeteerPromise;
-};
-
 // Carbon's print colours: the light tokens of client/src/index.css (--print-*).
 // Printed pages stay white with ink text; the brand brown marks headings,
 // document numbers and totals. No paper tints and no shadows on paper.
@@ -81,49 +69,31 @@ class PDFService {
     ].join('\n');
   }
 
-  // Invoices and quotations both render through the shared PDFKit layout
-  // (renderSynxDocument), so the two documents stay visually identical and
-  // neither depends on a working Chrome install.
+  // All customer and supplier PDFs use the shared PDFKit layout, which does
+  // not need Chrome or native browser libraries on the server.
   static async generateInvoicePDFFromHTML(invoice, companyInfo) {
     return this.generateInvoicePDF(invoice, companyInfo);
   }
 
   static async generatePurchaseBillPDFFromHTML(bill, companyInfo) {
+    return this.generatePurchaseBillPDF(bill, companyInfo);
+  }
+
+  static async generatePurchaseBillPDF(bill, companyInfo) {
+    const doc = new PDFDocument({ size: 'A4', margin: 40, bufferPages: true });
+    const chunks = [];
+    doc.on('data', (chunk) => chunks.push(chunk));
+    const result = new Promise((resolve, reject) => {
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+    });
     try {
-      console.log('🔄 Starting HTML to PDF conversion for purchase bill:', bill.billNumber);
-
-      const htmlContent = this.generatePurchaseBillHTML(bill, companyInfo);
-
-      let browser;
-      try {
-        const puppeteer = await getPuppeteer();
-        browser = await puppeteer.launch({
-          headless: true,
-          args: ['--no-sandbox', '--disable-setuid-sandbox']
-        });
-
-        const page = await browser.newPage();
-        await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
-
-        const pdfBuffer = await page.pdf({
-          format: 'A4',
-          margin: { top: '20mm', right: '20mm', bottom: '20mm', left: '20mm' },
-          printBackground: true
-        });
-
-        await browser.close();
-        console.log('✅ Purchase bill PDF generated, size:', pdfBuffer.length, 'bytes');
-        return Buffer.from(pdfBuffer);
-      } catch (puppeteerError) {
-        console.warn('⚠️ Puppeteer error for purchase bill:', puppeteerError.message);
-        if (browser) {
-          try { await browser.close(); } catch (e) { console.warn('Error closing browser:', e.message); }
-        }
-        throw puppeteerError;
-      }
+      this.renderSynxDocument(doc, this.purchaseBillDocument(bill, companyInfo));
+      doc.end();
+      return await result;
     } catch (error) {
-      console.error('❌ Purchase bill PDF generation error:', error.message);
-      throw new Error('Failed to generate PDF: ' + error.message);
+      doc.destroy();
+      throw new Error('Failed to generate purchase bill PDF: ' + error.message);
     }
   }
 
@@ -620,6 +590,58 @@ class PDFService {
     };
   }
 
+  /** Supplier bill data for the same browser-free layout as invoices. */
+  static purchaseBillDocument(bill, companyInfo) {
+    const currency = companyInfo.currency || 'INR';
+    const money = (n) => currency + ' ' + this.fmtNum(n);
+    const total = Number(bill.totalAmount) || 0;
+    const paid = Number(bill.paidAmount) || 0;
+    const summary = [{ label: 'Taxable', value: money(bill.taxableAmount) }];
+    if (bill.isInterState) {
+      if (bill.totalIgstAmount) summary.push({ label: 'IGST', value: money(bill.totalIgstAmount) });
+    } else {
+      if (bill.totalCgstAmount) summary.push({ label: 'CGST', value: money(bill.totalCgstAmount) });
+      if (bill.totalSgstAmount) summary.push({ label: 'SGST', value: money(bill.totalSgstAmount) });
+    }
+    summary.push({ label: 'Total', value: money(total), bold: true });
+    if (paid > 0 && paid < total) {
+      summary.push({ label: 'Paid', value: money(paid) });
+      summary.push({ label: 'Balance Due', value: money(round2(total - paid)), strong: true });
+    }
+
+    return {
+      type: 'PURCHASE BILL',
+      numberLabel: 'Bill No.',
+      number: bill.billNumber || '',
+      meta: [
+        ...(bill.vendorInvoiceNumber ? [{ label: 'Vendor Invoice', value: bill.vendorInvoiceNumber }] : []),
+        { label: 'Bill Date', value: new Date(bill.billDate || Date.now()).toLocaleDateString('en-GB') },
+        ...(bill.dueDate ? [{ label: 'Due Date', value: new Date(bill.dueDate).toLocaleDateString('en-GB') }] : [])
+      ],
+      badge: total > 0 && paid >= total ? { text: 'FULLY PAID', color: PRINT.success } : null,
+      company: companyInfo,
+      customer: { name: bill.vendorName || 'N/A', lines: [bill.vendorGstNumber && `GSTIN: ${bill.vendorGstNumber}`, bill.vendorState].filter(Boolean) },
+      billingLines: this.splitAddress(bill.vendorAddress),
+      shippingLines: [],
+      items: (bill.items || []).map((item) => this.itemRow({
+        name: item.description,
+        hsn: item.hsnCode,
+        gstRate: item.gstRate,
+        quantity: item.quantity,
+        rate: item.rate,
+        amount: item.taxableAmount != null ? item.taxableAmount : round2((item.rate || 0) * (item.quantity || 0))
+      })),
+      bankLines: [],
+      summary,
+      amountWords: this.currencyWords(currency) + ' ' + this.numberToWords(Math.floor(total)) + ' Only',
+      terms: bill.notes || '',
+      footerNote: null,
+      qrCode: '',
+      paymentLink: '',
+      upiId: ''
+    };
+  }
+
   /** Everything the quotation PDF shows, before any drawing. */
   static quotationDocument(quotation, companyInfo) {
     const customer = quotation.customer_id || {};
@@ -743,7 +765,7 @@ class PDFService {
     // Figures line up in columns (Inter's tabular numbers); the built-in fonts have none to ask for.
     const TNUM = F === FALLBACK_FONTS ? undefined : ['tnum'];
     const LINE_GAP = 1.5;
-    const docName = d.type.charAt(0) + d.type.slice(1).toLowerCase();
+    const docName = d.type.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 
     // Each position is set explicitly and each block measured before it is
     // drawn, so PDFKit's own flowing page break must never fire. Without a
@@ -790,7 +812,7 @@ class PDFService {
     // ---------- HEADER: logo and business (left), the document (right) ----------
     const headR = 160;
     const headL = W - headR - 16;
-    write(d.type, right - headR, y - 3, S.title, { bold: true, face: 'display', color: C.brand, width: headR, align: 'right' });
+    write(d.type, right - headR, y - 3, d.type === 'PURCHASE BILL' ? 16 : S.title, { bold: true, face: 'display', color: C.brand, width: headR, align: 'right' });
     let ry = y + 32;
     if (d.type === 'QUOTATION') {
       [{ label: d.numberLabel || 'Number', value: d.number, id: true }, ...(d.meta || [])].forEach((row) => {
@@ -873,7 +895,7 @@ class PDFService {
       });
       y = bottomOfParty + 14;
     } else {
-      let py = label('Bill To', left, y, partyCol) + 3;
+      let py = label(d.type === 'PURCHASE BILL' ? 'Vendor' : 'Bill To', left, y, partyCol) + 3;
       py = write(d.customer.name || 'N/A', left, py, S.party, { bold: true, color: C.ink, width: partyCol }) + 1;
       for (const line of [...billing, ...(d.customer.lines || [])]) py = write(line, left, py, S.detail, { width: partyCol });
       if (shipDiffers) {

@@ -345,7 +345,7 @@ router.post('/', protect, paymentValidation, async (req, res) => {
     if (rejectInvalid(req, res)) return;
     if (key && key.length > 100) return res.status(400).json({ status: 'error', message: 'Invalid idempotency key' });
 
-    const canRecord = userCan(req.user, 'Payments: Record Payment');
+    const canRecord = userCan(req.user, 'Payments: Record Payment') || userCan(req.user, 'Accounts: Create & Edit');
     if (!canRecord && !userCan(req.user, 'Invoicing: Record Payment')) {
       return res.status(403).json({ status: 'error', message: 'You do not have permission to record payment in Payments.', code: 'PERMISSION_DENIED', required: 'Payments: Record Payment' });
     }

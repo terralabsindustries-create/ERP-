@@ -77,6 +77,14 @@ const accountTransactionSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Invoice'
   },
+  // Set only by the payment ledger. One customer receipt has one cash/bank
+  // entry; account editors cannot change it independently.
+  sourcePaymentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Payment',
+    unique: true,
+    sparse: true
+  },
   // Cheque details (if payment method is cheque)
   chequeDetails: {
     chequeNumber: String,
