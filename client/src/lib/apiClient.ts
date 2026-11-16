@@ -8,7 +8,7 @@ const desktopApiBase = (globalThis as any).serpyDesktop?.apiBaseUrl;
 // The local backend, for `vite` (dev server) and `vite build --mode development`.
 // A production build without VITE_API_URL is refused by vite.config.ts, so the
 // hosted app can never fall back to an API on the visitor's own machine.
-const LOCAL_API = 'http://localhost:4001/api';
+const LOCAL_API = 'https://api.carbonprintflow.com/api';
 const forceLocalDevApi = import.meta.env.DEV && import.meta.env.VITE_FORCE_LOCAL === 'true';
 
 export const BASE_URL: string =

@@ -21,7 +21,7 @@ function isLoopbackHost(hostname: string) {
 
 /**
  * The hosted web app (`vite build`, production mode) must be built against a
- * real API. Missing, it would fall back to http://localhost:4001; on a
+ * real API. Missing, it would fall back to https://api.carbonprintflow.com; on a
  * loopback address it would call the visitor's own machine. Either way every
  * visitor gets a broken app, so the build stops. The dev server, development
  * builds (`build:dev`) and the desktop build (`--mode desktop`, whose API

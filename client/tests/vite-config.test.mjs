@@ -36,7 +36,7 @@ test("a production build without VITE_API_URL is refused", async () => {
 
 test("a production build against a loopback API is refused", async () => {
   for (const apiUrl of [
-    "http://localhost:4001/api",
+    "https://api.carbonprintflow.com/api",
     "https://LOCALHOST/api",
     "http://localhost./api",
     "http://api.localhost:4001/api",
@@ -68,7 +68,7 @@ test("a production build against a hosted API loads", async () => {
 
 test("local development, development builds and the desktop build are not checked", async () => {
   for (const [command, mode] of [["serve", "development"], ["build", "development"], ["build", "desktop"]]) {
-    for (const apiUrl of [undefined, "http://localhost:4001/api"]) {
+    for (const apiUrl of [undefined, "https://api.carbonprintflow.com/api"]) {
       const loaded = await load({ command, mode, apiUrl });
       assert.ok(loaded.config, `${command} ${mode} ${apiUrl}`);
     }

@@ -12,6 +12,7 @@ import { AlertCircle, Info, Calculator, Plus } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { UnitConverterDialog } from "./UnitConverterDialog";
 import { CreateHsnCodeDialog } from "@/components/hsn/CreateHsnCodeDialog";
+import { CreateSacCodeDialog } from "@/components/sac/CreateSacCodeDialog";
 
 interface CreateItemDialogProps {
   open: boolean;
@@ -32,6 +33,7 @@ interface EditableItem {
   minStockLevel?: number;
   supplier?: string;
   hsnCode?: string;
+  sacCode?: string;
   gstRate?: number;
   isFreeItem?: boolean;
   description?: string;
@@ -86,6 +88,7 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
     minStockLevel: "",
     vendor: "",
     hsnCode: "",
+    sacCode: "",
     gstRate: "18",
     isFreeItem: false,
     notes: ""
@@ -93,11 +96,13 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
 
   const [loading, setLoading] = useState(false);
   const [hsnCodes, setHsnCodes] = useState<any[]>([]);
+  const [sacCodes, setSacCodes] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<string[]>([]);
   const [showNewSupplier, setShowNewSupplier] = useState(false);
   const [newSupplier, setNewSupplier] = useState("");
   const [showUnitConverter, setShowUnitConverter] = useState(false);
   const [showCreateHsn, setShowCreateHsn] = useState(false);
+  const [showCreateSac, setShowCreateSac] = useState(false);
   const { toast } = useToast();
 
   // Calculate status automatically
@@ -116,6 +121,7 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
   useEffect(() => {
     if (open) {
       fetchHsnCodes();
+      fetchSacCodes();
       fetchSuppliers();
     }
   }, [open]);
@@ -133,6 +139,7 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
       minStockLevel: String(item.minStockLevel ?? ""),
       vendor: item.supplier || "",
       hsnCode: item.hsnCode || "",
+      sacCode: item.sacCode || "",
       gstRate: String(item.gstRate ?? "18"),
       isFreeItem: Boolean(item.isFreeItem),
       notes: item.description || ""
@@ -147,9 +154,17 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
     }
   };
 
+  const fetchSacCodes = async () => {
+    try {
+      setSacCodes(await apiClient.listAll('/sac-codes', 'sacCodes'));
+    } catch (error) {
+      console.error('Error fetching SAC codes:', error);
+    }
+  };
+
   const handleHsnCreated = (hsn: { _id: string; hsnCode: string; description: string; gstRate: number }) => {
     setHsnCodes((codes) => [...codes.filter((code) => code.hsnCode !== hsn.hsnCode), hsn]);
-    setFormData((prev) => ({ ...prev, hsnCode: hsn.hsnCode, gstRate: String(hsn.gstRate) }));
+    setFormData((prev) => ({ ...prev, hsnCode: hsn.hsnCode, sacCode: "", gstRate: String(hsn.gstRate) }));
     setShowCreateHsn(false);
   };
 
@@ -224,17 +239,6 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
       return false;
     }
 
-    // GST & HSN validation
-    const gstRate = parseFloat(formData.gstRate);
-    if (gstRate > 0 && !formData.hsnCode) {
-      toast({
-        title: "HSN Code Recommended",
-        description: "HSN Code is recommended for taxable items. Continue anyway?",
-        variant: "default",
-      });
-      // Allow to continue but warn
-    }
-
     return true;
   };
 
@@ -258,7 +262,8 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
         vendor: formData.vendor || undefined,
         // The item model stores the supplier's name as `supplier`.
         supplier: formData.vendor || undefined,
-        hsnCode: formData.hsnCode || undefined,
+        hsnCode: formData.hsnCode,
+        sacCode: formData.sacCode,
         gstRate: parseFloat(formData.gstRate),
         status: 'active', // Backend status (active/inactive)
         stockStatus: status.toLowerCase().replace(' ', '_'), // Calculated stock status
@@ -293,6 +298,7 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
         minStockLevel: "",
         vendor: "",
         hsnCode: "",
+        sacCode: "",
         gstRate: "18",
         isFreeItem: false,
         notes: ""
@@ -525,36 +531,45 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
 
               <div className="min-w-0 space-y-2">
                 <div className="flex items-center justify-between gap-2">
-                  <Label htmlFor="hsnCode" className="whitespace-nowrap">HSN Code</Label>
-                  <Button type="button" variant="ghost" size="sm" className="h-auto shrink-0 gap-1 px-1 py-0 text-xs" onClick={() => setShowCreateHsn(true)}>
-                    <Plus className="h-3.5 w-3.5" /> New HSN
-                  </Button>
+                  <Label htmlFor="taxCode" className="whitespace-nowrap">HSN or SAC Code (Optional)</Label>
                 </div>
-                <Select value={formData.hsnCode || "none"} onValueChange={(value) => {
-                  const hsnCodeValue = value === "none" ? "" : value;
-                  setFormData(prev => ({ ...prev, hsnCode: hsnCodeValue }));
-                  const selectedHsn = hsnCodes.find(hsn => hsn.hsnCode === value);
-                  if (selectedHsn) {
-                    setFormData(prev => ({ ...prev, gstRate: selectedHsn.gstRate.toString() }));
-                  }
+                <Select value={formData.hsnCode ? `hsn:${formData.hsnCode}` : formData.sacCode ? `sac:${formData.sacCode}` : "none"} onValueChange={(value) => {
+                  const [kind, code] = value.split(":");
+                  const selected = kind === "hsn"
+                    ? hsnCodes.find((entry) => entry.hsnCode === code)
+                    : sacCodes.find((entry) => entry.sacCode === code);
+                  setFormData(prev => ({
+                    ...prev,
+                    hsnCode: kind === "hsn" ? code : "",
+                    sacCode: kind === "sac" ? code : "",
+                    gstRate: selected ? String(selected.gstRate) : prev.gstRate
+                  }));
                 }}>
-                  <SelectTrigger id="hsnCode">
-                    <SelectValue placeholder="Select HSN">
-                      {formData.hsnCode ? hsnCodes.find((hsn) => hsn.hsnCode === formData.hsnCode)?.hsnCode || formData.hsnCode : "No HSN Code"}
-                    </SelectValue>
+                  <SelectTrigger id="taxCode">
+                    <SelectValue placeholder="Select HSN or SAC code" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">No HSN Code</SelectItem>
+                    <SelectItem value="none">No code</SelectItem>
                     {hsnCodes.map((hsn) => (
-                      <SelectItem key={hsn._id || hsn.id} value={hsn.hsnCode}>
-                        {hsn.hsnCode} - {hsn.description} ({hsn.gstRate}%)
+                      <SelectItem key={`hsn-${hsn._id || hsn.id}`} value={`hsn:${hsn.hsnCode}`}>
+                        HSN {hsn.hsnCode} - {hsn.description} ({hsn.gstRate}%)
+                      </SelectItem>
+                    ))}
+                    {sacCodes.map((sac) => (
+                      <SelectItem key={`sac-${sac._id || sac.id}`} value={`sac:${sac.sacCode}`}>
+                        SAC {sac.sacCode} - {sac.description} ({sac.gstRate}%)
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-                {parseFloat(formData.gstRate) > 0 && (
-                  <p className="text-xs text-muted-foreground">Recommended for taxable items</p>
-                )}
+                <div className="flex gap-3">
+                  <Button type="button" variant="ghost" size="sm" className="h-auto gap-1 px-1 py-0 text-xs" onClick={() => setShowCreateHsn(true)}>
+                    <Plus className="h-3.5 w-3.5" /> New HSN
+                  </Button>
+                  <Button type="button" variant="ghost" size="sm" className="h-auto gap-1 px-1 py-0 text-xs" onClick={() => setShowCreateSac(true)}>
+                    <Plus className="h-3.5 w-3.5" /> New SAC
+                  </Button>
+                </div>
               </div>
             </div>
 
@@ -587,6 +602,11 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
         onOpenChange={setShowCreateHsn}
         onHsnCodeCreated={handleHsnCreated}
         initialGstRate={Number(formData.gstRate) || 0}
+    />
+    <CreateSacCodeDialog
+      open={showCreateSac}
+      onOpenChange={setShowCreateSac}
+      onSacCodeCreated={fetchSacCodes}
     />
     </>
   );
