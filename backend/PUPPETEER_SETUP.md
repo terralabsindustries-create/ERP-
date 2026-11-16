@@ -110,7 +110,7 @@ $headers = @{
     "Authorization" = "Bearer YOUR_TOKEN_HERE"
 }
 
-Invoke-WebRequest -Uri "http://localhost:4001/api/invoices/YOUR_INVOICE_ID/pdf" `
+Invoke-WebRequest -Uri "https://api.carbonprintflow.com/api/invoices/YOUR_INVOICE_ID/pdf" `
                   -Headers $headers `
                   -OutFile "test_invoice.pdf"
 ```

@@ -58,7 +58,7 @@ router.post('/exchange-token', protect, async (req, res) => {
     console.log('📢 Webhook subscription status:', webhookSubscription.success ? 'Success' : 'Failed');
 
     // STEP 4: Save to database inside Settings (upsert — one settings doc per user)
-    const callbackUrl = `${process.env.BASE_URL || 'http://localhost:4001'}/api/whatsapp/webhook`;
+    const callbackUrl = `${process.env.BASE_URL || 'https://api.carbonprintflow.com'}/api/whatsapp/webhook`;
     
     const settings = await Settings.findOneAndUpdate(
       { userId },

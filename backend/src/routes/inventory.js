@@ -396,6 +396,11 @@ router.get('/:id', async (req, res) => {
 // POST /api/inventory - Create new inventory item
 router.post('/', requirePermission('Inventory: Create & Edit'), async (req, res) => {
   try {
+    if (req.body.hsnCode && req.body.sacCode) {
+      return res.status(400).json({ success: false, message: 'Choose either an HSN code or a SAC code' });
+    }
+    if (req.body.hsnCode) req.body.sacCode = '';
+    if (req.body.sacCode) req.body.hsnCode = '';
     const inventoryData = {
       ...req.body,
       userId: req.user._id
@@ -440,6 +445,11 @@ router.post('/', requirePermission('Inventory: Create & Edit'), async (req, res)
 // PUT /api/inventory/:id - Update inventory item
 router.put('/:id', requirePermission('Inventory: Create & Edit'), async (req, res) => {
   try {
+    if (req.body.hsnCode && req.body.sacCode) {
+      return res.status(400).json({ success: false, message: 'Choose either an HSN code or a SAC code' });
+    }
+    if (req.body.hsnCode) req.body.sacCode = '';
+    if (req.body.sacCode) req.body.hsnCode = '';
     // Build query with dataScope or userId filtering
     const findQuery = req.user.dataScope
       ? { _id: req.params.id, dataScope: req.user.dataScope }

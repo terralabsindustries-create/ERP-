@@ -124,6 +124,17 @@ const inventorySchema = new mongoose.Schema({
       message: 'HSN Code must be 4-8 digits'
     }
   },
+  sacCode: {
+    type: String,
+    trim: true,
+    uppercase: true,
+    validate: {
+      validator: function (v) {
+        return !v || /^\d{6}$/.test(v);
+      },
+      message: 'SAC Code must be 6 digits'
+    }
+  },
   gstRate: {
     type: Number,
     min: [0, 'GST Rate cannot be negative'],
