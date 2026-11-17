@@ -15,6 +15,7 @@ import { LinePricingFields } from "@/components/billing/LinePricingFields";
 import { draftTotals, gstRateProblem, lineDraftFrom, lineDraftFromJobItem, lineInput, lineProblem, newLineDraft, type LineDraft } from "@/components/billing/lineDraft";
 import { useHsnGstRates } from "@/components/billing/useHsnGstRates";
 import { isAreaUnit } from "@/lib/billing";
+import { sellingRate } from "@/components/billing/stock";
 import { localDate } from "@/lib/format";
 import { moveFocusOnEnter } from "@/lib/formKeys";
 
@@ -258,7 +259,7 @@ export const CreateQuotationDialog = ({
       itemName: inv.name,
       description: items[index].description || inv.description || '',
       hsnCode,
-      unitPrice: String(inv.unitCost || 0),
+      unitPrice: String(sellingRate(inv)),
       unit,
       pricing: isAreaUnit(unit) ? unit : 'unit',
       gstRate: items[index].gstRate || hsnRate(hsnCode),
@@ -565,7 +566,7 @@ export const CreateQuotationDialog = ({
                                 >
                                   <span className="font-medium">{invItem.name}</span>
                                   <span className="text-xs text-muted-foreground">
-                                    ₹{invItem.unitCost ?? 0}{invItem.unit ? ` per ${invItem.unit}` : ''}
+                                    ₹{sellingRate(invItem)}{invItem.unit ? ` per ${invItem.unit}` : ''}
                                     {invItem.hsnCode ? ` · HSN ${invItem.hsnCode}` : ''}
                                   </span>
                                 </button>

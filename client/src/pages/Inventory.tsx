@@ -25,6 +25,7 @@ interface Item {
   quantity?: number;
   unit?: string;
   unitCost?: number;
+  sellingPrice?: number | null;
   minStockLevel?: number;
   supplier?: string;
   location?: string;
@@ -129,9 +130,9 @@ export default function Inventory() {
   const exportCsv = () => {
     const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const csv = [
-      ["Name", "Category", "SKU", "Quantity", "Unit", ...(canSeeCost ? ["Unit cost"] : []), "Reorder level", ...(canSeeCost ? ["Value"] : []), "Supplier", "Location"].join(","),
+      ["Name", "Category", "SKU", "Quantity", "Unit", ...(canSeeCost ? ["Unit cost"] : []), "Selling price", "Reorder level", ...(canSeeCost ? ["Value"] : []), "Supplier", "Location"].join(","),
       ...items.map((i) =>
-        [i.name, i.category, i.sku, i.quantity || 0, i.unit, ...(canSeeCost ? [i.unitCost || 0] : []), i.minStockLevel || 0, ...(canSeeCost ? [valueOf(i)] : []), i.supplier, i.location].map(esc).join(",")
+        [i.name, i.category, i.sku, i.quantity || 0, i.unit, ...(canSeeCost ? [i.unitCost || 0] : []), i.sellingPrice || "", i.minStockLevel || 0, ...(canSeeCost ? [valueOf(i)] : []), i.supplier, i.location].map(esc).join(",")
       )
     ].join("\n");
     const a = document.createElement("a");
@@ -179,6 +180,14 @@ export default function Inventory() {
           { id: "value", header: "Value", align: "right" as const, cell: (i: Item) => <span className="font-medium">{formatINR(valueOf(i))}</span>, sortValue: valueOf }
         ]
       : []),
+    {
+      id: "selling",
+      header: "Selling price",
+      align: "right",
+      cell: (i) => (Number(i.sellingPrice) > 0 ? formatINR(Number(i.sellingPrice)) : <span className="text-muted-foreground" title="No selling price set; quotes and invoices use the purchase price">—</span>),
+      sortValue: (i) => Number(i.sellingPrice) || 0,
+      hideBelow: "lg"
+    },
     {
       id: "level",
       header: "Level",

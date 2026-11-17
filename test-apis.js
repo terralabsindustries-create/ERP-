@@ -2,7 +2,7 @@
 const fetch = require('node-fetch');
 // TODO: switch back to production URL when done testing locally
 // const BASE_URL = process.env.BASE_URL || 'https://serpy.synxautomate.com/api';
-const BASE_URL = process.env.BASE_URL || 'http://localhost:4001/api';
+const BASE_URL = process.env.BASE_URL || 'https://api.carbonprintflow.com/api';
 
 const testToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTkxNDYyZDQ0NDUxZmE1NDExYmVlNDYiLCJpYXQiOjE3NzI3MTQ0NjEsImV4cCI6MTc3MjgwMDg2MX0.PangnkKxFPrEKsmSseKLlcXOO83MzUsDn5Q_aEtfsng';
 const staffId = '69a8302c0bd2b8608e6a191b';

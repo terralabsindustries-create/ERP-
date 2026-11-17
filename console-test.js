@@ -1,7 +1,7 @@
 // Console test script - paste this in browser console when logged in as staff
 // TODO: switch back to production URL when done testing locally
 // const BASE_URL = window.__BASE_URL__ || 'https://serpy.synxautomate.com/api';
-const BASE_URL = window.__BASE_URL__ || 'http://localhost:4001/api';
+const BASE_URL = window.__BASE_URL__ || 'https://api.carbonprintflow.com/api';
 
 // Test the APIs directly from browser console
 console.log('🧪 Testing APIs from browser console...');

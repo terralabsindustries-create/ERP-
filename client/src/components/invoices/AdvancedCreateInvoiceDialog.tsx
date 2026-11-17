@@ -17,7 +17,7 @@ import { LinePricingFields } from "@/components/billing/LinePricingFields";
 import { draftTotals, gstRateProblem, lineDraftFromJobItem, lineInput, lineProblem, newLineDraft, type LineDraft } from "@/components/billing/lineDraft";
 import { useHsnGstRates } from "@/components/billing/useHsnGstRates";
 import { StockAvailability } from "@/components/billing/StockAvailability";
-import { stockItemNamed, stockNeeded, unitText, type StockItem } from "@/components/billing/stock";
+import { sellingRate, stockItemNamed, stockNeeded, unitText, type StockItem } from "@/components/billing/stock";
 import { isAreaUnit } from "@/lib/billing";
 import { localDate } from "@/lib/format";
 
@@ -581,7 +581,7 @@ export function AdvancedCreateInvoiceDialog({
                                     const hsnCode = selectedItem.hsnCode || item.hsnCode;
                                     updateItem(index, {
                                       itemName: selectedItem.name,
-                                      unitPrice: String(selectedItem.unitCost || 0),
+                                      unitPrice: String(sellingRate(selectedItem)),
                                       description: item.description || selectedItem.description || '',
                                       hsnCode,
                                       unit: invUnit,
@@ -593,7 +593,7 @@ export function AdvancedCreateInvoiceDialog({
                                 >
                                   <span className="font-medium">{selectedItem.name}</span>
                                   <span className="text-xs text-muted-foreground">
-                                    In stock: {selectedItem.quantity || 0} {unitText(selectedItem.unit)} · ₹{selectedItem.unitCost || 0}
+                                    In stock: {selectedItem.quantity || 0} {unitText(selectedItem.unit)} · ₹{sellingRate(selectedItem)}
                                     {selectedItem.hsnCode ? ` · HSN ${selectedItem.hsnCode}` : ''}
                                   </span>
                                 </button>

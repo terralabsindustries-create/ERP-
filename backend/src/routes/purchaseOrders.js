@@ -292,6 +292,10 @@ router.post(
         const received = await InventoryService.changeStock({ _id: item.inventoryId, ...InventoryService.itemScope(req.user) }, qty);
         if (received) {
           const { item: stock, previousQuantity, newQuantity } = received;
+          // The item's purchase price follows what was last paid for it.
+          if (item.unitCost > 0 && stock.unitCost !== item.unitCost) {
+            await Inventory.updateOne({ _id: stock._id }, { $set: { unitCost: item.unitCost } });
+          }
           await InventoryMovement.create({
             inventoryItem: stock._id,
             itemName: stock.name,

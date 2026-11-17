@@ -15,7 +15,7 @@ import { ViewInvoiceDialog } from "../invoices/ViewInvoiceDialog";
 import { UNITS_OF_MEASUREMENT } from "../inventory/CreateItemDialog";
 import { CustomerTypePicker } from "../customers/CustomerTypePicker";
 import { StockAvailability, StockCheckList } from "../billing/StockAvailability";
-import { stockItemNamed, stockNeeded, unitText, type StockItem } from "../billing/stock";
+import { sellingRate, stockItemNamed, stockNeeded, unitText, type StockItem } from "../billing/stock";
 import { HSN_PATTERN, draftTotals, lineDraftFromJobItem } from "../billing/lineDraft";
 import { localDate } from "@/lib/format";
 
@@ -1223,7 +1223,7 @@ export function CreateJobDialog({
                                       newItems[index] = {
                                         ...newItems[index],
                                         itemName: invItem.name,
-                                        unitPrice: invItem.unitCost || 0,
+                                        unitPrice: sellingRate(invItem),
                                         hsnCode: invItem.hsnCode || undefined,
                                         gstRate: invItem.gstRate || 18,
                                         unit: invUnit,
@@ -1261,7 +1261,7 @@ export function CreateJobDialog({
                                       <div className="text-sm text-muted-foreground">{invItem.description || 'No description'}</div>
                                     </div>
                                     <div className="text-right text-sm">
-                                      <div className="font-medium">₹{invItem.unitCost || 0}</div>
+                                      <div className="font-medium">₹{sellingRate(invItem)}</div>
                                       <div className="text-muted-foreground">In stock: {invItem.quantity || 0} {unitText(invItem.unit)}</div>
                                     </div>
                                   </div>

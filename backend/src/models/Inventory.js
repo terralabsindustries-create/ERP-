@@ -78,6 +78,14 @@ const inventorySchema = new mongoose.Schema({
     default: false,
     description: 'Allows zero cost for free or sample items'
   },
+  // What the business charges a customer for one unit. Quotations, invoices
+  // and job tickets pre-fill their line rate from it; an item without one
+  // falls back to unitCost (the purchase price).
+  sellingPrice: {
+    type: Number,
+    min: [0, 'Selling price cannot be negative'],
+    default: null
+  },
   minStockLevel: {
     type: Number,
     required: [true, 'Minimum stock level is required'],

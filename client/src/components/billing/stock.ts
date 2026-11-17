@@ -8,6 +8,7 @@ export interface StockItem {
   quantity?: number;
   unit?: string;
   unitCost?: number;
+  sellingPrice?: number | null;
   description?: string;
   hsnCode?: string;
   status?: string;
@@ -21,6 +22,13 @@ export const stockItemNamed = <T extends StockItem>(items: T[], name: string): T
   const n = name.trim();
   return n ? items.find((i) => i.name === n && (i.status || "active") === "active") : undefined;
 };
+
+/**
+ * The rate a customer line starts at for a stock item: its selling price,
+ * or its purchase price (unitCost) when no selling price is set yet.
+ */
+export const sellingRate = (item: Pick<StockItem, "sellingPrice" | "unitCost">): number =>
+  Number(item.sellingPrice) > 0 ? Number(item.sellingPrice) : Number(item.unitCost) || 0;
 
 const UNIT_LABEL: Record<string, string> = { pieces: "pcs", sqft: "sq ft", sqm: "sq m", grams: "g", liters: "L", meters: "m" };
 export const unitText = (unit?: string) => (unit ? UNIT_LABEL[unit] || unit : "");

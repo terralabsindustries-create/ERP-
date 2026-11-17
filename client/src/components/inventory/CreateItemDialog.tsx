@@ -30,6 +30,7 @@ interface EditableItem {
   quantity?: number;
   unit?: string;
   unitCost?: number;
+  sellingPrice?: number | null;
   minStockLevel?: number;
   supplier?: string;
   hsnCode?: string;
@@ -85,6 +86,7 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
     quantity: "",
     unit: "",
     unitCost: "",
+    sellingPrice: "",
     minStockLevel: "",
     vendor: "",
     hsnCode: "",
@@ -136,6 +138,7 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
       quantity: String(item.quantity ?? ""),
       unit: item.unit || "",
       unitCost: String(item.unitCost ?? ""),
+      sellingPrice: item.sellingPrice != null && item.sellingPrice > 0 ? String(item.sellingPrice) : "",
       minStockLevel: String(item.minStockLevel ?? ""),
       vendor: item.supplier || "",
       hsnCode: item.hsnCode || "",
@@ -230,6 +233,16 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
       return false;
     }
 
+    const selling = formData.sellingPrice.trim() === "" ? null : parseFloat(formData.sellingPrice);
+    if (selling !== null && (isNaN(selling) || selling < 0)) {
+      toast({
+        title: "Validation Error",
+        description: "Selling price must be a valid number",
+        variant: "destructive",
+      });
+      return false;
+    }
+
     if (cost === 0 && !formData.isFreeItem) {
       toast({
         title: "Validation Error",
@@ -258,6 +271,8 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
         quantity: parseFloat(formData.quantity),
         unit: formData.unit,
         unitCost: parseFloat(formData.unitCost),
+        // Empty means "no selling price": customer lines then start at the purchase price.
+        sellingPrice: formData.sellingPrice.trim() === "" ? null : parseFloat(formData.sellingPrice),
         minStockLevel: parseFloat(formData.minStockLevel) || 0,
         vendor: formData.vendor || undefined,
         // The item model stores the supplier's name as `supplier`.
@@ -295,6 +310,7 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
         quantity: "",
         unit: "",
         unitCost: "",
+        sellingPrice: "",
         minStockLevel: "",
         vendor: "",
         hsnCode: "",
@@ -422,7 +438,7 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="unitCost">Unit Cost *</Label>
+                <Label htmlFor="unitCost">Purchase Price (Unit Cost) *</Label>
                 <Input
                   id="unitCost"
                   type="number"
@@ -433,8 +449,34 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
                   placeholder="0.00"
                   disabled={formData.isFreeItem}
                 />
+                <p className="text-xs text-muted-foreground">What you pay the supplier, per unit</p>
               </div>
 
+              <div className="space-y-2">
+                <Label htmlFor="sellingPrice">Selling Price</Label>
+                <Input
+                  id="sellingPrice"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={formData.sellingPrice}
+                  onChange={(e) => setFormData(prev => ({ ...prev, sellingPrice: e.target.value }))}
+                  placeholder={formData.unitCost ? formData.unitCost : "0.00"}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {(() => {
+                    const cost = parseFloat(formData.unitCost) || 0;
+                    const sell = parseFloat(formData.sellingPrice) || 0;
+                    if (!sell) return "Default rate on quotes & invoices. Empty uses the purchase price";
+                    const margin = sell - cost;
+                    const pct = sell > 0 ? Math.round((margin / sell) * 100) : 0;
+                    return `Margin ₹${margin.toLocaleString("en-IN", { maximumFractionDigits: 2 })} per unit (${pct}%)`;
+                  })()}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="minStockLevel">Min Stock Level</Label>
                 <Input
