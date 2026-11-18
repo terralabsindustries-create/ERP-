@@ -1,6 +1,7 @@
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "./AppSidebar";
 import { Header } from "./Header";
+import { PlanPromptDialog } from "@/components/subscription/PlanPromptDialog";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -24,6 +25,7 @@ export function Layout({ children }: LayoutProps) {
           </main>
         </div>
       </div>
+      <PlanPromptDialog />
     </SidebarProvider>
   );
 }

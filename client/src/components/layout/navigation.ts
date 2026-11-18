@@ -132,6 +132,7 @@ export const NAVIGATION: NavGroup[] = [
 /** Pages reachable from the user menu rather than the sidebar. */
 const OTHER_PAGES: Record<string, { group: string; title: string }> = {
   "/settings": { group: "Account", title: "Settings" },
+  "/subscription": { group: "Account", title: "Plan & billing" },
   "/activity-log": { group: "Account", title: "Activity Log" },
 };
 

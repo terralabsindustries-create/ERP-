@@ -31,6 +31,7 @@ import EmergencyOrders from "./pages/EmergencyOrders";
 import Costs from "./pages/Costs";
 import Payments from "./pages/Payments";
 import Portal from "./pages/Portal";
+import Subscription from "@/pages/Subscription";
 import Settings from "./pages/Settings";
 import ActivityLog from "./pages/ActivityLog";
 import Auth from "./pages/Auth";
@@ -116,6 +117,7 @@ const App = () => (
                         <Route path="/attendance" element={<PermissionRoute permission={["Human Resources", "Attendance"]}><Attendance /></PermissionRoute>} />
                         <Route path="/leaves" element={<PermissionRoute permission="Human Resources"><Leaves /></PermissionRoute>} />
                         <Route path="/payroll" element={<PermissionRoute permission="Payroll"><Payroll /></PermissionRoute>} />
+                        <Route path="/subscription" element={<Subscription />} />
                         <Route path="/settings" element={<PermissionRoute permission="Settings"><Settings /></PermissionRoute>} />
                         <Route path="/activity-log" element={<PermissionRoute permission="Activity Log"><ActivityLog /></PermissionRoute>} />
                         <Route path="/users" element={<PermissionRoute permission="User Management"><UserManagement /></PermissionRoute>} />

@@ -109,6 +109,14 @@ async function startServer() {
     .then(({ upgraded }) => upgraded && console.log(`🔐 Updated ${upgraded} starter role(s) to the current permissions`))
     .catch((err) => console.error('Starter role upgrade failed:', err.message));
 
+  // Plan purchases whose callback and webhook both went missing are settled by
+  // asking Razorpay directly every 15 minutes (only when keys are configured).
+  setInterval(() => {
+    if (!require('./services/razorpayClient').isConfigured()) return;
+    require('./services/subscriptionService').reconcileOpenPurchases()
+      .catch((err) => console.error('Plan payment reconcile failed:', err.message));
+  }, 15 * 60 * 1000).unref();
+
   setInterval(autoCheckPaymentReminders, 3600000);
   setTimeout(autoCheckPaymentReminders, 30000);
 

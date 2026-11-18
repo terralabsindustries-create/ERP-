@@ -1,144 +1,119 @@
-import { BASE_URL } from './apiClient';
+import apiClient from './apiClient';
 
-interface RazorpayOptions {
+/*
+  Carbon Print Flow plan purchases. The browser only names a pack; the server
+  decides the price and duration and returns the public key id with the order.
+*/
+
+export interface PlanPack {
+  id: string;
+  label: string;
+  months: number;
+  currency: string;
+  amountPaise: number;
+  perMonthPaise: number;
+  savingsPaise: number;
+  savingsPercent: number;
+  tag: string | null;
+}
+
+export interface PurchaseRecord {
+  id: string;
+  orderId: string;
+  paymentId: string | null;
+  packId: string;
+  months: number;
+  amountPaise: number;
+  currency: string;
+  status: 'created' | 'failed' | 'cancelled' | 'paid' | 'refunded' | 'dispute_lost';
+  disputeStatus: string;
+  refundedPaise: number;
+  failureReason: string | null;
+  paidAt: string | null;
+  createdAt: string;
+}
+
+export interface SubscriptionStatus {
+  isActive: boolean;
+  status: 'paid' | 'trial' | 'legacy' | 'expired';
+  plan: string | null;
+  packId?: string;
+  months?: number;
+  startDate?: string | null;
+  endDate?: string | null;
+  autoRenew: boolean;
+}
+
+export interface SettleResult {
+  success: boolean;
+  state: 'paid' | 'pending' | 'failed' | 'ignored';
+  granted: boolean;
+  message?: string;
+  purchase: PurchaseRecord;
+}
+
+interface CheckoutOptions {
   key: string;
   amount: number;
   currency: string;
   name: string;
   description: string;
-  order_id?: string;
-  handler: (response: any) => void;
-  prefill?: {
-    name?: string;
-    email?: string;
-    contact?: string;
-  };
-  notes?: Record<string, string>;
-  theme?: {
-    color?: string;
-  };
+  order_id: string;
+  handler: (response: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }) => void;
+  modal?: { ondismiss?: () => void };
+  prefill?: { name?: string; email?: string; contact?: string };
+  theme?: { color?: string };
 }
 
 declare global {
   interface Window {
-    Razorpay: new (options: RazorpayOptions) => any;
+    Razorpay: new (options: CheckoutOptions) => { open: () => void; on: (event: string, cb: (response: any) => void) => void };
   }
 }
 
-export const loadRazorpayScript = (): Promise<boolean> => {
-  return new Promise((resolve) => {
-    // Check if script is already loaded
-    if (window.Razorpay) {
-      resolve(true);
-      return;
-    }
+export const formatPaise = (paise: number) =>
+  `₹${(paise / 100).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 
+export const loadRazorpayScript = (): Promise<boolean> =>
+  new Promise((resolve) => {
+    if (window.Razorpay) return resolve(true);
     const script = document.createElement('script');
     script.src = 'https://checkout.razorpay.com/v1/checkout.js';
     script.async = true;
-    
-    script.onload = () => {
-      resolve(true);
-    };
-    
-    script.onerror = () => {
-      resolve(false);
-    };
-    
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
     document.body.appendChild(script);
   });
+
+export const openRazorpayPayment = async (
+  options: CheckoutOptions,
+  onFailed?: (message: string) => void
+): Promise<void> => {
+  if (!(await loadRazorpayScript()) || !window.Razorpay) {
+    throw new Error('Could not load the payment window. Check your connection and try again.');
+  }
+  if (!options.key) throw new Error('Payments are not available right now.');
+  const brand = getComputedStyle(document.documentElement).getPropertyValue('--print-brand').trim();
+  const checkout = new window.Razorpay({ ...options, theme: { color: options.theme?.color || brand || undefined } });
+  checkout.on('payment.failed', (response: any) =>
+    onFailed?.(response?.error?.description || 'The payment failed. You have not been charged.'));
+  checkout.open();
 };
 
-export const openRazorpayPayment = async (options: RazorpayOptions): Promise<void> => {
-  const isScriptLoaded = await loadRazorpayScript();
-  
-  if (!isScriptLoaded) {
-    throw new Error('Failed to load Razorpay SDK');
-  }
-  
-  if (!window.Razorpay) {
-    throw new Error('Razorpay SDK not loaded');
-  }
-
-  if (!options.key) {
-    // Must match the key the backend used to create the order, otherwise checkout fails
-    throw new Error('Razorpay key is missing. The server did not return a keyId for this order.');
-  }
-
-  const razorpay = new window.Razorpay({
-    ...options,
-    theme: {
-      // Razorpay wants a hex colour; the brand brown comes from the tokens in index.css
-      color: options.theme?.color || getComputedStyle(document.documentElement).getPropertyValue('--print-brand').trim() || undefined,
-    },
-  });
-
-  razorpay.open();
+const call = async <T,>(method: 'get' | 'post', url: string, body?: unknown): Promise<T> => {
+  const data: any = method === 'get' ? await apiClient.get(url) : await apiClient.post(url, body ?? {});
+  return data as T;
 };
 
-export const createRazorpayOrder = async (planData: {
-  planName: string;
-  amount: number;
-  currency?: string;
-  userId?: string;
-}): Promise<{ orderId: string; amount: number; keyId?: string }> => {
-  try {
-    // The server prices the order from the plan and ties it to this login.
-    const token = localStorage.getItem('token');
-    const response = await fetch(`${BASE_URL}/razorpay/create-order`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({ planName: planData.planName }),
-    });
+export const fetchPlans = () => call<{ packs: PlanPack[]; canPurchase: boolean }>('get', '/razorpay/plans');
+export const fetchSubscription = () =>
+  call<{ subscription: SubscriptionStatus; purchases: PurchaseRecord[]; canPurchase: boolean }>('get', '/razorpay/subscription');
 
-    const data = await response.json();
+export const createPlanOrder = (packId: string) =>
+  call<{ keyId: string; order: { id: string; amount: number; currency: string }; pack: PlanPack }>('post', '/razorpay/create-order', { packId });
 
-    if (!response.ok || !data.success) {
-      // Surface the backend's real reason (e.g. auth failed / not configured)
-      throw new Error(data.message || data.error || 'Failed to create Razorpay order');
-    }
+export const verifyPayment = (payload: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }) =>
+  call<SettleResult>('post', '/razorpay/verify-payment', payload);
 
-    // Backend shape: { success, keyId, order: { id, amount, ... } }
-    return {
-      orderId: data.order?.id,
-      amount: data.order?.amount,
-      keyId: data.keyId,
-    };
-  } catch (error) {
-    console.error('Error creating Razorpay order:', error);
-    throw error;
-  }
-};
-
-export const verifyPayment = async (paymentData: {
-  razorpay_order_id: string;
-  razorpay_payment_id: string;
-  razorpay_signature: string;
-  planName?: string;
-}): Promise<{ success: boolean; subscription?: any }> => {
-  try {
-    const token = localStorage.getItem('token');
-    const response = await fetch(`${BASE_URL}/razorpay/verify-payment`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(paymentData),
-    });
-
-    const result = await response.json();
-
-    if (!response.ok || !result.success) {
-      throw new Error(result.message || 'Payment verification failed');
-    }
-
-    return result;
-  } catch (error) {
-    console.error('Error verifying payment:', error);
-    throw error;
-  }
-};
+export const cancelOrder = (orderId: string) => call('post', `/razorpay/order/${encodeURIComponent(orderId)}/cancel`);
+export const syncOrder = (orderId: string) => call<SettleResult>('post', `/razorpay/order/${encodeURIComponent(orderId)}/sync`);

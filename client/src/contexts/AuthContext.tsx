@@ -20,6 +20,7 @@ interface User {
     startDate?: string;
     endDate?: string;
     autoRenew?: boolean;
+    status?: 'paid' | 'trial' | 'legacy' | 'expired';
   };
   createdAt: string;
   updatedAt: string;

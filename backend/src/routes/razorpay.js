@@ -1,218 +1,170 @@
 const express = require('express');
-const Razorpay = require('razorpay');
 const crypto = require('crypto');
-const User = require('../models/User');
+const mongoose = require('mongoose');
 const { protect } = require('../middleware/auth');
+const rzp = require('../services/razorpayClient');
+const svc = require('../services/subscriptionService');
+const SubscriptionPurchase = require('../models/SubscriptionPurchase');
+const RazorpayWebhookEvent = require('../models/RazorpayWebhookEvent');
+const { listPacks } = require('../config/subscriptionPlans');
+
+/*
+  Carbon Print Flow plan purchases (SaaS billing). Entirely separate from the
+  ERP's customer payments and ledger. Prices and durations are decided by
+  config/subscriptionPlans.js; the browser only names a pack.
+*/
 const router = express.Router();
 
-// Map frontend plan names to the User subscription plan enum
-const PLAN_MAP = { STARTER: 'basic', GROWTH: 'premium', ENTERPRISE: 'enterprise' };
-// Monthly price of each plan in rupees. The server sets the amount of every
-// order from this table, so a client cannot pay less for a bigger plan.
-const PLAN_PRICES = { STARTER: 2499, GROWTH: 4999, ENTERPRISE: 9999 };
-
-const RZP_KEY_ID = process.env.RAZORPAY_KEY_ID || '';
-const RZP_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '';
-
-// Warn loudly at startup if Razorpay isn't configured with real credentials
-const PLACEHOLDER_ID = 'rzp_test_1D5C4F7B8E9A0B1C';
-const PLACEHOLDER_SECRET = 'your_test_secret';
-const razorpayConfigured = RZP_KEY_ID && RZP_KEY_SECRET &&
-  RZP_KEY_ID !== PLACEHOLDER_ID && RZP_KEY_SECRET !== PLACEHOLDER_SECRET;
-if (!razorpayConfigured) {
-  console.warn('⚠️  Razorpay is not configured with valid keys. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET (a matching pair, same mode) in .env');
+if (!rzp.isConfigured()) {
+  console.warn('⚠️  Razorpay is not configured. Set RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET and RAZORPAY_WEBHOOK_SECRET.');
 }
 
-// Initialize Razorpay instance
-const razorpay = new Razorpay({
-  key_id: RZP_KEY_ID || PLACEHOLDER_ID,
-  key_secret: RZP_KEY_SECRET || PLACEHOLDER_SECRET,
+const fail = (res, err) => {
+  if (err instanceof svc.PurchaseError) {
+    return res.status(err.status).json({ success: false, message: err.message, code: err.code });
+  }
+  console.error('Subscription payment error:', err && err.message);
+  return res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
+};
+
+const requireConfigured = (req, res, next) => {
+  if (rzp.isConfigured()) return next();
+  return res.status(503).json({ success: false, message: 'Online payments are not available right now.', code: 'RAZORPAY_NOT_CONFIGURED' });
+};
+
+const stateResponse = (result, user) => ({
+  success: true,
+  state: result.state,
+  granted: result.granted,
+  purchase: svc.publicPurchase(result.purchase),
+  message: {
+    paid: 'Payment confirmed. Your plan is active.',
+    pending: 'Your payment is not confirmed yet. If you were charged, access will update automatically.',
+    failed: 'The payment failed. You have not been charged; please try again.',
+    ignored: 'This payment can no longer be applied.'
+  }[result.state]
 });
 
-// Create order endpoint (signed in: the order is tied to the login paying)
-router.post('/create-order', protect, async (req, res) => {
+// Catalog
+router.get('/plans', protect, (req, res) => {
+  res.json({ success: true, packs: listPacks(), canPurchase: req.user.role === 'admin' });
+});
+
+// Current plan, expiry and purchase history for the caller's business
+router.get('/subscription', protect, async (req, res) => {
   try {
-    if (!razorpayConfigured) {
-      return res.status(503).json({
-        success: false,
-        message: 'Payment gateway is not configured. Please add valid Razorpay API keys in the server .env (RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET).',
-        code: 'RAZORPAY_NOT_CONFIGURED',
-      });
-    }
-
-    const planName = String(req.body.planName || req.body.notes?.planName || '').toUpperCase();
-    if (!PLAN_PRICES[planName]) {
-      return res.status(400).json({ success: false, message: 'Choose a valid plan' });
-    }
-
-    const options = {
-      amount: PLAN_PRICES[planName] * 100, // paise
-      currency: 'INR',
-      receipt: `sub_${String(req.user._id).slice(-8)}_${Date.now()}`,
-      notes: { planName, userId: String(req.user._id) },
-    };
-
-    const order = await razorpay.orders.create(options);
-
+    const [subscription, purchases] = await Promise.all([
+      svc.getEntitlement(req.user),
+      SubscriptionPurchase.find({ workspaceKey: svc.workspaceKeyFor(req.user) }).sort({ createdAt: -1 }).limit(50)
+    ]);
     res.json({
       success: true,
-      keyId: RZP_KEY_ID, // frontend must open checkout with the SAME key that created the order
-      order: {
-        id: order.id,
-        amount: order.amount,
-        currency: order.currency,
-        receipt: order.receipt,
-        notes: order.notes,
-      },
+      subscription,
+      purchases: purchases.map(svc.publicPurchase),
+      canPurchase: req.user.role === 'admin'
     });
-  } catch (error) {
-    // Surface Razorpay's actual error so failures are diagnosable
-    const rzpErr = error && error.error ? error.error : null;
-    const statusCode = error && error.statusCode ? error.statusCode : 500;
-    const description = rzpErr ? rzpErr.description : (error.message || 'Unknown error');
-    console.error('Error creating Razorpay order:', statusCode, description);
-
-    const friendly = statusCode === 401
-      ? 'Razorpay authentication failed — the API key/secret in .env are invalid or do not match. Generate a fresh matching pair (same mode) from the Razorpay dashboard.'
-      : 'Failed to create order';
-
-    res.status(statusCode === 401 ? 502 : statusCode).json({
-      success: false,
-      message: friendly,
-      error: description,
-      code: rzpErr ? rzpErr.code : undefined,
-    });
-  }
+  } catch (err) { fail(res, err); }
 });
 
-// Verify payment endpoint (authenticated — activates the user's subscription)
-router.post('/verify-payment', protect, async (req, res) => {
+// Start a purchase. Only `packId` is read from the body.
+router.post('/create-order', protect, requireConfigured, async (req, res) => {
   try {
-    if (!razorpayConfigured) {
-      return res.status(503).json({ success: false, message: 'Payment gateway is not configured', code: 'RAZORPAY_NOT_CONFIGURED' });
-    }
-    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, planName } = req.body;
-    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
-      return res.status(400).json({ success: false, message: 'Payment details are missing' });
-    }
-
-    // Generate signature
-    const generated_signature = crypto
-      .createHmac('sha256', RZP_KEY_SECRET)
-      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
-      .digest('hex');
-
-    // Verify signature
-    if (generated_signature !== razorpay_signature) {
-      return res.status(400).json({ success: false, message: 'Invalid signature' });
-    }
-
-    // The plan comes from the order the server created, never from the
-    // request: it must belong to this login and be paid in full.
-    let order;
-    try {
-      order = await razorpay.orders.fetch(razorpay_order_id);
-    } catch (fetchErr) {
-      console.error('Could not fetch Razorpay order for verification:', fetchErr.message);
-      return res.status(502).json({ success: false, message: 'Could not confirm the payment with Razorpay. Please contact support.' });
-    }
-    const orderPlan = String(order?.notes?.planName || '').toUpperCase();
-    if (String(order?.notes?.userId) !== String(req.user._id) || !PLAN_PRICES[orderPlan] || Number(order.amount) !== PLAN_PRICES[orderPlan] * 100) {
-      return res.status(400).json({ success: false, message: 'This payment does not match your order' });
-    }
-    if (order.status !== 'paid' && Number(order.amount_paid) < Number(order.amount)) {
-      return res.status(400).json({ success: false, message: 'The payment has not been completed yet' });
-    }
-    if (planName && String(planName).toUpperCase() !== orderPlan) {
-      console.warn(`verify-payment: client sent plan ${planName} for an order of ${orderPlan}; using the order`);
-    }
-
-    // Activate the subscription for the authenticated user
-    const plan = PLAN_MAP[orderPlan] || 'basic';
-    const startDate = new Date();
-    const endDate = new Date(startDate);
-    endDate.setDate(endDate.getDate() + 30); // 30-day cycle
-
-    const user = await User.findById(req.user._id);
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-
-    user.subscription = {
-      isActive: true,
-      plan,
-      startDate,
-      endDate,
-      autoRenew: true,
-      lastOrderId: razorpay_order_id,
-      lastPaymentId: razorpay_payment_id,
-    };
-    await user.save();
-
-    console.log('✅ Payment verified & subscription activated:', {
-      user: user.email, plan, orderId: razorpay_order_id, paymentId: razorpay_payment_id,
-    });
-
+    const { purchase, pack } = await svc.createOrder(req.user, req.body && req.body.packId);
     res.json({
       success: true,
-      message: 'Payment verified successfully',
-      subscription: user.subscription,
+      keyId: rzp.keyId(), // public key id only
+      order: { id: purchase.orderId, amount: purchase.amountPaise, currency: purchase.currency },
+      pack
     });
-  } catch (error) {
-    console.error('Error verifying payment:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Payment verification failed',
-      error: error.message,
-    });
-  }
+  } catch (err) { fail(res, err); }
 });
 
-// Get order status
+// Checkout callback
+router.post('/verify-payment', protect, requireConfigured, async (req, res) => {
+  try {
+    const result = await svc.verifyCheckout(req.user, req.body || {});
+    res.status(result.state === 'pending' ? 202 : 200).json(stateResponse(result, req.user));
+  } catch (err) { fail(res, err); }
+});
+
+// Customer closed checkout
+router.post('/order/:orderId/cancel', protect, async (req, res) => {
+  try {
+    const purchase = await svc.markCancelled(req.user, String(req.params.orderId));
+    res.json({ success: true, purchase: svc.publicPurchase(purchase) });
+  } catch (err) { fail(res, err); }
+});
+
+// Status of one order, scoped to the caller's business
 router.get('/order/:orderId', protect, async (req, res) => {
   try {
-    const { orderId } = req.params;
-    const order = await razorpay.orders.fetch(orderId);
-    // Only the login that placed the order may look it up.
-    if (String(order?.notes?.userId) !== String(req.user._id)) {
-      return res.status(404).json({ success: false, message: 'Order not found' });
-    }
-
-    res.json({
-      success: true,
-      order,
-    });
-  } catch (error) {
-    console.error('Error fetching order:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch order',
-      error: error.message,
-    });
-  }
+    const purchase = await SubscriptionPurchase.findOne({ orderId: String(req.params.orderId), workspaceKey: svc.workspaceKeyFor(req.user) });
+    if (!purchase) return res.status(404).json({ success: false, message: 'Order not found.' });
+    res.json({ success: true, purchase: svc.publicPurchase(purchase) });
+  } catch (err) { fail(res, err); }
 });
 
-// Get payment details
-router.get('/payment/:paymentId', protect, async (req, res) => {
+// Ask Razorpay directly (after a refresh, closed tab or missed callback)
+router.post('/order/:orderId/sync', protect, requireConfigured, async (req, res) => {
   try {
-    const { paymentId } = req.params;
-    const payment = await razorpay.payments.fetch(paymentId);
-    if (String(payment?.notes?.userId) !== String(req.user._id)) {
-      return res.status(404).json({ success: false, message: 'Payment not found' });
-    }
-
-    res.json({
-      success: true,
-      payment,
-    });
-  } catch (error) {
-    console.error('Error fetching payment:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch payment',
-      error: error.message,
-    });
-  }
+    const purchase = await SubscriptionPurchase.findOne({ orderId: String(req.params.orderId), workspaceKey: svc.workspaceKeyFor(req.user) });
+    if (!purchase) return res.status(404).json({ success: false, message: 'Order not found.' });
+    const result = await svc.syncPurchase(purchase);
+    res.json(stateResponse(result, req.user));
+  } catch (err) { fail(res, err); }
 });
+
+/*
+  Public webhook. Mounted in app.js BEFORE express.json() with express.raw(), so
+  req.body is the exact bytes Razorpay signed.
+*/
+const STALE_PROCESSING_MS = 60 * 1000;
+
+const claimEvent = async (eventId, event) => {
+  try {
+    await RazorpayWebhookEvent.create({ eventId, event });
+    return 'claimed';
+  } catch (err) {
+    if (!err || err.code !== 11000) throw err;
+  }
+  const retry = await RazorpayWebhookEvent.findOneAndUpdate(
+    { $or: [{ eventId, status: 'failed' }, { eventId, status: 'processing', updatedAt: { $lt: new Date(Date.now() - STALE_PROCESSING_MS) } }] },
+    { $set: { status: 'processing' }, $inc: { attempts: 1 } }
+  );
+  if (retry) return 'claimed';
+  const existing = await RazorpayWebhookEvent.findOne({ eventId });
+  return existing && existing.status === 'done' ? 'duplicate' : 'busy';
+};
+
+const webhookHandler = async (req, res) => {
+  const raw = req.body;
+  if (!Buffer.isBuffer(raw) || !svc.verifyWebhookSignature(raw, req.get('X-Razorpay-Signature'))) {
+    return res.status(400).json({ success: false, message: 'Invalid signature' });
+  }
+  if (mongoose.connection.readyState !== 1) return res.status(503).json({ success: false });
+
+  let event;
+  try { event = JSON.parse(raw.toString('utf8')); } catch { return res.status(400).json({ success: false }); }
+  const eventId = req.get('X-Razorpay-Event-Id') || `body_${crypto.createHash('sha256').update(raw).digest('hex')}`;
+
+  try {
+    const claim = await claimEvent(eventId, event.event);
+    if (claim === 'duplicate') return res.status(200).json({ success: true, duplicate: true });
+    if (claim === 'busy') return res.status(409).json({ success: false, message: 'Event is being processed' });
+    try {
+      const outcome = await svc.applyWebhookEvent(event, eventId);
+      await RazorpayWebhookEvent.updateOne({ eventId }, { $set: { status: 'done', processedAt: new Date() } });
+      return res.status(200).json({ success: true, outcome });
+    } catch (err) {
+      await RazorpayWebhookEvent.updateOne({ eventId }, { $set: { status: 'failed', error: String(err.message).slice(0, 300) } });
+      console.error('Razorpay webhook processing failed:', event.event, err.message);
+      return res.status(500).json({ success: false }); // Razorpay will retry
+    }
+  } catch (err) {
+    console.error('Razorpay webhook error:', err.message);
+    return res.status(500).json({ success: false });
+  }
+};
 
 module.exports = router;
+module.exports.webhookHandler = webhookHandler;

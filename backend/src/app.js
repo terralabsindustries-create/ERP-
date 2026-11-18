@@ -64,6 +64,10 @@ app.use(cors({
 }));
 
 
+// Razorpay signs the exact bytes it sends, so its webhook must see the raw body
+// before JSON parsing. Public: authenticated by X-Razorpay-Signature instead.
+app.post('/api/razorpay/webhook', express.raw({ type: '*/*', limit: '1mb' }), require('./routes/razorpay').webhookHandler);
+
 app.use(express.json({
   limit: '10mb',
   // The WhatsApp webhook checks Meta's signature over the exact bytes received.

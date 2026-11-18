@@ -4,6 +4,7 @@ const { validate } = require('../middleware/validate');
 const User = require('../models/User');
 const OTP = require('../models/OTP');
 const { protect, sendTokenResponse } = require('../middleware/auth');
+const { attachEntitlement } = require('../services/subscriptionService');
 const crypto = require('crypto');
 const { generateOTP, hashOTP, verifyOTP, getOTPEmailTemplate, getPasswordResetEmailTemplate } = require('../utils/otpUtils');
 const mailer = require('../utils/mailer');
@@ -432,6 +433,7 @@ router.post('/invitation/:token/accept', [
     // one-time link and just chose the password, so making them retype it adds
     // nothing — and the token replaces whatever session the browser held.
     await user.updateLastLogin();
+    await attachEntitlement(user);
     sendTokenResponse(user, 200, res, 'Your password has been set.');
 
   } catch (error) {
@@ -603,6 +605,7 @@ router.post('/login', loginRateLimit, loginValidation, validate, async (req, res
     await user.updateLastLogin();
     
     // Generate token and send response
+    await attachEntitlement(user);
     sendTokenResponse(user, 200, res, 'Login successful');
     
   } catch (error) {
@@ -619,6 +622,7 @@ router.post('/login', loginRateLimit, loginValidation, validate, async (req, res
 // @access  Private
 router.get('/me', protect, async (req, res) => {
   try {
+    await attachEntitlement(req.user);
     res.status(200).json({
       status: 'success',
       data: {

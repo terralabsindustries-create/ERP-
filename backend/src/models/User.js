@@ -217,7 +217,8 @@ userSchema.methods.generateProfile = function () {
     status: this.status,
     invitationExpiresAt: this.invitation ? this.invitation.expiresAt : undefined,
     preferences: this.preferences,
-    subscription: this.subscription,
+    // The business-wide entitlement when it has been resolved (see services/subscriptionService.js)
+    subscription: (this.$locals && this.$locals.entitlement) || this.subscription,
     lastLogin: this.lastLogin,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt

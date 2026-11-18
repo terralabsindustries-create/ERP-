@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Search, Users, Briefcase, FileText, Loader2, Plus, ChevronRight, LogOut, Settings, ShieldCheck, History } from "lucide-react";
+import { Search, Users, Briefcase, FileText, Loader2, Plus, ChevronRight, LogOut, Settings, ShieldCheck, History, CreditCard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -321,6 +321,10 @@ export function Header() {
                 )}
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => navigate('/subscription')}>
+                <CreditCard className="h-4 w-4" />
+                Plan & billing
+              </DropdownMenuItem>
               {hasPermission("Settings") && (
                 <DropdownMenuItem onClick={() => navigate('/settings')}>
                   <Settings className="h-4 w-4" />
