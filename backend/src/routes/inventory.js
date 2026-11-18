@@ -9,6 +9,7 @@ const { protect } = require('../middleware/auth');
 const { requirePermission, userCan } = require('../middleware/requirePermission');
 const InventoryMovement = require('../models/InventoryMovement');
 const InventoryService = require('../services/InventoryService');
+const { inTransaction } = require('../utils/transactions');
 
 // Apply auth middleware to all routes
 router.use(protect);
@@ -442,49 +443,114 @@ router.post('/', requirePermission('Inventory: Create & Edit'), async (req, res)
   }
 });
 
-// PUT /api/inventory/:id - Update inventory item
+/*
+  Editing an item changes its description and pricing only. The stock count
+  changes through POST /:id/adjust (Inventory: Adjust Stock), purchase-order
+  receipts and invoices, each of which records a stock movement. Ownership,
+  the business, the SKU and the bookkeeping fields never change here.
+*/
+const EDITABLE_FIELDS = new Set([
+  'name', 'category', 'description', 'unit', 'unitCost', 'isFreeItem', 'sellingPrice',
+  'minStockLevel', 'maxStockLevel', 'supplier', 'supplierContact', 'location', 'status',
+  'hsnCode', 'sacCode', 'gstRate', 'autoDeduct'
+]);
+// Sent back unchanged (a client echoing the item) they are ignored; changed, refused.
+const PROTECTED_FIELDS = new Set([
+  'quantity', 'sku', 'userId', 'dataScope', 'stockStatus', 'lastUpdated',
+  '_id', 'id', '__v', 'createdAt', 'updatedAt', 'totalValue', 'displayQuantity'
+]);
+const sameValue = (key, sent, current) => {
+  if (sent === undefined || sent === null || sent === '') return current === undefined || current === null || current === '';
+  if (current === undefined || current === null) return false;
+  if (key === 'quantity') return Number(sent) === Number(current);
+  if (key === 'sku') return String(sent).trim().toUpperCase() === String(current).toUpperCase();
+  if (current instanceof Date) return new Date(sent).getTime() === current.getTime();
+  return String(sent) === String(current);
+};
+
+/**
+ * The edit a request may make to `current`, or why it is refused.
+ * @returns {{ changes: object } | { status: number, message: string, fields: string[], protectedFields?: string[] }}
+ */
+function itemEdit(body, current) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { status: 400, message: 'Send the fields to change', fields: [] };
+  const changes = {};
+  const refused = [];
+  const unknown = [];
+  for (const [key, value] of Object.entries(body)) {
+    if (EDITABLE_FIELDS.has(key)) changes[key] = value;
+    else if (PROTECTED_FIELDS.has(key)) { if (!sameValue(key, value, current[key])) refused.push(key); }
+    else unknown.push(key);
+  }
+  if (refused.length) {
+    const stock = refused.includes('quantity') ? ' Change the stock count with Adjust stock, which records a stock movement.' : '';
+    return { status: 400, message: `${refused.join(', ')} cannot be changed by editing the item.${stock}`, fields: refused, protectedFields: refused };
+  }
+  if (unknown.length) return { status: 400, message: `Unknown field${unknown.length === 1 ? '' : 's'}: ${unknown.join(', ')}`, fields: unknown };
+  if (changes.hsnCode && changes.sacCode) return { status: 400, message: 'Choose either an HSN code or a SAC code', fields: ['hsnCode', 'sacCode'] };
+  if (changes.hsnCode) changes.sacCode = '';
+  if (changes.sacCode) changes.hsnCode = '';
+  return { changes };
+}
+
+const logRefusedEdit = (req, item, refused) =>
+  ActivityLog.logActivity({
+    action: 'Inventory Edit Refused',
+    description: `Refused a change to ${refused.join(', ')} of ${item.name}`,
+    entityType: 'inventory',
+    entityId: item._id,
+    entityName: item.name,
+    performedBy: req.user._id,
+    performedByName: req.user.fullName,
+    actionType: 'update',
+    changes: { fields: refused },
+    severity: 'medium',
+    userId: req.user._id,
+    dataScope: req.user.dataScope
+  }).catch((err) => console.error('Activity log (refused inventory edit) failed:', err.message));
+
+const logEdit = (req, before, item, fields) =>
+  ActivityLog.logActivity({
+    action: 'Inventory Item Updated',
+    description: `Inventory item ${item.name} was updated`,
+    entityType: 'inventory',
+    entityId: item._id,
+    entityName: item.name,
+    performedBy: req.user._id,
+    performedByName: req.user.fullName,
+    actionType: 'update',
+    changes: {
+      fields,
+      before: Object.fromEntries(fields.map((f) => [f, before[f]])),
+      after: Object.fromEntries(fields.map((f) => [f, item[f]]))
+    },
+    severity: 'low',
+    userId: req.user._id,
+    dataScope: req.user.dataScope
+  }).catch((err) => console.error('Activity log (update inventory) failed:', err.message));
+
+/** Applies an allowed edit; returns the updated item, or null if it is gone. */
+const applyEdit = (req, id, changes) =>
+  Inventory.findOneAndUpdate({ _id: id, ...InventoryService.itemScope(req.user) }, { $set: changes }, { new: true, runValidators: true });
+
+// PUT /api/inventory/:id - Update an item's details (never its stock count)
 router.put('/:id', requirePermission('Inventory: Create & Edit'), async (req, res) => {
   try {
-    if (req.body.hsnCode && req.body.sacCode) {
-      return res.status(400).json({ success: false, message: 'Choose either an HSN code or a SAC code' });
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ success: false, message: 'Inventory item not found' });
+    const current = await Inventory.findOne({ _id: req.params.id, ...InventoryService.itemScope(req.user) }).lean();
+    if (!current) return res.status(404).json({ success: false, message: 'Inventory item not found' });
+
+    const edit = itemEdit(req.body, current);
+    if (!edit.changes) {
+      if (edit.protectedFields) logRefusedEdit(req, current, edit.protectedFields);
+      return res.status(edit.status).json({ success: false, message: edit.message, fields: edit.fields });
     }
-    if (req.body.hsnCode) req.body.sacCode = '';
-    if (req.body.sacCode) req.body.hsnCode = '';
-    // Build query with dataScope or userId filtering
-    const findQuery = req.user.dataScope
-      ? { _id: req.params.id, dataScope: req.user.dataScope }
-      : { _id: req.params.id, userId: req.user._id };
+    const fields = Object.keys(edit.changes);
+    if (!fields.length) return res.json({ success: true, data: await Inventory.findById(current._id) });
 
-    // Prevent SKU changes after creation (immutable)
-    if (req.body.sku) {
-      delete req.body.sku;
-    }
-
-    const item = await Inventory.findOneAndUpdate(
-      findQuery,
-      req.body,
-      { new: true, runValidators: true }
-    );
-
-    if (!item) {
-      return res.status(404).json({ success: false, message: 'Inventory item not found' });
-    }
-
-    ActivityLog.logActivity({
-      action: 'Inventory Item Updated',
-      description: `Inventory item ${item.name} was updated`,
-      entityType: 'inventory',
-      entityId: item._id,
-      entityName: item.name,
-      performedBy: req.user._id,
-      performedByName: req.user.fullName,
-      actionType: 'update',
-      changes: { fields: Object.keys(req.body) },
-      severity: 'low',
-      userId: req.user._id,
-      dataScope: req.user.dataScope
-    }).catch(err => console.error('Activity log (update inventory) failed:', err.message));
-
+    const item = await applyEdit(req, current._id, edit.changes);
+    if (!item) return res.status(404).json({ success: false, message: 'Inventory item not found' });
+    logEdit(req, current, item, fields);
     res.json({ success: true, data: item });
   } catch (error) {
     console.error('Error updating inventory item:', error);
@@ -553,41 +619,47 @@ router.post('/:id/adjust', requirePermission('Inventory: Adjust Stock'), async (
 
     // One atomic write, so an invoice or another adjustment made at the same
     // moment is added to, not overwritten. A removal is refused if the stock
-    // ran out in the meantime.
+    // ran out in the meantime. The count and its movement are written
+    // together: if the movement cannot be recorded, the count is put back.
     const scope = { _id: item._id, ...InventoryService.itemScope(req.user) };
-    const result = hasChange
-      ? await InventoryService.changeStock(scope, delta)
-      : await InventoryService.setStock(scope, Number(quantity));
-    if (!result) {
+    const TYPES = ['purchase', 'adjustment', 'return', 'damage', 'sale'];
+    const outcome = await inTransaction(async ({ session, onUndo }) => {
+      const result = hasChange
+        ? await InventoryService.changeStock(scope, delta, { session })
+        : await InventoryService.setStock(scope, Number(quantity), { session });
+      if (!result) return null;
+      const { previousQuantity, newQuantity } = result;
+      // Undone as a change, so a sale made since is not overwritten.
+      onUndo(() => InventoryService.revertChange(scope, Math.round((newQuantity - previousQuantity) * 10000) / 10000));
+      const moved = Math.abs(Math.round((newQuantity - previousQuantity) * 10000) / 10000);
+      const movementType = TYPES.includes(req.body.type) ? req.body.type : newQuantity > previousQuantity ? 'purchase' : 'adjustment';
+      await InventoryMovement.create([{
+        inventoryItem: item._id,
+        itemName: item.name,
+        movementType,
+        quantity: moved,
+        unit: item.unit,
+        unitCost: item.unitCost || 0,
+        totalCost: moved * (item.unitCost || 0),
+        previousQuantity,
+        newQuantity,
+        referenceType: movementType === 'damage' ? 'damage' : movementType === 'return' ? 'return' : 'adjustment',
+        referenceNumber: reference ? String(reference).slice(0, 80) : undefined,
+        reason: reason ? String(reason).slice(0, 200) : hasQuantity ? 'Stock count' : undefined,
+        notes: notes ? String(notes).slice(0, 500) : undefined,
+        userId: req.user._id,
+        performedByName: req.user.fullName,
+        dataScope: item.dataScope || req.user.dataScope
+      }], { session });
+      return result;
+    }, { label: 'Stock adjustment' });
+    if (!outcome) {
       const now = await Inventory.findOne(scope).select('quantity');
       if (!now) return res.status(404).json({ success: false, message: 'Inventory item not found' });
       return res.status(400).json({ success: false, message: `Only ${now.quantity} ${item.unit} in stock` });
     }
-    const { previousQuantity, newQuantity } = result;
-    const moved = Math.abs(Math.round((newQuantity - previousQuantity) * 10000) / 10000);
-    const updated = result.item;
-
-    const TYPES = ['purchase', 'adjustment', 'return', 'damage', 'sale'];
-    const movementType = TYPES.includes(req.body.type) ? req.body.type : newQuantity > previousQuantity ? 'purchase' : 'adjustment';
-
-    await InventoryMovement.create({
-      inventoryItem: item._id,
-      itemName: item.name,
-      movementType,
-      quantity: moved,
-      unit: item.unit,
-      unitCost: item.unitCost || 0,
-      totalCost: moved * (item.unitCost || 0),
-      previousQuantity,
-      newQuantity,
-      referenceType: movementType === 'damage' ? 'damage' : movementType === 'return' ? 'return' : 'adjustment',
-      referenceNumber: reference ? String(reference).slice(0, 80) : undefined,
-      reason: reason ? String(reason).slice(0, 200) : hasQuantity ? 'Stock count' : undefined,
-      notes: notes ? String(notes).slice(0, 500) : undefined,
-      userId: req.user._id,
-      performedByName: req.user.fullName,
-      dataScope: item.dataScope || req.user.dataScope
-    });
+    const { previousQuantity, newQuantity } = outcome;
+    const updated = outcome.item;
 
     ActivityLog.logActivity({
       action: 'Inventory Stock Adjusted',
@@ -611,40 +683,46 @@ router.post('/:id/adjust', requirePermission('Inventory: Adjust Stock'), async (
   }
 });
 
-// POST /api/inventory/bulk-update - Bulk update inventory items
-router.post('/bulk-update', async (req, res) => {
+// POST /api/inventory/bulk-update  { items: [{ id, updates }] }
+// The same editable fields as PUT /:id, for several items. Every item is
+// checked before any is changed: one refused edit refuses the whole request.
+router.post('/bulk-update', requirePermission('Inventory: Create & Edit'), async (req, res) => {
   try {
-    const { items } = req.body; // Array of { id, updates }
+    const { items } = req.body;
+    if (!Array.isArray(items) || items.length === 0 || items.length > 200) {
+      return res.status(400).json({ success: false, message: 'Send 1 to 200 items to update' });
+    }
+    if (items.some((entry) => !entry || !mongoose.isValidObjectId(entry.id))) {
+      return res.status(400).json({ success: false, message: 'Every item needs a valid id' });
+    }
+    const ids = [...new Set(items.map((entry) => String(entry.id)))];
+    if (ids.length !== items.length) return res.status(400).json({ success: false, message: 'An item is listed twice' });
 
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ success: false, message: 'Invalid items array' });
+    const found = await Inventory.find({ _id: { $in: ids }, ...InventoryService.itemScope(req.user) }).lean();
+    const byId = new Map(found.map((item) => [String(item._id), item]));
+    if (found.length !== ids.length) return res.status(404).json({ success: false, message: 'Some items were not found' });
+
+    const edits = [];
+    for (const { id, updates } of items) {
+      const current = byId.get(String(id));
+      const edit = itemEdit(updates, current);
+      if (!edit.changes) {
+        if (edit.protectedFields) logRefusedEdit(req, current, edit.protectedFields);
+        return res.status(edit.status).json({ success: false, message: `${current.name}: ${edit.message}`, fields: edit.fields, itemId: String(id) });
+      }
+      edits.push({ current, changes: edit.changes });
     }
 
-    const updatePromises = items.map(({ id, updates }) => {
-      // Build query with dataScope or userId filtering
-      const findQuery = req.user.dataScope
-        ? { _id: id, dataScope: req.user.dataScope }
-        : { _id: id, userId: req.user._id };
-
-      // Prevent SKU changes in bulk updates (immutable)
-      if (updates.sku) {
-        delete updates.sku;
-      }
-
-      return Inventory.findOneAndUpdate(
-        findQuery,
-        updates,
-        { new: true, runValidators: true }
-      );
-    });
-
-    const updatedItems = await Promise.all(updatePromises);
-
-    res.json({
-      success: true,
-      data: updatedItems.filter(item => item !== null),
-      message: 'Bulk update completed successfully'
-    });
+    const updated = [];
+    for (const { current, changes } of edits) {
+      const fields = Object.keys(changes);
+      if (!fields.length) continue;
+      const item = await applyEdit(req, current._id, changes);
+      if (!item) continue;
+      logEdit(req, current, item, fields);
+      updated.push(item);
+    }
+    res.json({ success: true, data: updated, message: 'Bulk update completed successfully' });
   } catch (error) {
     console.error('Error in bulk update:', error);
     res.status(400).json({ success: false, message: 'Failed to bulk update inventory', error: error.message });

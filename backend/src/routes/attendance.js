@@ -3,6 +3,7 @@ const Attendance = require('../models/Attendance');
 const Employee = require('../models/Employee');
 const LeaveRequest = require('../models/LeaveRequest');
 const { protect } = require('../middleware/auth');
+const { resolveMonth } = require('../utils/leavePolicy');
 
 const router = express.Router();
 router.use(protect);
@@ -85,35 +86,28 @@ router.get('/summary', async (req, res) => {
     const end = new Date(Date.UTC(year, month, 1));
 
     const [records, leaves] = await Promise.all([
-      Attendance.find(scopeFilter(req, { date: { $gte: start, $lt: end } })),
+      Attendance.find(scopeFilter(req, { date: { $gte: start, $lt: end } })).select('employeeId date status').lean(),
       LeaveRequest.find(scopeFilter(req, {
         status: 'approved', fromDate: { $lt: end }, toDate: { $gte: start }
-      })).select('employeeId fromDate toDate').lean()
+      })).select('employeeId leaveType fromDate toDate days status').lean()
     ]);
 
     // Approved leave overrides an old mark and also counts when nobody has
-    // saved attendance for that day yet.
-    const days = new Map(records.map((r) => [`${r.employeeId}:${normalizeDay(r.date).toISOString()}`, { employeeId: r.employeeId, status: r.status }]));
-    for (const leave of leaves) {
-      for (let day = new Date(Math.max(start.getTime(), normalizeDay(leave.fromDate).getTime())); day < end && day <= normalizeDay(leave.toDate); day = nextDay(day)) {
-        days.set(`${leave.employeeId}:${day.toISOString()}`, { employeeId: leave.employeeId, status: 'leave' });
-      }
-    }
-
+    // saved attendance for that day yet. Paid and unpaid leave follow the
+    // same rules as payroll (utils/leavePolicy.js).
     const byEmployee = {};
-    for (const r of days.values()) {
-      const id = String(r.employeeId);
-      if (!byEmployee[id]) {
-        byEmployee[id] = { present: 0, absent: 0, halfDay: 0, leave: 0, holiday: 0, weekOff: 0, paidDays: 0 };
+    for (const [id, month] of resolveMonth({ attendance: records, leaves, start, end })) {
+      const b = { present: 0, absent: 0, halfDay: 0, leave: 0, unpaidLeave: 0, holiday: 0, weekOff: 0, paidDays: 0, lopDays: month.lopDays };
+      for (const r of month.days.values()) {
+        if (r.status === 'present') b.present++;
+        else if (r.status === 'absent') b.absent++;
+        else if (r.status === 'half-day') b.halfDay++;
+        else if (r.status === 'leave') { b.leave++; if (r.lop > 0) b.unpaidLeave += r.lop; }
+        else if (r.status === 'holiday') b.holiday++;
+        else if (r.status === 'week-off') b.weekOff++;
+        b.paidDays += r.status === 'leave' ? 1 - r.lop : Attendance.paidWeight(r.status);
       }
-      const b = byEmployee[id];
-      if (r.status === 'present') b.present++;
-      else if (r.status === 'absent') b.absent++;
-      else if (r.status === 'half-day') b.halfDay++;
-      else if (r.status === 'leave') b.leave++;
-      else if (r.status === 'holiday') b.holiday++;
-      else if (r.status === 'week-off') b.weekOff++;
-      b.paidDays += Attendance.paidWeight(r.status);
+      byEmployee[id] = b;
     }
 
     res.json({ status: 'success', data: { summary: byEmployee } });

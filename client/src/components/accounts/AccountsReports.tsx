@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Download, TrendingUp, TrendingDown, IndianRupee, CreditCard, Users, Receipt } from "lucide-react";
+import { Download, TrendingUp, TrendingDown, IndianRupee, CreditCard, Receipt } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import apiClient from "@/lib/apiClient";
@@ -17,13 +17,6 @@ interface AccountReport {
   cashBalance: number;
 }
 
-interface User {
-  _id: string;
-  fullName: string;
-  email: string;
-  role: string;
-}
-
 interface Transaction {
   _id: string;
   transactionNumber: string;
@@ -33,67 +26,47 @@ interface Transaction {
   category: string;
   paymentMethod: string;
   createdAt: string;
+  postedAt?: string;
   status: string;
 }
+
+// Income adds, expense subtracts; the other types do not change profit.
+const TYPE_LABEL: Record<string, string> = { income: "Income", expense: "Expense", transfer: "Transfer", opening_balance: "Opening balance", adjustment: "Adjustment" };
+const SIGN: Record<string, string> = { income: "+", expense: "-" };
 
 export function AccountsReports() {
   const [reportData, setReportData] = useState<AccountReport | null>(null);
   const [selectedPeriod, setSelectedPeriod] = useState("month");
-  const [selectedUserId, setSelectedUserId] = useState<string>("all");
-  const [users, setUsers] = useState<User[]>([]);
   const [recentTransactions, setRecentTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
 
-  useEffect(() => {
-    fetchUsers();
-  }, []);
-
+  // The report is for the whole business. Entries record which login typed
+  // them, not whose income or cost they are, so there is no per-user profit.
   useEffect(() => {
     generateReport();
-  }, [selectedPeriod, selectedUserId]);
-
-  const fetchUsers = async () => {
-    try {
-      const usersList = await apiClient.listAll('/users', 'users');
-      setUsers(usersList);
-    } catch (error) {
-      console.error('Error fetching users:', error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch users list",
-        variant: "destructive",
-      });
-    }
-  };
+  }, [selectedPeriod]);
 
   const generateReport = async () => {
     setLoading(true);
     try {
       // Fetch recent transactions
-      const params: any = {
-        limit: 10,
+      const params = {
+        limit: '10',
         sortBy: 'createdAt',
         sortOrder: 'desc'
       };
 
-      // Add userId filter if not "all"
-      if (selectedUserId && selectedUserId !== 'all') {
-        params.userId = selectedUserId;
-      }
-
       // Fetch recent transactions + the period-aware financial summary in parallel
-      const [transactionsResponse, reportResponse]: any = await Promise.all([
+      const [transactionsResponse, reportResponse] = (await Promise.all([
         apiClient.getAccountTransactions(params),
         apiClient.getAccountReportSummary(selectedPeriod),
-      ]);
-      console.log('📋 Transactions response:', transactionsResponse);
-      console.log('📊 Report summary:', reportResponse);
+      ])) as [{ transactions?: Transaction[] } | undefined, { report?: Partial<AccountReport> } | undefined];
 
       const transactions = transactionsResponse?.transactions || [];
       setRecentTransactions(transactions);
 
-      const report = reportResponse?.report || reportResponse || {};
+      const report: Partial<AccountReport> = reportResponse?.report || {};
       setReportData({
         period: selectedPeriod,
         totalIncome: report.totalIncome || 0,
@@ -119,8 +92,7 @@ export function AccountsReports() {
     try {
       setLoading(true);
 
-      // Build params object - only period, not userId (invoices don't have userId)
-      const params: any = {
+      const params = {
         period: selectedPeriod,
         format: 'excel'
       };
@@ -168,20 +140,6 @@ export function AccountsReports() {
           <p className="text-muted-foreground">Income, expenses and net profit. Only the owner sees this report.</p>
         </div>
         <div className="flex items-center space-x-2">
-          <Select value={selectedUserId} onValueChange={setSelectedUserId}>
-            <SelectTrigger className="w-48">
-              <Users className="h-4 w-4" />
-              <SelectValue placeholder="Filter by user" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Users</SelectItem>
-              {users.map((user) => (
-                <SelectItem key={user._id} value={user._id}>
-                  {user.fullName} ({user.role})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
           <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
             <SelectTrigger className="w-40">
                 <SelectValue />
@@ -305,14 +263,14 @@ export function AccountsReports() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Receipt className="h-5 w-5" />
-            Recent Transactions
+            Latest entries
           </CardTitle>
         </CardHeader>
         <CardContent>
           {recentTransactions.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
               <Receipt className="h-12 w-12 mx-auto mb-2 opacity-50" />
-              <p>No transactions found for the selected period</p>
+              <p>No transactions yet</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -331,7 +289,7 @@ export function AccountsReports() {
                   {recentTransactions.map((transaction) => (
                     <tr key={transaction._id} className="border-b hover:bg-muted">
                       <td className="py-3 px-4 text-sm text-muted-foreground">
-                        {new Date(transaction.createdAt).toLocaleDateString()}
+                        {new Date(transaction.postedAt || transaction.createdAt).toLocaleDateString()}
                       </td>
                       <td className="py-3 px-4">
                         <span className="text-sm font-medium text-info-strong">
@@ -342,17 +300,17 @@ export function AccountsReports() {
                       <td className="py-3 px-4 text-sm text-muted-foreground">{transaction.category}</td>
                       <td className="py-3 px-4">
                         <Badge
-                          variant={transaction.transactionType === 'income' ? 'default' : 'destructive'}
+                          variant={transaction.transactionType === 'income' ? 'default' : transaction.transactionType === 'expense' ? 'destructive' : 'secondary'}
                           className={transaction.transactionType === 'income' ? 'bg-success text-success-foreground hover:bg-success/90' : ''}
                         >
-                          {transaction.transactionType === 'income' ? 'Income' : 'Expense'}
+                          {TYPE_LABEL[transaction.transactionType] || transaction.transactionType}
                         </Badge>
                       </td>
                       <td className="py-3 px-4 text-right">
                         <span className={`text-sm font-semibold ${
-                          transaction.transactionType === 'income' ? 'text-success-strong' : 'text-destructive-strong'
+                          transaction.transactionType === 'income' ? 'text-success-strong' : transaction.transactionType === 'expense' ? 'text-destructive-strong' : 'text-muted-foreground'
                         }`}>
-                          {transaction.transactionType === 'income' ? '+' : '-'}₹{transaction.amount.toLocaleString()}
+                          {SIGN[transaction.transactionType] || ''}₹{transaction.amount.toLocaleString()}
                         </span>
                       </td>
                     </tr>

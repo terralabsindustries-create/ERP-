@@ -8,8 +8,32 @@ const { protect } = require('../middleware/auth');
 const { requirePermission, userCan } = require('../middleware/requirePermission');
 const Task = require('../models/Task');
 const { isSameOrgUser, orgScope } = require('../utils/accessScope');
+const { jobScope } = require('../utils/jobAccess');
 const { notify } = require('../utils/notify');
-const { HSN_PATTERN } = require('../utils/billing');
+const { HSN_PATTERN, priceLine, parseGstRate, round2 } = require('../utils/billing');
+
+/*
+  A job ticket's items as stored. An area item ("Square Feet") is length ×
+  width per piece times its number of pieces — its quantity, 1 when not given
+  — at the rate per sq ft / sq m; anything else is quantity × unit price.
+  The area and the item total (with the item's GST) are worked out here from
+  those, so what is saved always agrees with the pieces, the size and the rate.
+*/
+function jobItems(items) {
+  return (items || []).map((item) => {
+    if (!item || typeof item !== 'object') return item;
+    const gstRate = parseGstRate(item.gstRate) ?? 0;
+    const withGst = (amount) => round2(amount + (amount * gstRate) / 100);
+    if (item.itemType === 'Square Feet') {
+      const quantity = Number(item.quantity) > 0 ? Number(item.quantity) : 1;
+      const unit = item.unit === 'sqm' ? 'sqm' : 'sqft';
+      const p = priceLine({ quantity, unitPrice: item.unitPrice, unit, length: item.length, width: item.width });
+      return { ...item, quantity, unit, totalSquareFeet: p.totalArea, itemTotal: withGst(p.amount) };
+    }
+    const p = priceLine({ quantity: item.quantity, unitPrice: item.unitPrice });
+    return { ...item, totalSquareFeet: 0, itemTotal: withGst(p.amount) };
+  });
+}
 
 const router = express.Router();
 
@@ -29,6 +53,9 @@ const jobValidation = [
   body('items.*').custom((item) => {
     if (item?.itemType === 'Square Feet') {
       if (!(Number(item.length) > 0 && Number(item.width) > 0)) throw new Error('Every item priced by area needs a length and width above 0');
+      // The number of pieces: a whole number, 1 or more (1 when left out).
+      const pieces = item.quantity === undefined || item.quantity === null || item.quantity === '' ? 1 : Number(item.quantity);
+      if (!Number.isInteger(pieces) || pieces < 1) throw new Error('The number of pieces must be a whole number, 1 or more');
     } else if (!(Number(item?.quantity) > 0)) {
       throw new Error('Every item needs a quantity above 0');
     }
@@ -65,10 +92,9 @@ router.get('/', protect, [
       sortOrder = 'desc'
     } = req.query;
     
-    // Build query - use dataScope if available, fallback to userId
-    const query = req.user.dataScope
-      ? { dataScope: req.user.dataScope }
-      : { userId: req.user._id };
+    // Only the job tickets this login may see (utils/jobAccess.js); search,
+    // filters, the count and the pages all stay inside them.
+    const query = { ...jobScope(req.user) };
 
     if (status && status !== 'all') {
       query.status = status;
@@ -239,9 +265,7 @@ router.get('/mine', protect, async (req, res) => {
 // @access  Private
 router.get('/:id', protect, async (req, res) => {
   try {
-    const findQuery = req.user.dataScope
-      ? { _id: req.params.id, dataScope: req.user.dataScope }
-      : { _id: req.params.id, userId: req.user._id };
+    const findQuery = { _id: req.params.id, ...jobScope(req.user) };
     const job = await Job.findOne(findQuery)
       .populate('customerId', 'name email phone address company')
       .populate('assignedTo.handlerId', 'fullName')
@@ -293,13 +317,15 @@ router.post('/', protect, requirePermission('Jobs: Create & Edit'), jobValidatio
       });
     }
 
+    // The creator is the authenticated login, never a value from the request.
+    const { userId: _userId, createdBy: _createdBy, dataScope: _dataScope, ...fields } = req.body;
     const jobData = {
-      ...req.body,
+      ...fields,
       createdBy: req.user._id,
       userId: req.user._id,
       ...(req.user.dataScope && { dataScope: req.user.dataScope }),
       // Explicitly handle items array
-      items: req.body.items || [],
+      items: jobItems(req.body.items),
       // Explicitly handle design charge
       designCharge: req.body.designCharge || null
     };
@@ -358,9 +384,7 @@ router.post('/', protect, requirePermission('Jobs: Create & Edit'), jobValidatio
 // @access  Private
 router.put('/:id', protect, requirePermission('Jobs: Create & Edit'), jobValidation, validate, async (req, res) => {
   try {
-    const findQuery = req.user.dataScope
-      ? { _id: req.params.id, dataScope: req.user.dataScope }
-      : { _id: req.params.id, userId: req.user._id };
+    const findQuery = { _id: req.params.id, ...jobScope(req.user) };
     const job = await Job.findOne(findQuery);
 
     if (!job) {
@@ -385,11 +409,13 @@ router.put('/:id', protect, requirePermission('Jobs: Create & Edit'), jobValidat
       }
     }
 
-    // Prepare update data
+    // Prepare update data. Who created the job and which business it belongs
+    // to never change on an edit, whoever makes it.
+    const { userId: _userId, createdBy: _createdBy, dataScope: _dataScope, _id: _jobId, ...changes } = req.body;
     const updateData = {
-      ...req.body,
+      ...changes,
       // Explicitly handle items array
-      items: req.body.items !== undefined ? req.body.items : job.items,
+      items: req.body.items !== undefined ? jobItems(req.body.items) : job.items,
       // Explicitly handle design charge
       designCharge: req.body.designCharge !== undefined ? req.body.designCharge : job.designCharge
     };
@@ -451,9 +477,7 @@ router.put('/:id', protect, requirePermission('Jobs: Create & Edit'), jobValidat
 // @access  Private
 router.delete('/:id', protect, requirePermission('Jobs: Delete'), async (req, res) => {
   try {
-    const findQuery = req.user.dataScope
-      ? { _id: req.params.id, dataScope: req.user.dataScope }
-      : { _id: req.params.id, userId: req.user._id };
+    const findQuery = { _id: req.params.id, ...jobScope(req.user) };
     const job = await Job.findOne(findQuery);
     
     if (!job) {
@@ -508,9 +532,7 @@ router.post('/:id/update-status', protect, requirePermission('Jobs: Change Statu
   try {
     const { status, remarks } = req.body;
 
-    const findQuery = req.user.dataScope
-      ? { _id: req.params.id, dataScope: req.user.dataScope }
-      : { _id: req.params.id, userId: req.user._id };
+    const findQuery = { _id: req.params.id, ...jobScope(req.user) };
     const job = await Job.findOne(findQuery);
 
     if (!job) {
@@ -597,9 +619,7 @@ router.post('/:id/assign', protect, [
   try {
     const { operatorId, operatorName } = req.body;
 
-    const findQuery = req.user.dataScope
-      ? { _id: req.params.id, dataScope: req.user.dataScope }
-      : { _id: req.params.id, userId: req.user._id };
+    const findQuery = { _id: req.params.id, ...jobScope(req.user) };
     const job = await Job.findOne(findQuery);
 
     if (!job) {
@@ -691,9 +711,7 @@ router.post('/:id/update-flow-stage', protect, [
   try {
     const { stage, remarks } = req.body;
 
-    const findQuery = req.user.dataScope
-      ? { _id: req.params.id, dataScope: req.user.dataScope }
-      : { _id: req.params.id, userId: req.user._id };
+    const findQuery = { _id: req.params.id, ...jobScope(req.user) };
     const job = await Job.findOne(findQuery);
 
     if (!job) {
@@ -764,9 +782,7 @@ router.get('/stats/dashboard', protect, async (req, res) => {
     const stats = await Job.aggregate([
       // FIXED: Filter by dataScope if available, fallback to userId
       {
-        $match: req.user.dataScope
-          ? { dataScope: req.user.dataScope }
-          : { userId: new mongoose.Types.ObjectId(req.user._id) }
+        $match: jobScope(req.user)
       },
       {
         $facet: {
@@ -857,9 +873,7 @@ router.get('/calendar-status', protect, async (req, res) => {
     // Get all jobs created in the specified month, grouped by creation date
     const jobsByDate = await Job.aggregate([
       {
-        $match: req.user.dataScope
-          ? { dataScope: req.user.dataScope, createdAt: { $gte: startDate, $lte: endDate } }
-          : { userId: new mongoose.Types.ObjectId(req.user._id), createdAt: { $gte: startDate, $lte: endDate } }
+        $match: { ...jobScope(req.user), createdAt: { $gte: startDate, $lte: endDate } }
       },
       {
         $group: {

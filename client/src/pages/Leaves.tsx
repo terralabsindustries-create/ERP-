@@ -42,6 +42,15 @@ interface Employee {
 }
 
 const TYPE_LABEL: Record<LeaveType, string> = { casual: "Casual", sick: "Sick", earned: "Earned", unpaid: "Unpaid", maternity: "Maternity", other: "Other" };
+// Mirrors backend/src/utils/leavePolicy.js.
+const PAY_NOTE: Record<LeaveType, string> = {
+  casual: "Paid leave: no pay is deducted.",
+  sick: "Paid leave: no pay is deducted.",
+  earned: "Paid leave: no pay is deducted.",
+  unpaid: "Unpaid: once approved, these days are deducted from pay (loss of pay).",
+  maternity: "Not yet set as paid or unpaid: payroll deducts nothing and flags these days for review.",
+  other: "Not yet set as paid or unpaid: payroll deducts nothing and flags these days for review."
+};
 const STATUS: Record<LeaveStatus, { label: string; tone: PillTone }> = {
   pending: { label: "Waiting", tone: "warning" },
   approved: { label: "Approved", tone: "success" },
@@ -399,6 +408,7 @@ export default function Leaves() {
                 ))}
               </SelectContent>
             </Select>
+            <p className="text-xs text-muted-foreground">{PAY_NOTE[form.leaveType]}</p>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">

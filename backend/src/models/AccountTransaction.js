@@ -85,6 +85,36 @@ const accountTransactionSchema = new mongoose.Schema({
     unique: true,
     sparse: true
   },
+  // The payment receiving account (models/PaymentAccount.js) the money went
+  // into or came out of. accountType/accountName are filled from it.
+  paymentAccountId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PaymentAccount',
+    index: true
+  },
+  // The refund of a customer payment: money paid back out, dated when it was
+  // refunded. The receipt itself (sourcePaymentId) stays as received.
+  sourceRefundPaymentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Payment',
+    unique: true,
+    sparse: true
+  },
+  // A balance adjustment entered to match an account to its real balance:
+  // 'in' adds to the account, 'out' takes away. Older adjustments have no
+  // direction and move no balance.
+  adjustmentDirection: {
+    type: String,
+    enum: ['in', 'out']
+  },
+  // The payslip whose salary payout this expense is. One expense per payslip:
+  // the unique index stops a retried or concurrent "mark paid" adding another.
+  sourcePayrollId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Payroll',
+    unique: true,
+    sparse: true
+  },
   // Cheque details (if payment method is cheque)
   chequeDetails: {
     chequeNumber: String,
@@ -99,10 +129,18 @@ const accountTransactionSchema = new mongoose.Schema({
       default: 'issued'
     }
   },
-  // Transfer details (if transaction type is transfer)
+  // A transfer is one entry: it leaves accountType/accountName (the source)
+  // and arrives in toAccountType/toAccount (the destination). The server
+  // fills these from the validated request; fromAccount mirrors accountName.
   transferDetails: {
     fromAccount: String,
     toAccount: String,
+    // The payment account the transfer arrives in, when it is one.
+    toPaymentAccountId: { type: mongoose.Schema.Types.ObjectId, ref: 'PaymentAccount' },
+    toAccountType: {
+      type: String,
+      enum: ['cash', 'bank', 'credit_card', 'loan', 'investment']
+    },
     transferFee: {
       type: Number,
       default: 0
@@ -167,6 +205,21 @@ const accountTransactionSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'BankReconciliation'
   },
+  // A transfer into a bank account is cleared on that account's statement
+  // separately from the source side above.
+  transferInReconciled: {
+    type: Boolean,
+    default: false
+  },
+  transferInReconciledAt: Date,
+  transferInReconciledBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  transferInReconciliationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'BankReconciliation'
+  },
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -222,33 +275,81 @@ accountTransactionSchema.pre('save', async function (next) {
   next();
 });
 
-// Static method to get account balances
-accountTransactionSchema.statics.getAccountBalances = async function (scope) {
-  const balances = await this.aggregate([
-    { $match: { ...scope, status: 'completed' } },
+/*
+  Each completed entry moves money on one or two accounts ("legs"):
+  income and opening balances credit their account, expenses debit it, and a
+  transfer debits its source and credits its destination once each, so the
+  business total does not change. A balance adjustment adds or takes away
+  by its adjustmentDirection; older adjustments have none and move no
+  balance. A transfer recorded before destinations existed
+  has no toAccountType and debits only its source, as it always did.
+*/
+const legsBy = (own, destination) => ({
+  $switch: {
+    branches: [
+      { case: { $in: ['$transactionType', ['income', 'opening_balance']] }, then: [{ account: own, credit: '$amount', debit: 0 }] },
+      { case: { $eq: ['$transactionType', 'expense'] }, then: [{ account: own, credit: 0, debit: '$amount' }] },
+      {
+        case: { $eq: ['$transactionType', 'transfer'] },
+        then: [
+          { account: own, credit: 0, debit: '$amount' },
+          { account: destination, credit: '$amount', debit: 0 }
+        ]
+      },
+      { case: { $and: [{ $eq: ['$transactionType', 'adjustment'] }, { $eq: ['$adjustmentDirection', 'in'] }] }, then: [{ account: own, credit: '$amount', debit: 0 }] },
+      { case: { $and: [{ $eq: ['$transactionType', 'adjustment'] }, { $eq: ['$adjustmentDirection', 'out'] }] }, then: [{ account: own, credit: 0, debit: '$amount' }] }
+    ],
+    default: []
+  }
+});
+// Legs by Accounts page column (cash, bank…), and by payment account.
+const BALANCE_LEGS = legsBy('$accountType', { $ifNull: ['$transferDetails.toAccountType', null] });
+const PAYMENT_ACCOUNT_LEGS = legsBy({ $ifNull: ['$paymentAccountId', null] }, { $ifNull: ['$transferDetails.toPaymentAccountId', null] });
+
+/**
+ * Each payment account's money over [from, to): the balance before, opening
+ * balances posted in the period, payments received, other money in
+ * (transfers, adjustments, other income), money paid out, and the balance
+ * after `to` — all from completed ledger entries by their effective date
+ * (postedAt, else createdAt). Nothing is read from a stored running total.
+ */
+accountTransactionSchema.statics.paymentAccountActivity = async function (scope, from, to) {
+  const inRange = { $and: [{ $gte: ['$date', from] }, { $lt: ['$date', to] }] };
+  const net = { $subtract: ['$legs.credit', '$legs.debit'] };
+  return this.aggregate([
+    { $match: { $and: [scope, { status: 'completed' }, { $or: [{ paymentAccountId: { $exists: true } }, { 'transferDetails.toPaymentAccountId': { $exists: true } }] }] } },
     {
-      $group: {
-        _id: '$accountType',
-        totalIncome: {
-          $sum: {
-            $cond: [
-              { $in: ['$transactionType', ['income', 'opening_balance']] },
-              '$amount',
-              0
-            ]
-          }
-        },
-        totalExpense: {
-          $sum: {
-            $cond: [
-              { $in: ['$transactionType', ['expense', 'transfer']] },
-              '$amount',
-              0
-            ]
-          }
-        }
+      $project: {
+        date: { $ifNull: ['$postedAt', '$createdAt'] },
+        receipt: { $cond: [{ $ifNull: ['$sourcePaymentId', false] }, true, false] },
+        opening: { $eq: ['$transactionType', 'opening_balance'] },
+        legs: PAYMENT_ACCOUNT_LEGS
       }
     },
+    { $unwind: '$legs' },
+    { $match: { 'legs.account': { $ne: null } } },
+    {
+      $group: {
+        _id: '$legs.account',
+        before: { $sum: { $cond: [{ $lt: ['$date', from] }, net, 0] } },
+        openingInPeriod: { $sum: { $cond: [{ $and: [inRange, '$opening'] }, net, 0] } },
+        received: { $sum: { $cond: [{ $and: [inRange, '$receipt'] }, '$legs.credit', 0] } },
+        receivedCount: { $sum: { $cond: [{ $and: [inRange, '$receipt', { $gt: ['$legs.credit', 0] }] }, 1, 0] } },
+        otherIn: { $sum: { $cond: [{ $and: [inRange, { $not: ['$receipt'] }, { $not: ['$opening'] }] }, '$legs.credit', 0] } },
+        paidOut: { $sum: { $cond: [{ $and: [inRange, { $not: ['$opening'] }] }, '$legs.debit', 0] } },
+        after: { $sum: { $cond: [{ $gte: ['$date', to] }, net, 0] } }
+      }
+    }
+  ]);
+};
+
+accountTransactionSchema.statics.getAccountBalances = async function (scope) {
+  return this.aggregate([
+    { $match: { ...scope, status: 'completed' } },
+    { $project: { legs: BALANCE_LEGS } },
+    { $unwind: '$legs' },
+    { $match: { 'legs.account': { $ne: null } } },
+    { $group: { _id: '$legs.account', totalIncome: { $sum: '$legs.credit' }, totalExpense: { $sum: '$legs.debit' } } },
     {
       $project: {
         accountType: '$_id',
@@ -258,8 +359,27 @@ accountTransactionSchema.statics.getAccountBalances = async function (scope) {
       }
     }
   ]);
+};
 
-  return balances;
+// Income and expense of completed entries whose effective date (postedAt,
+// else createdAt) falls in [start, end). Transfers, opening balances and
+// adjustments are not income or expense.
+accountTransactionSchema.statics.periodTotals = async function (scope, start, end) {
+  const rows = await this.aggregate([
+    { $match: { ...scope, status: 'completed', transactionType: { $in: ['income', 'expense'] } } },
+    { $addFields: { effectiveDate: { $ifNull: ['$postedAt', '$createdAt'] } } },
+    { $match: { effectiveDate: { $gte: start, $lt: end } } },
+    { $group: { _id: '$transactionType', total: { $sum: '$amount' }, count: { $sum: 1 } } }
+  ]);
+  const of = (type) => rows.find((row) => row._id === type) || { total: 0, count: 0 };
+  const income = of('income');
+  const expense = of('expense');
+  return {
+    income: income.total,
+    expense: expense.total,
+    net: income.total - expense.total,
+    entries: income.count + expense.count
+  };
 };
 
 // Static method to get transaction statistics

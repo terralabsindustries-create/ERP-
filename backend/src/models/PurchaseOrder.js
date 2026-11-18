@@ -37,6 +37,8 @@ const purchaseOrderSchema = new mongoose.Schema({
     receivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     receivedByName: String,
     reference: String,
+    // The request key of the delivery, so a retried request is not received twice.
+    idempotencyKey: String,
     lines: [{ inventoryId: mongoose.Schema.Types.ObjectId, itemName: String, quantity: Number }]
   }],
   expectedDelivery: {

@@ -1,7 +1,9 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const LeaveRequest = require('../models/LeaveRequest');
 const Employee = require('../models/Employee');
 const { protect } = require('../middleware/auth');
+const { dayStart, leavePay } = require('../utils/leavePolicy');
 
 const router = express.Router();
 router.use(protect);
@@ -46,6 +48,21 @@ router.post('/', async (req, res) => {
     if (!employeeId || !fromDate || !toDate) {
       return res.status(400).json({ status: 'error', message: 'employeeId, fromDate and toDate are required' });
     }
+    if (!mongoose.isValidObjectId(employeeId)) return res.status(404).json({ status: 'error', message: 'Employee not found' });
+    if (Number.isNaN(new Date(fromDate).getTime()) || Number.isNaN(new Date(toDate).getTime())) {
+      return res.status(400).json({ status: 'error', message: 'Enter valid leave dates' });
+    }
+    if (dayStart(toDate) < dayStart(fromDate)) return res.status(400).json({ status: 'error', message: 'The leave cannot end before it starts' });
+    if (leaveType && !LeaveRequest.schema.path('leaveType').enumValues.includes(leaveType)) {
+      return res.status(400).json({ status: 'error', message: 'Invalid leave type' });
+    }
+    // Days a request counts for payroll: whole calendar days, or half a day
+    // for a single-day request. Never more than the days it spans.
+    const span = daysBetween(fromDate, toDate);
+    const days = req.body.days === undefined || req.body.days === '' ? span : Number(req.body.days);
+    if (!(days > 0) || days > span || Math.round(days * 2) !== days * 2) {
+      return res.status(400).json({ status: 'error', message: `Leave days must be in half days, from 0.5 to ${span}` });
+    }
     // The employee must belong to this business.
     if (!(await Employee.exists(scopeFilter(req, { _id: employeeId })))) {
       return res.status(404).json({ status: 'error', message: 'Employee not found' });
@@ -56,7 +73,7 @@ router.post('/', async (req, res) => {
       leaveType: leaveType || 'casual',
       fromDate,
       toDate,
-      days: req.body.days || daysBetween(fromDate, toDate),
+      days,
       reason,
       status: 'pending',
       createdBy: req.user._id,
@@ -84,6 +101,17 @@ router.patch('/:id/status', async (req, res) => {
 
     const update = { status };
     if (status === 'approved') {
+      // Approved leaves of one employee never overlap, so payroll counts each day once.
+      const leave = await LeaveRequest.findOne(scopeFilter(req, { _id: req.params.id })).select('employeeId fromDate toDate leaveType').lean();
+      if (!leave) return res.status(404).json({ status: 'error', message: 'Leave request not found' });
+      const clash = await LeaveRequest.findOne(scopeFilter(req, {
+        _id: { $ne: leave._id }, employeeId: leave.employeeId, status: 'approved',
+        fromDate: { $lte: leave.toDate }, toDate: { $gte: leave.fromDate }
+      })).select('fromDate toDate leaveType').lean();
+      if (clash) {
+        const day = (d) => new Date(d).toISOString().slice(0, 10);
+        return res.status(409).json({ status: 'error', message: `This overlaps approved ${clash.leaveType} leave (${day(clash.fromDate)} to ${day(clash.toDate)}). Change or cancel that one first.` });
+      }
       update.approvedBy = req.user._id;
       update.approvedByName = req.user.fullName;
       update.approvedAt = new Date();
@@ -103,7 +131,9 @@ router.patch('/:id/status', async (req, res) => {
 
     if (!leave) return res.status(404).json({ status: 'error', message: 'Leave request not found' });
 
-    res.json({ status: 'success', message: `Leave ${status}`, data: { leave } });
+    // Payroll already generated for these days is not changed by this;
+    // generating it again applies the leave (paid payslips stay as paid).
+    res.json({ status: 'success', message: `Leave ${status}`, data: { leave, pay: leavePay(leave.leaveType) } });
   } catch (error) {
     console.error('Update leave status error:', error);
     res.status(500).json({ status: 'error', message: 'Server error while updating leave', error: error.message });

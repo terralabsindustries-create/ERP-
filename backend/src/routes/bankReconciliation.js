@@ -13,8 +13,18 @@ const TYPES = ['income', 'expense', 'transfer', 'opening_balance'];
 const cents = (value) => Math.round(Number(value) * 100);
 // Bank statement dates are calendar days in India, including all entries until midnight IST.
 const dayEnd = (date) => new Date(date.getTime() + 18.5 * 60 * 60 * 1000);
-const signedCents = (transaction) =>
-  (transaction.transactionType === 'expense' || transaction.transactionType === 'transfer' ? -1 : 1) * cents(transaction.amount);
+// The bank account an entry is on: its own account, or, for a transfer whose
+// destination is this bank account, the incoming side of that transfer.
+const isIncomingTransfer = (transaction, accountName) =>
+  transaction.transactionType === 'transfer' &&
+  transaction.transferDetails?.toAccountType === 'bank' &&
+  transaction.transferDetails?.toAccount === accountName &&
+  !(transaction.accountType === 'bank' && transaction.accountName === accountName);
+const direction = (transaction, accountName) =>
+  isIncomingTransfer(transaction, accountName) ? 'in'
+    : transaction.transactionType === 'expense' || transaction.transactionType === 'transfer' ? 'out' : 'in';
+const signedCents = (transaction, accountName) => (direction(transaction, accountName) === 'out' ? -1 : 1) * cents(transaction.amount);
+const withDirection = (transactions, accountName) => transactions.map((t) => ({ ...t, direction: direction(t, accountName) }));
 
 function statementDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
@@ -23,17 +33,27 @@ function statementDate(value) {
 }
 
 const eligible = (scope, accountName, date) => ({
-  ...scope,
-  accountType: 'bank',
-  accountName,
   status: 'completed',
-  transactionType: { $in: TYPES },
-  reconciled: { $ne: true },
-  $or: [
-    { postedAt: { $lt: dayEnd(date) } },
-    { postedAt: { $exists: false }, createdAt: { $lt: dayEnd(date) } }
+  $and: [
+    scope,
+    { $or: [
+      { accountType: 'bank', accountName, transactionType: { $in: TYPES }, reconciled: { $ne: true } },
+      { transactionType: 'transfer', 'transferDetails.toAccountType': 'bank', 'transferDetails.toAccount': accountName, transferInReconciled: { $ne: true } }
+    ] },
+    { $or: [
+      { postedAt: { $lt: dayEnd(date) } },
+      { postedAt: { $exists: false }, createdAt: { $lt: dayEnd(date) } }
+    ] }
   ]
 });
+// Bank accounts are those an entry was recorded on or transferred into.
+const bankAccountNames = async (txScope) => {
+  const [own, incoming] = await Promise.all([
+    AccountTransaction.distinct('accountName', { ...txScope, accountType: 'bank', status: 'completed' }),
+    AccountTransaction.distinct('transferDetails.toAccount', { ...txScope, transactionType: 'transfer', 'transferDetails.toAccountType': 'bank', status: 'completed' })
+  ]);
+  return [...new Set([...own, ...incoming].filter(Boolean))].sort();
+};
 
 router.get('/', protect, async (req, res) => {
   const date = statementDate(req.query.statementDate);
@@ -43,7 +63,7 @@ router.get('/', protect, async (req, res) => {
     const scope = await orgUserFilter(req.user);
     const txScope = await accountScope(req.user);
     const [accounts, history] = await Promise.all([
-      AccountTransaction.distinct('accountName', { ...txScope, accountType: 'bank', status: 'completed' }),
+      bankAccountNames(txScope),
       BankReconciliation.find({ ...scope, ...(accountName ? { accountName } : {}) }).sort({ statementDate: -1 }).limit(20).lean()
     ]);
     if (!accountName || !date) return res.json({ status: 'success', data: { accounts, history } });
@@ -55,7 +75,7 @@ router.get('/', protect, async (req, res) => {
     res.json({ status: 'success', data: {
       accounts, history, previous,
       openingBalance: previous ? previous.closingBalance : 0,
-      transactions
+      transactions: withDirection(transactions, accountName)
     } });
   } catch (error) {
     console.error('Bank reconciliation preview error:', error);
@@ -70,7 +90,7 @@ router.get('/:id', protect, async (req, res) => {
     const reconciliation = await BankReconciliation.findOne({ _id: req.params.id, ...scope }).lean();
     if (!reconciliation) return res.status(404).json({ status: 'error', message: 'Reconciliation not found.' });
     const transactions = await AccountTransaction.find({ _id: { $in: reconciliation.transactionIds }, ...(await accountScope(req.user)) }).sort({ createdAt: 1 }).lean();
-    res.json({ status: 'success', data: { reconciliation, transactions } });
+    res.json({ status: 'success', data: { reconciliation, transactions: withDirection(transactions, reconciliation.accountName) } });
   } catch (error) {
     console.error('Bank reconciliation detail error:', error);
     res.status(500).json({ status: 'error', message: 'Could not load reconciliation.' });
@@ -93,7 +113,7 @@ router.post('/', protect, requirePermission('Accounts: Create & Edit'), async (r
     const scope = await orgUserFilter(req.user);
     const txScope = await accountScope(req.user);
     const ownerId = await settingsOwnerId(req.user);
-    const accountExists = await AccountTransaction.exists({ ...txScope, accountType: 'bank', accountName, status: 'completed' });
+    const accountExists = (await bankAccountNames(txScope)).includes(accountName);
     if (!accountExists) return res.status(404).json({ status: 'error', message: 'Bank account not found.' });
     const previous = await BankReconciliation.findOne({ ...scope, accountName }).sort({ statementDate: -1 }).lean();
     if (previous && date <= previous.statementDate) {
@@ -104,7 +124,7 @@ router.post('/', protect, requirePermission('Accounts: Create & Edit'), async (r
       return res.status(409).json({ status: 'error', message: 'Some entries are unavailable or already reconciled. Refresh and try again.' });
     }
     const openingCents = cents(previous ? previous.closingBalance : 0);
-    const clearedCents = matching.reduce((sum, transaction) => sum + signedCents(transaction), 0);
+    const clearedCents = matching.reduce((sum, transaction) => sum + signedCents(transaction, accountName), 0);
     if (openingCents + clearedCents !== cents(closingBalance)) {
       return res.status(400).json({ status: 'error', message: 'The selected entries do not match the statement closing balance.' });
     }
@@ -114,15 +134,27 @@ router.post('/', protect, requirePermission('Accounts: Create & Edit'), async (r
       clearedTotal: clearedCents / 100, transactionIds: ids,
       reconciledBy: userId
     });
+    // Each side of a transfer is cleared on its own account's statement.
+    const incomingIds = matching.filter((t) => isIncomingTransfer(t, accountName)).map((t) => t._id);
+    const ownIds = matching.filter((t) => !isIncomingTransfer(t, accountName)).map((t) => t._id);
     try {
-      const result = await AccountTransaction.updateMany(
-        { ...eligible(txScope, accountName, date), _id: { $in: ids } },
-        { $set: { reconciled: true, reconciledAt: new Date(), reconciledBy: userId, reconciliationId: reconciliation._id } }
-      );
-      if (result.modifiedCount !== ids.length) throw new Error('Entries changed during reconciliation');
+      const now = new Date();
+      const [own, incoming] = await Promise.all([
+        ownIds.length ? AccountTransaction.updateMany(
+          { ...eligible(txScope, accountName, date), _id: { $in: ownIds }, accountType: 'bank', accountName, reconciled: { $ne: true } },
+          { $set: { reconciled: true, reconciledAt: now, reconciledBy: userId, reconciliationId: reconciliation._id } }
+        ) : { modifiedCount: 0 },
+        incomingIds.length ? AccountTransaction.updateMany(
+          { ...eligible(txScope, accountName, date), _id: { $in: incomingIds }, transferInReconciled: { $ne: true } },
+          { $set: { transferInReconciled: true, transferInReconciledAt: now, transferInReconciledBy: userId, transferInReconciliationId: reconciliation._id } }
+        ) : { modifiedCount: 0 }
+      ]);
+      if (own.modifiedCount + incoming.modifiedCount !== ids.length) throw new Error('Entries changed during reconciliation');
     } catch (error) {
       await AccountTransaction.updateMany({ reconciliationId: reconciliation._id, ...txScope },
         { $set: { reconciled: false }, $unset: { reconciledAt: '', reconciledBy: '', reconciliationId: '' } });
+      await AccountTransaction.updateMany({ transferInReconciliationId: reconciliation._id, ...txScope },
+        { $set: { transferInReconciled: false }, $unset: { transferInReconciledAt: '', transferInReconciledBy: '', transferInReconciliationId: '' } });
       await BankReconciliation.deleteOne({ _id: reconciliation._id });
       return res.status(409).json({ status: 'error', message: 'Entries changed during reconciliation. Refresh and try again.' });
     }

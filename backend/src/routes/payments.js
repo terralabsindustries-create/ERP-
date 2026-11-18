@@ -10,6 +10,7 @@ const { requirePermission, userCan } = require('../middleware/requirePermission'
 const { staffScopeQuery, canViewAllStaffData } = require('../utils/dataScopeHelper');
 const { orgMemberIds, orgScope } = require('../utils/accessScope');
 const ledger = require('../services/paymentLedger');
+const { resolveReceivingAccount } = require('../utils/paymentAccounts');
 
 const router = express.Router();
 
@@ -40,7 +41,10 @@ const rejectInvalid = (req, res) => {
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const populate = (q) =>
-  q.populate('customerId', 'name email phone company').populate('invoiceId', 'invoiceNumber totalAmount balanceAmount paymentStatus dueDate');
+  q.populate('customerId', 'name email phone company')
+    .populate('invoiceId', 'invoiceNumber totalAmount balanceAmount paymentStatus dueDate')
+    // Nickname only: never the account number.
+    .populate('paymentAccountId', 'nickname kind isActive');
 
 /** A payment as the API returns it: its allocations (older records included) and what is left on account. */
 function present(payment) {
@@ -103,13 +107,14 @@ const paymentValidation = [
   body('referenceNumber').optional().isString().trim().isLength({ max: 100 }),
   body('notes').optional().isString().trim().isLength({ max: 1000 }),
   body('idempotencyKey').optional().isString().trim().isLength({ min: 8, max: 100 }).withMessage('Invalid idempotency key'),
+  body('paymentAccountId').optional({ checkFalsy: true }).isMongoId().withMessage('Choose a valid payment account'),
   ...allocationRules
 ];
 
 // Fields a client may set; ids, numbering, ownership and allocations are server-side.
 const pickFields = (b) => {
   const out = {};
-  for (const k of ['amount', 'paymentMethod', 'status', 'paymentDate', 'referenceNumber', 'transactionId', 'notes', 'chequeDetails', 'bankDetails', 'upiDetails', 'cardDetails']) {
+  for (const k of ['amount', 'paymentMethod', 'paymentAccountId', 'status', 'paymentDate', 'referenceNumber', 'transactionId', 'notes', 'chequeDetails', 'bankDetails', 'upiDetails', 'cardDetails']) {
     if (b[k] !== undefined && b[k] !== '') out[k] = b[k];
   }
   if (out.amount !== undefined) out.amount = round2(out.amount);
@@ -171,6 +176,7 @@ router.get('/', protect, [
   query('paymentMethod').optional().isIn([...METHODS, 'all']),
   query('search').optional().trim(),
   query('customerId').optional().isMongoId(),
+  query('paymentAccountId').optional().isMongoId(),
   query('dateFrom').optional().isISO8601(),
   query('dateTo').optional().isISO8601(),
   query('page').optional().isInt({ min: 1 }),
@@ -187,6 +193,7 @@ router.get('/', protect, [
     const base = [await paymentScope(req.user)];
     if (paymentMethod && paymentMethod !== 'all') base.push({ paymentMethod });
     if (req.query.customerId) base.push({ customerId: new mongoose.Types.ObjectId(req.query.customerId) });
+    if (req.query.paymentAccountId) base.push({ paymentAccountId: new mongoose.Types.ObjectId(req.query.paymentAccountId) });
     if (dateFrom || dateTo) {
       const range = {};
       if (dateFrom) range.$gte = new Date(dateFrom);
@@ -358,6 +365,9 @@ router.post('/', protect, paymentValidation, async (req, res) => {
     if (!customer) {
       return res.status(404).json({ status: 'error', message: 'Customer not found' });
     }
+    // Where the money was received (Cash, Paytm, a bank account).
+    const receivingAccount = await resolveReceivingAccount(req.user, { paymentAccountId: fields.paymentAccountId, paymentMethod: fields.paymentMethod, required: true });
+    if (receivingAccount) fields.paymentAccountId = receivingAccount._id;
 
     const requested = Array.isArray(req.body.allocations)
       ? req.body.allocations
@@ -473,6 +483,7 @@ router.put('/:id/allocations', protect, requirePermission('Payments: Record Paym
 router.put('/:id', protect, requirePermission('Payments: Record Payment'), [
   body('amount').optional().isFloat({ min: 0.01 }).withMessage('Amount must be greater than 0'),
   body('paymentMethod').optional().isIn(METHODS),
+  body('paymentAccountId').optional({ checkFalsy: true }).isMongoId().withMessage('Choose a valid payment account'),
   body('invoiceId').optional({ checkFalsy: true }).isMongoId().withMessage('Choose a valid invoice'),
   body('status').optional().isIn(STATUSES),
   body('paymentDate').optional({ checkFalsy: true }).isISO8601(),
@@ -490,6 +501,17 @@ router.put('/:id', protect, requirePermission('Payments: Record Payment'), [
     }
 
     const fields = pickFields(req.body);
+    // Changing the method or the account re-checks that they fit; a payment
+    // recorded before accounts existed may stay without one.
+    if (fields.paymentAccountId !== undefined || fields.paymentMethod !== undefined) {
+      const account = await resolveReceivingAccount(req.user, {
+        paymentAccountId: fields.paymentAccountId ?? payment.paymentAccountId,
+        paymentMethod: fields.paymentMethod || payment.paymentMethod,
+        current: payment.paymentAccountId,
+        required: false
+      });
+      if (account) fields.paymentAccountId = account._id;
+    }
     const amount = fields.amount ?? payment.amount;
     const existing = ledger.allocationsOf(payment);
     let allocations = existing;

@@ -69,17 +69,35 @@ export function lineDraftFrom(
 }
 
 /**
- * A job ticket item as an invoice line. Its price is before tax and its GST
- * rate comes with it, so the invoice adds the tax once and arrives at the job
- * ticket's total. The job ticket prices an area item as one piece of
- * length × width (it has no quantity field for those), so neither does this.
+ * How many pieces a job ticket's area item is (2 flex prints of 6 ft × 4 ft).
+ * The quantity is the number of pieces; blank or 0 is 1.
+ *
+ * Job tickets saved before the form had a pieces field priced an area item
+ * as one piece and could keep a stale quantity from before the unit was
+ * switched. Such an item's stored area is one piece (length × width), not
+ * length × width × quantity — it is read as the 1 piece it was priced as.
+ */
+export function jobItemPieces(item: { quantity?: number | string; length?: number; width?: number; totalSquareFeet?: number }): number {
+  const pieces = Number(item.quantity) > 0 ? Number(item.quantity) : 1;
+  const perPiece = (Number(item.length) || 0) * (Number(item.width) || 0);
+  const stored = Number(item.totalSquareFeet) || 0;
+  const near = (a: number, b: number) => Math.abs(a - b) < 0.005;
+  if (pieces !== 1 && perPiece > 0 && stored > 0 && near(stored, perPiece) && !near(stored, perPiece * pieces)) return 1;
+  return pieces;
+}
+
+/**
+ * A job ticket item as an invoice or quotation line. Its price is before tax
+ * and its GST rate comes with it, so the document adds the tax once and
+ * arrives at the job ticket's total. An area item keeps its number of pieces:
+ * length × width × pieces.
  */
 export function lineDraftFromJobItem(
   key: number,
-  item: Parameters<typeof lineDraftFrom>[1]
+  item: Parameters<typeof lineDraftFrom>[1] & { totalSquareFeet?: number }
 ): LineDraft {
   const draft = lineDraftFrom(key, item);
-  return draft.pricing !== "unit" ? { ...draft, quantity: "1" } : draft;
+  return draft.pricing !== "unit" ? { ...draft, quantity: String(jobItemPieces(item)) } : draft;
 }
 
 /** The pricing fields as the API takes them. Dimensions are only sent for area lines. */

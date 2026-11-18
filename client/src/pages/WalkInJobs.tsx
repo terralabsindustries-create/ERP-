@@ -48,6 +48,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useDebounced } from "@/hooks/useDebounced";
 import apiClient from "@/lib/apiClient";
+import { InvoiceSavedDialog, type SavedInvoice } from "@/components/invoices/InvoiceSavedDialog";
 import { printOutcomeMessage } from "@/lib/printPdf";
 import { counterJobsApi, type CounterJob, type CounterListParams, type CounterListResponse, type CounterStats, type CounterStatus, type Operator } from "@/lib/api/walkIn";
 import { formatINR, plural } from "@/lib/format";
@@ -91,6 +92,7 @@ export default function WalkInJobs() {
   const [checking, setChecking] = useState<CounterJob | null>(null);
   const [notifying, setNotifying] = useState<CounterJob | null>(null);
   const [billing, setBilling] = useState<CounterJob | null>(null);
+  const [billed, setBilled] = useState<SavedInvoice | null>(null);
   const [cancelling, setCancelling] = useState<CounterJob | null>(null);
   const [deleting, setDeleting] = useState<CounterJob | null>(null);
 
@@ -469,8 +471,13 @@ export default function WalkInJobs() {
         onBilled={(after) => {
           setDetail((d) => (d && d._id === after._id ? after : d));
           refresh();
+          // Billed: offer the invoice's Print / Download / Send. Nothing prints by itself.
+          const inv = after.billing?.invoice as unknown;
+          const ref = inv && typeof inv === "object" ? (inv as SavedInvoice) : inv ? { _id: String(inv) } : null;
+          if (ref) setBilled({ ...ref, invoiceNumber: ref.invoiceNumber || after.billing?.invoiceNumber, customerName: after.customerName });
         }}
       />
+      <InvoiceSavedDialog invoice={billed} title={billed ? `Billed on ${billed.invoiceNumber || "invoice"}` : undefined} onClose={() => setBilled(null)} onInvoiceUpdated={refresh} />
       <ConfirmDialog
         open={!!cancelling}
         onOpenChange={(o) => !o && setCancelling(null)}

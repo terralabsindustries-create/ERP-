@@ -59,9 +59,9 @@ export function LinePricingFields({ line, onChange, idPrefix }: { line: LineDraf
             </div>
             <div className="space-y-1">
               <Label htmlFor={id("qty")} className="text-xs">
-                Pieces
+                No. of pieces
               </Label>
-              <Input id={id("qty")} type="number" inputMode="decimal" min="0" step="any" value={line.quantity} onChange={(e) => onChange({ quantity: e.target.value })} />
+              <Input id={id("qty")} type="number" inputMode="decimal" min="0" step="any" value={line.quantity} placeholder="1" onChange={(e) => onChange({ quantity: e.target.value })} />
             </div>
           </>
         ) : (

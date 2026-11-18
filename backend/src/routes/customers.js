@@ -8,6 +8,7 @@ const { protect } = require('../middleware/auth');
 const { requirePermission, userCan } = require('../middleware/requirePermission');
 const Invoice = require('../models/Invoice');
 const { orgScope } = require('../utils/accessScope');
+const { jobScope } = require('../utils/jobAccess');
 const { createDataScopeQuery } = require('../utils/dataScopeHelper');
 
 const router = express.Router();
@@ -425,10 +426,8 @@ router.get('/:id/jobs', protect, async (req, res) => {
       });
     }
 
-    // Query jobs - use dataScope if available, fallback to userId
-    const jobQuery = req.user.dataScope
-      ? { customerId: req.params.id, dataScope: req.user.dataScope }
-      : { customerId: req.params.id, userId: req.user._id };
+    // The customer's job tickets this login may see (utils/jobAccess.js).
+    const jobQuery = { customerId: req.params.id, ...jobScope(req.user) };
 
     const jobs = await Job.find(jobQuery).sort({ createdAt: -1 });
     

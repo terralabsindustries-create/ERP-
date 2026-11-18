@@ -171,13 +171,23 @@ guarded('/api/payments', require('./routes/payments'), {
   // route refuses them money on account).
   rules: [{ method: 'POST', path: /^\/?$/, allow: ['Payments: Record Payment', 'Invoicing: Record Payment', 'Accounts: Create & Edit'] }]
 });
+// Where payments are received (Cash, Paytm, bank accounts). Logins that record
+// payments read the list to choose one; balances and reports need Accounts
+// (checked in the routes); adding or changing an account is an Accounts task.
+guarded('/api/payment-accounts', require('./routes/paymentAccounts'), {
+  read: ['Accounts', 'Payments', 'Invoicing', 'Walk-In Jobs'],
+  write: 'Accounts: Create & Edit',
+  remove: 'Accounts: Delete'
+});
 guarded('/api/inventory', require('./routes/inventory'), {
   read: ITEM_READERS,
   write: 'Inventory: Create & Edit',
   remove: 'Inventory: Delete',
   rules: [
     { method: 'GET', path: /^\/(analytics|movements|reports\/.*)$/, allow: 'Inventory' },
-    { method: 'POST', path: /^\/([^/]+\/adjust|bulk-update)$/, allow: 'Inventory: Adjust Stock' }
+    // Stock counts change only through /:id/adjust; bulk-update edits item details.
+    { method: 'POST', path: /^\/[^/]+\/adjust$/, allow: 'Inventory: Adjust Stock' },
+    { method: 'POST', path: /^\/bulk-update$/, allow: 'Inventory: Create & Edit' }
   ]
 });
 guarded('/api/categories', require('./routes/categories'), { read: ITEM_READERS, write: 'Inventory: Create & Edit' });

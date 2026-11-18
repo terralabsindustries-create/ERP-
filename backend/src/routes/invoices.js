@@ -23,6 +23,7 @@ const { parseDesignCharge, parseGstRate, priceInvoiceDocument, HSN_PATTERN } = r
 const noGstVisibility = (user) => (userCan(user, 'Invoicing (View No GST)') ? {} : { noGst: { $ne: true } });
 const { staffScopeQuery } = require('../utils/dataScopeHelper');
 const { orgScope } = require('../utils/accessScope');
+const { jobScope } = require('../utils/jobAccess');
 const { sendWhatsAppMessage, buildTemplateVariables } = require('../utils/metaWhatsApp');
 
 const router = express.Router();
@@ -204,8 +205,9 @@ router.get('/pending-jobs', protect, requirePermission('Invoicing: Create & Edit
       jobId: { $ne: null },
       status: { $ne: 'cancelled' }
     });
+    // Only job tickets this login may see (utils/jobAccess.js).
     const filter = {
-      ...orgScope(req.user),
+      ...jobScope(req.user),
       _id: { $nin: invoicedJobIds },
       status: { $ne: 'cancelled' }
     };
@@ -1446,25 +1448,6 @@ router.get('/:id/print-data', protect, async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: 'Failed to get print data'
-    });
-  }
-});
-
-// @route   DELETE /api/invoices/clear-duplicate
-// @desc    Clear duplicate invoice (temporary fix)
-// @access  Private
-router.delete('/clear-duplicate', protect, async (req, res) => {
-  try {
-    const result = await Invoice.deleteOne({ invoiceNumber: 'INV-202603-0001' });
-    res.status(200).json({
-      status: 'success',
-      message: `Deleted ${result.deletedCount} duplicate invoice(s)`
-    });
-  } catch (error) {
-    console.error('Clear duplicate error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while clearing duplicate'
     });
   }
 });

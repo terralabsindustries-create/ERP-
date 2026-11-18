@@ -287,8 +287,9 @@ export function CreateItemDialog({ open, onOpenChange, onItemCreated, item }: Cr
       };
 
       if (isEdit) {
-        // Stock levels change through Adjust stock, which keeps the movement log.
-        const { quantity: _quantity, stockStatus: _stockStatus, status: _status, ...changes } = inventoryData;
+        // Stock levels change through Adjust stock, which keeps the movement log;
+        // the server refuses any other change to them, the SKU or unknown fields.
+        const { quantity: _quantity, stockStatus: _stockStatus, status: _status, vendor: _vendor, sku: _sku, ...changes } = inventoryData;
         await apiClient.updateInventoryItem(item!._id, changes);
         toast({ title: "Item updated", description: `${formData.name} was saved` });
       } else {

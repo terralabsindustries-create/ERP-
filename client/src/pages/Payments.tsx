@@ -13,6 +13,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useDebounced } from "@/hooks/useDebounced";
 import apiClient from "@/lib/apiClient";
+import { paymentAccountsApi } from "@/lib/api/paymentAccounts";
 import { fmtDate, formatINR, plural } from "@/lib/format";
 
 const PAGE_SIZE = 25;
@@ -28,6 +29,8 @@ const TONE: Record<PaymentStatus, PillTone> = { completed: "success", pending: "
 const LABEL: Record<PaymentStatus, string> = { completed: "Received", pending: "Pending", failed: "Failed", cancelled: "Cancelled", refunded: "Refunded" };
 type View = PaymentStatus | "all";
 
+const receivedInto = (p: PaymentRecord) => (p.paymentAccountId && typeof p.paymentAccountId === "object" ? p.paymentAccountId.nickname : "");
+
 export default function Payments() {
   const { hasPermission } = useAuth();
   const { toast } = useToast();
@@ -40,6 +43,8 @@ export default function Payments() {
   const q = useDebounced(search.trim());
   const [view, setView] = useState<View>("all");
   const [method, setMethod] = useState("all");
+  const [account, setAccount] = useState("all");
+  const [accountOptions, setAccountOptions] = useState<{ value: string; label: string }[]>([]);
   const [page, setPage] = useState(1);
   const [createOpen, setCreateOpen] = useState(false);
   const [deleting, setDeleting] = useState<PaymentRecord | null>(null);
@@ -52,23 +57,31 @@ export default function Payments() {
       if (q) p.search = q;
       if (view !== "all") p.status = view;
       if (method !== "all") p.paymentMethod = method;
+      if (account !== "all") p.paymentAccountId = account;
       setData((await apiClient.getPayments(p)) as PaymentsResponse);
     } catch (error) {
       toast({ title: "Payments could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     } finally {
       setLoading(false);
     }
-  }, [page, q, view, method, toast]);
+  }, [page, q, view, method, account, toast]);
 
   useEffect(() => {
     load();
   }, [load]);
+  // Every account, inactive ones too: their payments can still be looked up.
+  useEffect(() => {
+    paymentAccountsApi
+      .list()
+      .then((list) => setAccountOptions(list.map((a) => ({ value: a._id, label: a.isActive ? a.nickname : `${a.nickname} (inactive)` }))))
+      .catch(() => setAccountOptions([]));
+  }, []);
   useEffect(() => {
     apiClient.getInvoiceViewStats()
       .then((response) => setInvoiceBreakdown(response.stats as unknown as InvoicePaymentBreakdown))
       .catch(() => setInvoiceBreakdown(null));
   }, [data]);
-  useEffect(() => setPage(1), [q, view, method]);
+  useEffect(() => setPage(1), [q, view, method, account]);
 
   const setStatus = async (p: PaymentRecord, status: PaymentStatus) => {
     try {
@@ -124,6 +137,7 @@ export default function Payments() {
       hideBelow: "md"
     },
     { id: "method", header: "Method", cell: (p) => METHOD_LABELS[p.paymentMethod] || p.paymentMethod, sortValue: (p) => p.paymentMethod, hideBelow: "lg" },
+    { id: "account", header: "Received into", cell: (p) => receivedInto(p) || <span className="text-muted-foreground">—</span>, sortValue: (p) => receivedInto(p), hideBelow: "md" },
     {
       id: "ref",
       header: "Reference",
@@ -200,6 +214,7 @@ export default function Payments() {
           toolbar={
             <Toolbar search={<SearchField value={search} onChange={setSearch} placeholder="Search customer, invoice, payment no. or reference" />}>
               <FilterSelect label="Method" value={method} onChange={setMethod} options={Object.entries(METHOD_LABELS).map(([value, label]) => ({ value, label }))} />
+              {accountOptions.length > 0 && <FilterSelect label="Received into" value={account} onChange={setAccount} options={accountOptions} allLabel="All accounts" />}
             </Toolbar>
           }
           footer={!loading && total > 0 && <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} noun="payments" />}
@@ -231,6 +246,7 @@ export default function Payments() {
                 <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
                   <span>
                     {fmtDate(p.paymentDate)} · {METHOD_LABELS[p.paymentMethod] || p.paymentMethod}
+                    {receivedInto(p) ? ` · ${receivedInto(p)}` : ""}
                     {appliedToLabel(p) ? ` · ${appliedToLabel(p)}` : " · On account"}
                   </span>
                   <StatusPill tone={TONE[p.status]}>{LABEL[p.status]}</StatusPill>

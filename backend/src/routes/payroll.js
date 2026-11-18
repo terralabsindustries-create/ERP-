@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const PDFDocument = require('pdfkit');
 const Payroll = require('../models/Payroll');
 const Employee = require('../models/Employee');
@@ -6,7 +7,10 @@ const Attendance = require('../models/Attendance');
 const Settings = require('../models/Settings');
 const { settingsOwnerId, businessSettings } = require('../utils/businessSettings');
 const AccountTransaction = require('../models/AccountTransaction');
+const LeaveRequest = require('../models/LeaveRequest');
 const { protect } = require('../middleware/auth');
+const { inTransaction } = require('../utils/transactions');
+const { resolveMonth } = require('../utils/leavePolicy');
 
 const router = express.Router();
 router.use(protect);
@@ -95,14 +99,14 @@ router.post('/generate', async (req, res) => {
     const start = new Date(Date.UTC(year, month - 1, 1));
     const end = new Date(Date.UTC(year, month, 1));
 
-    const attendance = await Attendance.find(scopeFilter(req, { date: { $gte: start, $lt: end } }));
-    const attByEmp = {};
-    for (const a of attendance) {
-      const id = String(a.employeeId);
-      if (!attByEmp[id]) attByEmp[id] = { absent: 0, halfDay: 0 };
-      if (a.status === 'absent') attByEmp[id].absent++;
-      else if (a.status === 'half-day') attByEmp[id].halfDay++;
-    }
+    // Attendance marks and approved leave, each day counted once
+    // (utils/leavePolicy.js has the paid / unpaid leave rules).
+    const [attendance, leaves] = await Promise.all([
+      Attendance.find(scopeFilter(req, { date: { $gte: start, $lt: end } })).select('employeeId date status').lean(),
+      LeaveRequest.find(scopeFilter(req, { status: 'approved', fromDate: { $lt: end }, toDate: { $gte: start } })).select('employeeId leaveType fromDate toDate days status').lean()
+    ]);
+    const dayCounts = resolveMonth({ attendance, leaves, start, end });
+    const review = [];
 
     const own = { createdBy: req.user._id, userId: req.user._id };
     if (req.user.dataScope) own.dataScope = req.user.dataScope;
@@ -123,8 +127,9 @@ router.post('/generate', async (req, res) => {
       const gross = (s.basic || 0) + (s.hra || 0) + (s.allowances || 0) + (s.specialAllowance || 0);
       if (!(gross > 0)) { noSalary.push(emp.name); continue; }
 
-      const att = attByEmp[String(emp._id)] || { absent: 0, halfDay: 0 };
-      const lopDays = att.absent + att.halfDay * 0.5;
+      const days = dayCounts.get(String(emp._id)) || { lopDays: 0, unpaidLeaveDays: 0, review: [] };
+      const lopDays = days.lopDays;
+      if (days.review.length) review.push({ employeeId: emp._id, employeeName: emp.name, notes: days.review });
       const paidDays = Math.max(0, workingDays - lopDays);
       const perDay = workingDays > 0 ? gross / workingDays : 0;
       const lopAmount = round2(perDay * lopDays);
@@ -162,9 +167,12 @@ router.post('/generate', async (req, res) => {
 
       let payslip;
       if (existing) {
-        Object.assign(existing, payslipData);
-        existing.recompute();
-        payslip = await existing.save();
+        // Only while it is still unpaid: a payslip marked paid in the meantime
+        // keeps the amounts its salary expense was recorded with.
+        const computed = new Payroll(payslipData).recompute().toObject({ depopulate: true, virtuals: false });
+        const fields = Object.fromEntries(Object.keys(payslipData).concat(['grossEarnings', 'totalDeductions', 'netPay']).map((k) => [k, computed[k]]));
+        payslip = await Payroll.findOneAndUpdate({ _id: existing._id, status: { $ne: 'paid' } }, { $set: fields }, { new: true });
+        if (!payslip) { skipped++; continue; }
       } else {
         payslip = new Payroll(payslipData);
         payslip.recompute();
@@ -182,8 +190,8 @@ router.post('/generate', async (req, res) => {
 
     res.json({
       status: 'success',
-      message: `Payroll generated for ${results.length} employee(s)${skipped ? `, ${skipped} already paid (skipped)` : ''}${noSalary.length ? `, ${noSalary.length} without a salary left out` : ''}`,
-      data: { payslips: results, generated: results.length, skipped, noSalary }
+      message: `Payroll generated for ${results.length} employee(s)${skipped ? `, ${skipped} already paid (skipped)` : ''}${noSalary.length ? `, ${noSalary.length} without a salary left out` : ''}${review.length ? `. ${review.length} need a leave decision — no pay was deducted for those days` : ''}`,
+      data: { payslips: results, generated: results.length, skipped, noSalary, leaveReview: review }
     });
   } catch (error) {
     console.error('Generate payroll error:', error);
@@ -213,59 +221,116 @@ router.put('/:id', async (req, res) => {
     if (req.body.lopDays !== undefined) payslip.lopDays = req.body.lopDays;
 
     payslip.recompute();
-    await payslip.save();
+    // Lands only on the payslip as read and while it is unpaid, so an edit
+    // racing "mark paid" cannot change a paid payslip's amounts.
+    const saved = await Payroll.findOneAndUpdate(
+      { _id: payslip._id, status: { $ne: 'paid' }, updatedAt: payslip.updatedAt },
+      { $set: {
+        earnings: payslip.earnings, deductions: payslip.deductions, notes: payslip.notes,
+        paidDays: payslip.paidDays, lopDays: payslip.lopDays,
+        grossEarnings: payslip.grossEarnings, totalDeductions: payslip.totalDeductions, netPay: payslip.netPay
+      } },
+      { new: true, runValidators: true }
+    );
+    if (!saved) return res.status(409).json({ status: 'error', message: 'The payslip changed or was paid while saving. Refresh and try again.' });
 
-    res.json({ status: 'success', message: 'Payslip updated', data: { payslip } });
+    res.json({ status: 'success', message: 'Payslip updated', data: { payslip: saved } });
   } catch (error) {
     console.error('Update payslip error:', error);
     res.status(500).json({ status: 'error', message: 'Server error while updating payslip', error: error.message });
   }
 });
 
-// PATCH /api/hr/payroll/:id/pay - mark as paid (also records an account expense)
+/*
+  Marking a payslip paid and recording its salary expense in Accounts happen
+  together, once.
+
+  The payslip is claimed first: one write moves it from unpaid to paid, only
+  on the version that was read (same net pay). Of two requests at the same
+  moment one wins; the other finds it paid and answers with it — no second
+  expense. The winner then writes the expense, which is linked to the payslip
+  (sourcePayrollId, a unique index). If the expense cannot be written the
+  payslip goes back to unpaid and the request fails, so a retry starts clean.
+  With transactions both writes are one transaction; on a standalone MongoDB
+  the claim is undone (utils/transactions.js).
+*/
+const PAY_METHODS = { 'bank-transfer': 'bank_transfer', cash: 'cash', cheque: 'cheque', upi: 'upi' };
+class PayslipChanged extends Error {}
+
+const salaryExpense = (payslip, user) => {
+  const paymentMethod = PAY_METHODS[payslip.paymentMethod] || 'bank_transfer';
+  return {
+    transactionType: 'expense',
+    category: 'Salaries',
+    amount: payslip.netPay,
+    description: `Salary - ${payslip.employeeName || 'Employee'} (${payslip.periodLabel || ''})`.trim(),
+    postedAt: payslip.paidDate,
+    paymentMethod,
+    accountType: paymentMethod === 'cash' ? 'cash' : 'bank',
+    accountName: 'Payroll',
+    reference: payslip.employeeCode || '',
+    status: 'completed',
+    sourcePayrollId: payslip._id,
+    userId: user._id,
+    dataScope: payslip.dataScope || user.dataScope
+  };
+};
+
+// PATCH /api/hr/payroll/:id/pay  { paidDate?, paymentMethod? } - mark paid and record the salary expense
 router.patch('/:id/pay', async (req, res) => {
+  const paidDate = req.body.paidDate ? new Date(req.body.paidDate) : new Date();
+  if (Number.isNaN(paidDate.getTime())) return res.status(400).json({ status: 'error', message: 'Invalid payment date' });
+  if (req.body.paymentMethod && !PAY_METHODS[req.body.paymentMethod]) return res.status(400).json({ status: 'error', message: 'Invalid payment method' });
+  if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ status: 'error', message: 'Payslip not found' });
   try {
-    const payslip = await Payroll.findOne(scopeFilter(req, { _id: req.params.id }));
-    if (!payslip) return res.status(404).json({ status: 'error', message: 'Payslip not found' });
-
-    const wasAlreadyPaid = payslip.status === 'paid';
-
-    payslip.status = 'paid';
-    payslip.paidDate = req.body.paidDate ? new Date(req.body.paidDate) : new Date();
-    payslip.paymentMethod = req.body.paymentMethod || payslip.paymentMethod || 'bank-transfer';
-    await payslip.save();
-
-    // Record the salary payout as an expense in Accounts (only once, on first pay)
-    if (!wasAlreadyPaid && payslip.netPay > 0) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const payslip = await Payroll.findOne(scopeFilter(req, { _id: req.params.id })).lean();
+      if (!payslip) return res.status(404).json({ status: 'error', message: 'Payslip not found' });
+      // Already paid (a retry, or another request won): nothing more to record.
+      if (payslip.status === 'paid') {
+        return res.json({ status: 'success', message: 'Payslip is already paid', data: { payslip: await Payroll.findById(payslip._id), alreadyPaid: true } });
+      }
+      const paymentMethod = req.body.paymentMethod || payslip.paymentMethod || 'bank-transfer';
       try {
-        const pmMap = { 'bank-transfer': 'bank_transfer', cash: 'cash', cheque: 'cheque', upi: 'upi' };
-        const paymentMethod = pmMap[payslip.paymentMethod] || 'bank_transfer';
-        const accountType = paymentMethod === 'cash' ? 'cash' : 'bank';
+        const paid = await inTransaction(async ({ session, onUndo }) => {
+          const claimed = await Payroll.findOneAndUpdate(
+            { _id: payslip._id, status: payslip.status, netPay: payslip.netPay },
+            { $set: { status: 'paid', paidDate, paymentMethod } },
+            { new: true, session }
+          );
+          if (!claimed) throw new PayslipChanged();
+          const unpaid = { status: payslip.status, paymentMethod: payslip.paymentMethod || '' };
+          onUndo(() => Payroll.updateOne(
+            { _id: payslip._id, status: 'paid', paidDate },
+            payslip.paidDate ? { $set: { ...unpaid, paidDate: payslip.paidDate } } : { $set: unpaid, $unset: { paidDate: '' } }
+          ));
 
-        await AccountTransaction.createWithUniqueNumber({
-          transactionType: 'expense',
-          category: 'Salaries',
-          amount: payslip.netPay,
-          description: `Salary - ${payslip.employeeName || 'Employee'} (${payslip.periodLabel || ''})`.trim(),
-          paymentMethod,
-          accountType,
-          accountName: 'Payroll',
-          reference: payslip.employeeCode || '',
-          status: 'completed',
-          userId: req.user._id,
-          dataScope: req.user.dataScope
-        });
-
-      } catch (txErr) {
-        // Don't fail the payment if the bookkeeping entry has an issue — just log it
-        console.warn('⚠️ Payroll expense transaction failed:', txErr.message);
+          if (claimed.netPay > 0) {
+            const data = salaryExpense(claimed, req.user);
+            // An expense left by an earlier attempt whose undo failed is reused, not doubled.
+            const orphan = await AccountTransaction.findOne({ sourcePayrollId: claimed._id }).session(session).lean();
+            if (orphan?.reconciled) throw Object.assign(new Error('This payslip has a reconciled salary entry in Accounts. Undo that reconciliation first.'), { status: 409 });
+            if (orphan) {
+              await AccountTransaction.updateOne({ _id: orphan._id }, { $set: data }, { session, runValidators: true });
+              onUndo(() => AccountTransaction.replaceOne({ _id: orphan._id }, orphan));
+            } else {
+              const [expense] = await AccountTransaction.create([data], { session });
+              onUndo(() => AccountTransaction.deleteOne({ _id: expense._id }));
+            }
+          }
+          return claimed;
+        }, { label: 'Payslip payment' });
+        return res.json({ status: 'success', message: 'Payslip marked as paid', data: { payslip: paid } });
+      } catch (error) {
+        if (error instanceof PayslipChanged) continue; // read it again: paid by another request, or edited
+        throw error;
       }
     }
-
-    res.json({ status: 'success', message: 'Payslip marked as paid', data: { payslip } });
+    return res.status(409).json({ status: 'error', message: 'The payslip changed while paying. Refresh and try again.' });
   } catch (error) {
+    if (error.status === 409) return res.status(409).json({ status: 'error', message: error.message });
     console.error('Mark paid error:', error);
-    res.status(500).json({ status: 'error', message: 'Server error while marking payslip paid' });
+    res.status(500).json({ status: 'error', message: 'The payslip was not marked paid: its salary expense could not be recorded. Try again.' });
   }
 });
 
@@ -277,7 +342,10 @@ router.delete('/:id', async (req, res) => {
     if (payslip.status === 'paid') {
       return res.status(409).json({ status: 'error', message: 'A paid payslip cannot be deleted while its salary expense remains in Accounts' });
     }
-    await payslip.deleteOne();
+    const removed = await Payroll.deleteOne({ _id: payslip._id, status: { $ne: 'paid' } });
+    if (!removed.deletedCount) return res.status(409).json({ status: 'error', message: 'The payslip was paid in the meantime, so it was not deleted' });
+    // An unpaid payslip has no salary expense; drop one left by a failed undo.
+    await AccountTransaction.deleteMany({ sourcePayrollId: payslip._id, reconciled: { $ne: true } });
     res.json({ status: 'success', message: 'Payslip deleted' });
   } catch (error) {
     console.error('Delete payslip error:', error);

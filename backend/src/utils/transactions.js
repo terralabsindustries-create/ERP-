@@ -43,4 +43,48 @@ function markTransactionsUnsupported(connection = mongoose.connection) {
 const isTransactionUnsupported = (error) =>
   error?.code === 20 || /Transaction numbers are only allowed|transactions are not supported/i.test(error?.message || '');
 
-module.exports = { supportsTransactions, markTransactionsUnsupported, isTransactionUnsupported };
+/**
+ * Runs `work` as one unit. Where the database has transactions, `work` runs
+ * inside one (and may be re-run on a transient write conflict, so it must
+ * start from scratch each time). On a standalone MongoDB it runs directly and,
+ * if it throws, the undo steps it registered run newest first before the
+ * error is passed on. `work` receives { session, onUndo }; every write in it
+ * passes `session`, and every write registers how to reverse it.
+ *
+ * `label` names the operation in the log line written when an undo step
+ * itself fails — that is a record someone must correct by hand.
+ */
+async function inTransaction(work, { label = 'Change' } = {}) {
+  if (await supportsTransactions()) {
+    const session = await mongoose.startSession();
+    try {
+      let result;
+      await session.withTransaction(async () => {
+        result = await work({ session, onUndo: () => {} });
+      });
+      return result;
+    } catch (error) {
+      if (!isTransactionUnsupported(error)) throw error;
+      // The server said it had transactions but refused one; nothing was written.
+      markTransactionsUnsupported();
+    } finally {
+      await session.endSession();
+    }
+  }
+
+  const undo = [];
+  try {
+    return await work({ session: null, onUndo: (step) => undo.push(step) });
+  } catch (error) {
+    for (const step of undo.reverse()) {
+      try {
+        await step();
+      } catch (undoError) {
+        console.error(`${label.toUpperCase()} NOT FULLY UNDONE — check the records it touched:`, undoError.message);
+      }
+    }
+    throw error;
+  }
+}
+
+module.exports = { supportsTransactions, markTransactionsUnsupported, isTransactionUnsupported, inTransaction };

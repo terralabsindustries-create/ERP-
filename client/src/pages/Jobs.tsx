@@ -70,7 +70,9 @@ export default function Jobs() {
   const [invoiceToEdit, setInvoiceToEdit] = useState<any>(null);
   const [showEditInvoiceDialog, setShowEditInvoiceDialog] = useState(false);
   const { toast } = useToast();
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
+  // Mirrors backend/src/utils/jobAccess.js: a designer is shown the job tickets they created.
+  const ownJobsOnly = user?.role === "designer" && !user?.canViewAllData;
   // A login may see job tickets without being able to change them (e.g. the
   // accountant, who bills them); only the actions it holds are offered.
   const canInvoice = hasPermission("Invoicing: Create & Edit");
@@ -170,23 +172,6 @@ export default function Jobs() {
     setShowInvoiceDialog(true);
   };
 
-  // Generating an invoice from a job hands the PDF straight to the person who
-  // asked for it, the same way the quick-job flow does.
-  const downloadInvoice = async (invoice: any) => {
-    const invoiceId = invoice?._id || invoice?.id;
-    if (!invoiceId) return;
-
-    try {
-      await apiClient.downloadInvoicePDF(invoiceId);
-    } catch (error: any) {
-      console.error('Error downloading invoice PDF:', error);
-      toast({
-        title: "Download failed",
-        description: error?.message || "The invoice was created, but its PDF could not be downloaded.",
-        variant: "destructive",
-      });
-    }
-  };
 
   // The job list only carries the invoice's id, so the invoice itself is
   // fetched before the edit dialog opens on it. The row's id can also be stale
@@ -269,7 +254,9 @@ export default function Jobs() {
         <div>
           <h1 className="page-title">Job Tickets</h1>
           <p className="text-muted-foreground text-sm">
-            Every print job from enquiry to delivery — specs, status, deadlines and billing
+            {ownJobsOnly
+              ? "The job tickets you created — specs, status, deadlines and billing"
+              : "Every print job from enquiry to delivery — specs, status, deadlines and billing"}
           </p>
         </div>
         {canCreateJob && (
@@ -555,10 +542,10 @@ export default function Jobs() {
         <AdvancedCreateInvoiceDialog
           open={showInvoiceDialog}
           onOpenChange={setShowInvoiceDialog}
-          onInvoiceCreated={(invoice) => {
+          onInvoiceCreated={() => {
+            // The invoice dialog then offers Print / Download / Send; nothing downloads by itself.
             fetchJobs();
             setShowInvoiceDialog(false);
-            downloadInvoice(invoice);
           }}
           preselectedJob={selectedJob}
           preselectedCustomer={{
@@ -574,10 +561,8 @@ export default function Jobs() {
       {quotationJob && (
         <CreateQuotationDialog
           open={showQuotationDialog}
-          onOpenChange={(open) => {
-            setShowQuotationDialog(open);
-            if (!open) setQuotationJob(null);
-          }}
+          // Kept mounted after closing, so its saved-quotation actions stay on screen.
+          onOpenChange={setShowQuotationDialog}
           initialJob={quotationJob}
         />
       )}

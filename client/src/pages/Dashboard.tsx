@@ -37,6 +37,7 @@ import { Panel, PanelLink } from "@/components/common/Panel";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PipelineStrip } from "@/components/production/PipelineStrip";
 import { TeamWorkloadPanel } from "@/components/dashboard/TeamWorkloadPanel";
+import { PaymentCollectionPanel } from "@/components/payments/PaymentCollectionPanel";
 import { JobStatusBadge } from "@/components/jobs/JobStatusBadge";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { PageShell } from "@/components/layout/PageShell";
@@ -215,8 +216,8 @@ export default function Dashboard() {
     has(s?.pendingDeliveries) && { label: "Awaiting dispatch", value: String(s.pendingDeliveries), icon: Truck, href: "/delivery", warn: false, source: sources.pendingDeliveries },
     has(s?.lowStockItems) && { label: "Low-stock materials", value: String(s.lowStockItems), icon: Layers, href: "/inventory", warn: s.lowStockItems > 0, source: sources.lowStockItems },
     has(s?.totalCustomers) && { label: "Customers", value: String(s.totalCustomers), icon: Users, href: "/customers", warn: false, source: undefined },
-    has(s?.cashBalance) && { label: "Cash balance", value: formatINR(s.cashBalance, { compact: true }), icon: Wallet, href: "/accounts", warn: false, source: sources.cashBalance },
-    has(s?.bankBalance) && { label: "Bank balance", value: formatINR(s.bankBalance, { compact: true }), icon: Landmark, href: "/accounts", warn: false, source: sources.bankBalance },
+    has(s?.cashBalance) && { label: "Cash balance now", value: formatINR(s.cashBalance), icon: Wallet, href: "/accounts", warn: false, source: sources.cashBalance },
+    has(s?.bankBalance) && { label: "Bank balance now", value: formatINR(s.bankBalance), icon: Landmark, href: "/accounts", warn: false, source: sources.bankBalance },
   ].filter(Boolean) as { label: string; value: string; icon: LucideIcon; href: string; warn: boolean; source?: string }[];
 
   const tiles: React.ReactNode[] = [];
@@ -246,7 +247,7 @@ export default function Dashboard() {
   }
   if (loadingStats || has(s?.collectedToday)) {
     tiles.push(
-      <KpiTile key="collected" label="Collected today" icon={IndianRupee} value={formatINR(s?.collectedToday ?? 0, { compact: true })} loading={loadingStats} hint="Payments recorded today" href={hasPermission("Payments") ? "/payments" : undefined} />
+      <KpiTile key="collected" label="Collected today" icon={IndianRupee} value={formatINR(s?.collectedToday ?? 0)} loading={loadingStats} hint="Completed payments today · India time" href={hasPermission("Payments") ? "/payments" : undefined} />
     );
   }
   if (loadingStats || has(s?.invoicedThisMonth)) {
@@ -322,6 +323,14 @@ export default function Dashboard() {
       {tiles.length > 0 && (
         <section aria-label="Key figures" className={cn("grid grid-cols-2 gap-3 md:grid-cols-3", tileCols)}>
           {tiles}
+        </section>
+      )}
+
+      {/* Where today's payments were received, and what each account holds (Accounts logins) */}
+      {hasPermission("Accounts") && (
+        <section aria-label="Payment collection" className="space-y-2">
+          <h2 className="font-display text-base font-semibold">Payment collection</h2>
+          <PaymentCollectionPanel variant="dashboard" />
         </section>
       )}
 
@@ -412,7 +421,7 @@ export default function Dashboard() {
 
         <div className={cn("flex flex-col gap-4", !canSeeJobs && "md:grid md:grid-cols-2")}>
           {shopRows.length > 0 && (
-          <Panel title="Shop status" description="Dispatch, materials and account balances">
+          <Panel title="Shop status" description="Current balances include earlier receipts and payouts">
             <ul className="divide-y">
               {shopRows.map((row) => (
                 <li key={row.label}>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -30,12 +30,15 @@ import { formatINR } from "@/lib/format";
 interface JobInvoiceDialogProps {
   children: React.ReactNode;
   job: any;
-  onInvoiceGenerated?: () => void;
+  /** The invoice was saved; the caller offers its Print / Download / Send actions. */
+  onInvoiceGenerated?: (invoice: { _id: string; invoiceNumber?: string; totalAmount?: number; status?: string }) => void;
 }
 
 export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoiceDialogProps) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  // One save at a time: a second click or Enter while saving creates nothing.
+  const saving = useRef(false);
   const [customers, setCustomers] = useState<any[]>([]);
   const { toast } = useToast();
 
@@ -91,7 +94,9 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
       });
       return;
     }
+    if (saving.current) return;
 
+    saving.current = true;
     setLoading(true);
 
     try {
@@ -115,48 +120,19 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
         termsAndConditions: formData.terms_conditions
       };
 
-      console.log('📄 Creating invoice with data:', invoiceData);
-
       const response = await apiClient.createInvoice(invoiceData);
-      console.log('📄 Invoice created:', response);
 
-      // Get the invoice ID from the response
-      const created = response as { invoice?: { _id?: string; id?: string }; _id?: string; id?: string };
-      const invoiceId = created?.invoice?._id || created?._id || created?.id;
+      const created = response as { invoice?: { _id?: string; id?: string; invoiceNumber?: string; totalAmount?: number; status?: string }; _id?: string; id?: string };
+      const invoice = created?.invoice || (created as { _id?: string; id?: string; invoiceNumber?: string });
+      const invoiceId = invoice?._id || invoice?.id;
 
       if (!invoiceId) {
         throw new Error('Invoice ID not received from server');
       }
 
-      console.log('📄 Invoice ID:', invoiceId);
-
-      toast({
-        title: "Success",
-        description: "Invoice generated successfully. Starting PDF download...",
-      });
-
-      // Wait a moment for the invoice to be fully saved, then download PDF
-      setTimeout(async () => {
-        try {
-          console.log('📥 Starting automatic PDF download for invoice:', invoiceId);
-          await apiClient.downloadInvoicePDF(invoiceId);
-
-          toast({
-            title: "Download Complete",
-            description: "Invoice PDF has been downloaded",
-          });
-        } catch (downloadError) {
-          console.error('Error downloading PDF:', downloadError);
-          toast({
-            title: "PDF Download Failed",
-            description: "Invoice was created but PDF download failed. You can download it manually from the invoices page.",
-            variant: "destructive",
-          });
-        } finally {
-          setOpen(false);
-          onInvoiceGenerated?.();
-        }
-      }, 500);
+      // Saved. No PDF is downloaded here: the caller offers Print / Download / Send.
+      setOpen(false);
+      onInvoiceGenerated?.({ ...invoice, _id: invoiceId });
     } catch (error: any) {
       console.error('Error generating invoice:', error);
       if (error.stockCheck?.length > 0) {
@@ -176,6 +152,7 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
         });
       }
     } finally {
+      saving.current = false;
       setLoading(false);
     }
   };

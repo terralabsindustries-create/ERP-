@@ -12,6 +12,8 @@ const { protect } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/requirePermission');
 const { orgUserFilter, orgScope } = require('../utils/accessScope');
 const { accountScope } = require('../utils/accountScope');
+const PaymentAccount = require('../models/PaymentAccount');
+const { paymentAccountScope } = require('../utils/paymentAccounts');
 
 const router = express.Router();
 router.use('/reconciliation', require('./bankReconciliation'));
@@ -28,9 +30,13 @@ async function currentBalances(scope) {
   } };
 }
 
+const TRANSACTION_TYPES = ['income', 'expense', 'transfer', 'opening_balance', 'adjustment'];
+const ACCOUNT_TYPES = ['cash', 'bank', 'credit_card', 'loan', 'investment'];
+const isTransfer = (value, { req }) => req.body.transactionType === 'transfer';
+
 // Validation rules
 const transactionValidation = [
-  body('transactionType').isIn(['income', 'expense', 'transfer', 'opening_balance', 'adjustment'])
+  body('transactionType').isIn(TRANSACTION_TYPES)
     .withMessage('Invalid transaction type'),
   body('category').notEmpty().withMessage('Category is required').trim(),
   body('amount').isFloat({ gt: 0 }).withMessage('Enter an amount above 0'),
@@ -40,8 +46,36 @@ const transactionValidation = [
   body('accountType').isIn(['cash', 'bank', 'credit_card', 'loan', 'investment'])
     .withMessage('Account type is required (cash, bank, credit_card, loan or investment)'),
   body('accountName').notEmpty().withMessage('Account name is required').trim(),
-  body('postedAt').optional().isISO8601().withMessage('Invalid transaction date')
+  body('postedAt').optional().isISO8601().withMessage('Invalid transaction date'),
+  // A transfer names both accounts: the source above and this destination.
+  body('transferDetails.toAccountType').if(isTransfer).isIn(ACCOUNT_TYPES)
+    .withMessage('Choose the account the transfer goes to'),
+  body('transferDetails.toAccount').if(isTransfer).isString().withMessage('Enter the account the transfer goes to')
+    .bail().trim().notEmpty().withMessage('Enter the account the transfer goes to')
 ];
+
+// Account names are typed by hand; "HDFC bank " and "hdfc Bank" are one account.
+const sameAccountName = (a, b) => String(a || '').trim().replace(/\s+/g, ' ').toLowerCase() === String(b || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+function transferProblem(body) {
+  if (body.transactionType !== 'transfer') return null;
+  const to = body.transferDetails || {};
+  if (to.toAccountType === body.accountType && sameAccountName(to.toAccount, body.accountName)) {
+    return 'A transfer must go to a different account';
+  }
+  return null;
+}
+
+function validationFailure(req, res) {
+  const { validationResult } = require('express-validator');
+  const errors = validationResult(req);
+  const list = errors.array().map((err) => ({ field: err.path || err.param, message: err.msg }));
+  const transfer = transferProblem(req.body);
+  if (transfer) list.push({ field: 'transferDetails.toAccount', message: transfer });
+  if (!list.length) return false;
+  res.status(400).json({ status: 'error', message: list[0].message || 'Validation failed', errors: list });
+  return true;
+}
 
 // Account entries may refer to business records, but never to another
 // business's customer, supplier, job or invoice. The IDs are optional.
@@ -69,7 +103,59 @@ const ENTRY_FIELDS = [
   'chequeDetails', 'transferDetails', 'taxDetails', 'status', 'attachments',
   'notes', 'internalNotes'
 ];
-const entryFields = (body) => Object.fromEntries(ENTRY_FIELDS.filter((key) => body[key] !== undefined).map((key) => [key, body[key]]));
+function entryFields(body) {
+  const fields = Object.fromEntries(ENTRY_FIELDS.filter((key) => body[key] !== undefined && key !== 'transferDetails').map((key) => [key, body[key]]));
+  if (body.paymentAccountId) fields.paymentAccountId = body.paymentAccountId;
+  if (body.transactionType === 'transfer') {
+    fields.transferDetails = {
+      fromAccount: body.accountName,
+      toAccountType: body.transferDetails.toAccountType,
+      toAccount: body.transferDetails.toAccount,
+      ...(body.transferDetails.toPaymentAccountId ? { toPaymentAccountId: body.transferDetails.toPaymentAccountId } : {}),
+      transferFee: 0
+    };
+  }
+  return fields;
+}
+
+/*
+  An entry may name payment accounts (models/PaymentAccount.js): the account
+  money came out of or went into (paymentAccountId) and, for a transfer, the
+  one it arrived in (transferDetails.toPaymentAccountId). Their column and
+  name are then taken from the account, so the per-account balances and the
+  Accounts page agree. A new link needs an active account of this business.
+  Returns an error message, or null after filling req.body in.
+*/
+async function linkPaymentAccounts(user, body, existing = null) {
+  const resolve = async (id, current) => {
+    if (!mongoose.isValidObjectId(String(id))) return { error: 'Choose a valid payment account' };
+    const account = await PaymentAccount.findOne({ _id: id, ...paymentAccountScope(user) }).lean();
+    if (!account) return { error: 'Payment account not found' };
+    if (!account.isActive && String(current || '') !== String(account._id)) return { error: `${account.nickname} is inactive` };
+    return { account };
+  };
+  if (body.paymentAccountId) {
+    const { account, error } = await resolve(body.paymentAccountId, existing?.paymentAccountId);
+    if (error) return error;
+    body.paymentAccountId = account._id;
+    body.accountType = PaymentAccount.ledgerType(account.kind);
+    body.accountName = account.nickname;
+  } else {
+    delete body.paymentAccountId;
+  }
+  const to = body.transactionType === 'transfer' ? body.transferDetails : null;
+  if (to?.toPaymentAccountId) {
+    const { account, error } = await resolve(to.toPaymentAccountId, existing?.transferDetails?.toPaymentAccountId);
+    if (error) return error;
+    to.toPaymentAccountId = account._id;
+    to.toAccountType = PaymentAccount.ledgerType(account.kind);
+    to.toAccount = account.nickname;
+    if (body.paymentAccountId && String(body.paymentAccountId) === String(account._id)) return 'A transfer must go to a different account';
+  } else if (to) {
+    delete to.toPaymentAccountId;
+  }
+  return null;
+}
 const accountReferences = async (user) => [
   { path: 'customerId', select: 'name email phone', match: orgScope(user) },
   { path: 'vendorId', select: 'name email phone', match: await orgUserFilter(user) },
@@ -81,7 +167,9 @@ const accountReferences = async (user) => [
 // @desc    Get all account transactions for the authenticated user
 // @access  Private
 router.get('/transactions', protect, [
-  query('transactionType').optional().isIn(['income', 'expense', 'transfer', 'opening_balance', 'adjustment']),
+  // One type, or several separated by commas (e.g. transfer,opening_balance,adjustment).
+  query('transactionType').optional().custom((value) => value === 'all' || String(value).split(',').every((type) => TRANSACTION_TYPES.includes(type.trim())))
+    .withMessage('Invalid transaction type'),
   query('accountType').optional().isIn(['cash', 'bank', 'credit_card', 'loan', 'investment']),
   query('paymentMethod').optional().isIn(['cash', 'bank_transfer', 'cheque', 'card', 'upi', 'wallet', 'other']),
   query('status').optional().isIn(['pending', 'completed', 'cancelled', 'reversed']),
@@ -89,6 +177,9 @@ router.get('/transactions', protect, [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 })
 ], async (req, res) => {
+  const { validationResult } = require('express-validator');
+  const invalid = validationResult(req);
+  if (!invalid.isEmpty()) return res.status(400).json({ status: 'error', message: invalid.array()[0].msg, errors: invalid.array() });
   try {
     const {
       transactionType,
@@ -96,39 +187,45 @@ router.get('/transactions', protect, [
       paymentMethod,
       status,
       search,
-      page = 1,
-      limit = 10,
       sortBy = 'createdAt',
       sortOrder = 'desc'
     } = req.query;
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 10;
     
-    // Build query (always scoped to authenticated user)
-    const query = await accountScope(req.user);
+    // Every filter runs in the database, before pagination, so the count and
+    // pages cover exactly the matching entries.
+    const conditions = [await accountScope(req.user)];
+    const query = { $and: conditions };
     
     if (transactionType && transactionType !== 'all') {
-      query.transactionType = transactionType;
+      const types = [...new Set(String(transactionType).split(',').map((type) => type.trim()))];
+      conditions.push({ transactionType: types.length === 1 ? types[0] : { $in: types } });
     }
     
+    // A transfer belongs to both accounts it touches.
     if (accountType && accountType !== 'all') {
-      query.accountType = accountType;
+      conditions.push({ $or: [{ accountType }, { transactionType: 'transfer', 'transferDetails.toAccountType': accountType }] });
     }
-    
+
     if (paymentMethod && paymentMethod !== 'all') {
-      query.paymentMethod = paymentMethod;
+      conditions.push({ paymentMethod });
     }
     
     if (status && status !== 'all') {
-      query.status = status;
+      conditions.push({ status });
     }
     
     if (search) {
-      query.$or = [
-        { transactionNumber: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } },
-        { category: { $regex: search, $options: 'i' } },
-        { accountName: { $regex: search, $options: 'i' } },
-        { reference: { $regex: search, $options: 'i' } }
-      ];
+      const pattern = { $regex: String(search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+      conditions.push({ $or: [
+        { transactionNumber: pattern },
+        { description: pattern },
+        { category: pattern },
+        { accountName: pattern },
+        { 'transferDetails.toAccount': pattern },
+        { reference: pattern }
+      ] });
     }
     
     // Calculate pagination
@@ -137,23 +234,24 @@ router.get('/transactions', protect, [
     // Build sort object
     const sort = {};
     sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
+    sort._id = sort[sortBy]; // a stable order, so no entry is skipped or repeated across pages
     
     // Execute query
-    const transactions = await AccountTransaction.find(query)
-      .populate(await accountReferences(req.user))
-      .sort(sort)
-      .skip(skip)
-      .limit(parseInt(limit));
-    
-    // Get total count
-    const totalTransactions = await AccountTransaction.countDocuments(query);
+    const [transactions, totalTransactions] = await Promise.all([
+      AccountTransaction.find(query)
+        .populate(await accountReferences(req.user))
+        .sort(sort)
+        .skip(skip)
+        .limit(limit),
+      AccountTransaction.countDocuments(query)
+    ]);
     
     res.status(200).json({
       status: 'success',
       data: {
         transactions,
         pagination: {
-          current: parseInt(page),
+          current: page,
           total: Math.ceil(totalTransactions / limit),
           count: transactions.length,
           totalTransactions
@@ -270,21 +368,9 @@ router.get('/cheques', protect, [
 // @access  Private
 router.post('/transactions', protect, requirePermission('Accounts: Create & Edit'), transactionValidation, async (req, res) => {
   try {
-    // Check for validation errors
-    const { validationResult } = require('express-validator');
-    const errors = validationResult(req);
-
-    if (!errors.isEmpty()) {
-      console.log('❌ Validation errors:', errors.array());
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors: errors.array().map(err => ({
-          field: err.path || err.param,
-          message: err.msg
-        }))
-      });
-    }
+    const linkProblem = await linkPaymentAccounts(req.user, req.body);
+    if (linkProblem) return res.status(400).json({ status: 'error', message: linkProblem });
+    if (validationFailure(req, res)) return;
 
     const invalidRelated = await validRelatedRecords(req.user, req.body);
     if (invalidRelated) return res.status(400).json({ status: 'error', message: `${invalidRelated} must belong to this business` });
@@ -371,19 +457,26 @@ router.post('/transactions', protect, requirePermission('Accounts: Create & Edit
 // @access  Private
 router.put('/transactions/:id', protect, requirePermission('Accounts: Create & Edit'), transactionValidation, async (req, res) => {
   try {
-    const { validationResult } = require('express-validator');
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ status: 'error', message: 'Validation failed', errors: errors.array().map((err) => ({ field: err.path || err.param, message: err.msg })) });
+    const scope = await accountScope(req.user);
+    const existing = await AccountTransaction.findOne({ _id: req.params.id, ...scope }).select('reconciled transferInReconciled sourcePaymentId sourceRefundPaymentId sourcePayrollId transactionNumber paymentAccountId transferDetails');
+    const linkProblem = await linkPaymentAccounts(req.user, req.body, existing);
+    if (linkProblem) return res.status(400).json({ status: 'error', message: linkProblem });
+    if (validationFailure(req, res)) return;
     const invalidRelated = await validRelatedRecords(req.user, req.body);
     if (invalidRelated) return res.status(400).json({ status: 'error', message: `${invalidRelated} must belong to this business` });
-    const scope = await accountScope(req.user);
-    const existing = await AccountTransaction.findOne({ _id: req.params.id, ...scope }).select('reconciled sourcePaymentId');
-    if (existing?.sourcePaymentId) return res.status(409).json({ status: 'error', message: 'This entry belongs to a customer payment. Change it in Payments.' });
-    if (existing?.reconciled) return res.status(409).json({ status: 'error', message: 'A reconciled entry cannot be edited.' });
+    if (existing?.sourcePaymentId || existing?.sourceRefundPaymentId) return res.status(409).json({ status: 'error', message: 'This entry belongs to a customer payment. Change it in Payments.' });
+    if (existing?.transactionNumber?.startsWith('TXN-OPN-')) return res.status(409).json({ status: 'error', message: 'This is a payment account\'s opening balance. Change it on the payment account.' });
+    if (existing?.sourcePayrollId) return res.status(409).json({ status: 'error', message: 'This entry is a paid payslip\'s salary. It is kept in step with the payslip in Payroll.' });
+    if (existing?.reconciled || existing?.transferInReconciled) return res.status(409).json({ status: 'error', message: 'A reconciled entry cannot be edited.' });
     const changes = entryFields(req.body);
     const transaction = await AccountTransaction.findOneAndUpdate(
-      { _id: req.params.id, ...scope, reconciled: { $ne: true }, sourcePaymentId: { $exists: false } },
-      changes,
+      { _id: req.params.id, ...scope, reconciled: { $ne: true }, transferInReconciled: { $ne: true }, sourcePaymentId: { $exists: false }, sourceRefundPaymentId: { $exists: false }, sourcePayrollId: { $exists: false } },
+      // An entry that stops being a transfer no longer names a destination,
+      // and one that no longer names a payment account drops the link.
+      { $set: changes, ...(() => {
+        const unset = { ...(changes.transferDetails ? {} : { transferDetails: '' }), ...(changes.paymentAccountId ? {} : { paymentAccountId: '' }) };
+        return Object.keys(unset).length ? { $unset: unset } : {};
+      })() },
       { new: true, runValidators: true }
     ).populate(await accountReferences(req.user));
     
@@ -433,14 +526,19 @@ router.put('/transactions/:id', protect, requirePermission('Accounts: Create & E
 router.delete('/transactions/:id', protect, requirePermission('Accounts: Delete'), async (req, res) => {
   try {
     const scope = await accountScope(req.user);
-    const existing = await AccountTransaction.findOne({ _id: req.params.id, ...scope }).select('reconciled sourcePaymentId');
-    if (existing?.sourcePaymentId) return res.status(409).json({ status: 'error', message: 'This entry belongs to a customer payment. Delete or reverse it in Payments.' });
-    if (existing?.reconciled) return res.status(409).json({ status: 'error', message: 'A reconciled entry cannot be deleted.' });
+    const existing = await AccountTransaction.findOne({ _id: req.params.id, ...scope }).select('reconciled transferInReconciled sourcePaymentId sourceRefundPaymentId sourcePayrollId transactionNumber');
+    if (existing?.sourcePaymentId || existing?.sourceRefundPaymentId) return res.status(409).json({ status: 'error', message: 'This entry belongs to a customer payment. Delete or reverse it in Payments.' });
+    if (existing?.transactionNumber?.startsWith('TXN-OPN-')) return res.status(409).json({ status: 'error', message: 'This is a payment account\'s opening balance. Change it on the payment account.' });
+    if (existing?.sourcePayrollId) return res.status(409).json({ status: 'error', message: 'This entry is a paid payslip\'s salary, so it cannot be deleted on its own.' });
+    if (existing?.reconciled || existing?.transferInReconciled) return res.status(409).json({ status: 'error', message: 'A reconciled entry cannot be deleted.' });
     const transaction = await AccountTransaction.findOneAndDelete({
       _id: req.params.id,
       ...scope,
       reconciled: { $ne: true },
-      sourcePaymentId: { $exists: false }
+      transferInReconciled: { $ne: true },
+      sourcePaymentId: { $exists: false },
+      sourceRefundPaymentId: { $exists: false },
+      sourcePayrollId: { $exists: false }
     });
     
     if (!transaction) {
@@ -502,6 +600,33 @@ router.get('/stats/summary', protect, async (req, res) => {
   }
 });
 
+// @route   GET /api/accounts/stats/period?startDate&endDate
+// @desc    Income, expense and net of every completed entry whose effective
+//          date (postedAt, else createdAt) is in [startDate, endDate). The
+//          client sends its own month boundaries, so "this month" follows the
+//          business's timezone. Without dates: the current calendar month.
+// @access  Private
+router.get('/stats/period', protect, [
+  query('startDate').optional().isISO8601().withMessage('Invalid start date'),
+  query('endDate').optional().isISO8601().withMessage('Invalid end date')
+], async (req, res) => {
+  const { validationResult } = require('express-validator');
+  const invalid = validationResult(req);
+  if (!invalid.isEmpty()) return res.status(400).json({ status: 'error', message: invalid.array()[0].msg });
+  const now = new Date();
+  const start = req.query.startDate ? new Date(req.query.startDate) : new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = req.query.endDate ? new Date(req.query.endDate) : new Date(start.getFullYear(), start.getMonth() + 1, 1);
+  if (!(end > start)) return res.status(400).json({ status: 'error', message: 'The end date must be after the start date' });
+  if (end - start > 366 * 864e5) return res.status(400).json({ status: 'error', message: 'Choose a period of at most a year' });
+  try {
+    const totals = await AccountTransaction.periodTotals(await accountScope(req.user), start, end);
+    res.status(200).json({ status: 'success', data: { startDate: start, endDate: end, ...totals } });
+  } catch (error) {
+    console.error('Get account period totals error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error while totalling the period' });
+  }
+});
+
 // @route   GET /api/accounts/reports/summary
 // @desc    Profit & loss for a period (income, expenses, net) + current balances
 // @access  Private — the admin (business owner) only, whatever else a login may see
@@ -538,20 +663,10 @@ router.get('/reports/summary', protect, async (req, res) => {
 
     // Use the statement/transaction date when supplied. A backdated entry
     // belongs to that period, not the month someone typed it into the ERP.
-    const agg = await AccountTransaction.aggregate([
-      { $match: { ...(await accountScope(req.user)), status: 'completed' } },
-      { $addFields: { effectiveDate: { $ifNull: ['$postedAt', '$createdAt'] } } },
-      { $match: { effectiveDate: { $gte: start, $lte: now } } },
-      { $group: { _id: '$transactionType', total: { $sum: '$amount' } } }
-    ]);
-
-    let totalIncome = 0;
-    let totalExpenses = 0;
-    agg.forEach(g => {
-      if (g._id === 'income') totalIncome += g.total;
-      else if (g._id === 'expense') totalExpenses += g.total;
-    });
-    const netProfit = totalIncome - totalExpenses;
+    // The report is for the whole business: entries are not attributed to
+    // the login that typed them, so there is no per-user profit.
+    const { income: totalIncome, expense: totalExpenses, net: netProfit } =
+      await AccountTransaction.periodTotals(await accountScope(req.user), start, new Date(now.getTime() + 1));
 
     // Current balances (point-in-time, not period-bound)
     const { currentBalances: balance } = await currentBalances(await accountScope(req.user));
@@ -651,7 +766,9 @@ router.get('/ledger', protect, [
   }
 });
 
-// Helper function to update account balances
+const TYPE_LABEL = { income: 'Income', expense: 'Expense', transfer: 'Transfer', opening_balance: 'Opening balance', adjustment: 'Adjustment' };
+const exportDate = (date) => new Date(date).toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata' });
+
 // @route   GET /api/accounts/reports/export
 // @desc    Export account report to Excel with invoice data
 // @access  Private
@@ -659,16 +776,14 @@ router.get('/reports/export', protect, [
   query('period').optional().isIn(['week', 'month', 'quarter', 'year']),
   query('format').optional().isIn(['pdf', 'excel']),
   query('startDate').optional().isISO8601(),
-  query('endDate').optional().isISO8601(),
-  query('userId').optional().isMongoId()
+  query('endDate').optional().isISO8601()
 ], async (req, res) => {
   try {
     const {
       period = 'month',
       format = 'excel',
       startDate,
-      endDate,
-      userId
+      endDate
     } = req.query;
 
     // Calculate date range based on period
@@ -709,13 +824,10 @@ router.get('/reports/export', protect, [
       ...(await accountScope(req.user))
     };
 
-    const transactions = await AccountTransaction.find(transactionQuery)
+    const transactions = (await AccountTransaction.find(transactionQuery)
       .populate(await accountReferences(req.user))
-      .populate('userId', 'fullName email')
-      .sort({ createdAt: -1 });
-
-    console.log(`📊 Found ${transactions.length} transactions for the period`);
-    console.log(`📅 Date range: ${start.toLocaleDateString()} to ${end.toLocaleDateString()}`);
+      .populate('userId', 'fullName email'))
+      .sort((a, b) => (b.postedAt || b.createdAt) - (a.postedAt || a.createdAt));
 
     // Generate Excel file
     const ExcelJS = require('exceljs');
@@ -728,9 +840,9 @@ router.get('/reports/export', protect, [
       { header: 'Transaction #', key: 'transactionNumber', width: 20 },
       { header: 'Description', key: 'description', width: 35 },
       { header: 'Category', key: 'category', width: 20 },
-      { header: 'Type', key: 'type', width: 12 },
+      { header: 'Type', key: 'type', width: 16 },
       { header: 'Payment Method', key: 'paymentMethod', width: 18 },
-      { header: 'Account Type', key: 'accountType', width: 15 },
+      { header: 'Account Type', key: 'accountType', width: 20 },
       { header: 'Amount', key: 'amount', width: 15 },
       { header: 'Status', key: 'status', width: 12 }
     ];
@@ -744,16 +856,21 @@ router.get('/reports/export', protect, [
     };
     worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
 
-    // Add transaction data
+    // Add transaction data. The date is the effective one (statement date,
+    // else when it was entered), as a calendar day in India.
+    const accountLabel = (type) => (type ? type.replace('_', ' ').toUpperCase() : 'N/A');
     transactions.forEach(transaction => {
+      const transfer = transaction.transactionType === 'transfer';
       worksheet.addRow({
-        transactionDate: new Date(transaction.createdAt).toLocaleDateString('en-GB'),
+        transactionDate: exportDate(transaction.postedAt || transaction.createdAt),
         transactionNumber: transaction.transactionNumber || 'N/A',
         description: transaction.description,
         category: transaction.category,
-        type: transaction.transactionType === 'income' ? 'Income' : 'Expense',
+        type: TYPE_LABEL[transaction.transactionType] || transaction.transactionType,
         paymentMethod: transaction.paymentMethod ? transaction.paymentMethod.replace('_', ' ').toUpperCase() : 'N/A',
-        accountType: transaction.accountType ? transaction.accountType.replace('_', ' ').toUpperCase() : 'N/A',
+        accountType: transfer && transaction.transferDetails?.toAccountType
+          ? `${accountLabel(transaction.accountType)} → ${accountLabel(transaction.transferDetails.toAccountType)}`
+          : accountLabel(transaction.accountType),
         amount: transaction.amount,
         status: transaction.status ? transaction.status.toUpperCase() : 'COMPLETED'
       });

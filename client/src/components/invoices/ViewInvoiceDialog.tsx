@@ -156,6 +156,8 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice: listedInvoice, 
   const { toast } = useToast();
   const navigate = useNavigate();
 
+  // Bumped after an edit, so the open invoice shows what was just saved.
+  const [reloads, setReloads] = useState(0);
   useEffect(() => {
     if (!open || !invoiceKey) return;
     let cancelled = false;
@@ -166,7 +168,7 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice: listedInvoice, 
       if (!cancelled) setDetailsError(error.message || "Invoice details could not be loaded");
     });
     return () => { cancelled = true; };
-  }, [open, invoiceKey]);
+  }, [open, invoiceKey, reloads]);
 
   useEffect(() => {
     if (!showWhatsAppDialog) return;
@@ -386,6 +388,7 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice: listedInvoice, 
     if (!open) {
       onOpenChange(true);
       onInvoiceUpdated();
+      setReloads((n) => n + 1);
     }
   };
 
@@ -966,6 +969,7 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice: listedInvoice, 
         onOpenChange={handleEditDialogClose}
         invoice={invoice as unknown as React.ComponentProps<typeof EditInvoiceDialog>["invoice"]}
         onInvoiceUpdated={onInvoiceUpdated}
+        showSavedActions={false}
       />
     </>
   );

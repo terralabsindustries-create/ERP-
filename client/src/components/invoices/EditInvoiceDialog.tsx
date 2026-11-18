@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
+import { InvoiceSavedDialog, savedInvoiceId, type SavedInvoice } from "@/components/invoices/InvoiceSavedDialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -71,12 +72,20 @@ interface EditInvoiceDialogProps {
   onOpenChange: (open: boolean) => void;
   invoice: Invoice | null;
   onInvoiceUpdated: () => void;
+  /**
+   * Offer Print / Download / Send once saved (default). Off where the invoice
+   * is already open on screen with those actions (ViewInvoiceDialog).
+   */
+  showSavedActions?: boolean;
 }
 
 const asText = (n?: number) => (n ? String(n) : "");
 
-export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdated }: EditInvoiceDialogProps) {
+export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdated, showSavedActions = true }: EditInvoiceDialogProps) {
   const [loading, setLoading] = useState(false);
+  // One save at a time: a second click or Enter while saving changes nothing.
+  const saving = useRef(false);
+  const [saved, setSaved] = useState<SavedInvoice | null>(null);
   const [customers, setCustomers] = useState<any[]>([]);
   const [jobs, setJobs] = useState<any[]>([]);
   const [formData, setFormData] = useState({
@@ -190,10 +199,12 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
       return;
     }
 
+    if (saving.current) return;
+    saving.current = true;
     setLoading(true);
 
     try {
-      await apiClient.updateInvoice(invoice.id || (invoice._id as string), {
+      const response = (await apiClient.updateInvoice(invoice.id || (invoice._id as string), {
         customerId: formData.customerId,
         jobId: formData.jobId === 'no-job' ? null : formData.jobId,
         invoiceDate: formData.invoiceDate,
@@ -205,15 +216,13 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
         isInterState: formData.isInterState,
         notes: formData.notes,
         termsAndConditions: formData.termsAndConditions
-      });
-
-      toast({
-        title: "Success",
-        description: "Invoice updated successfully",
-      });
+      })) as { invoice?: SavedInvoice } | undefined;
 
       onInvoiceUpdated();
       onOpenChange(false);
+      const updated = response?.invoice;
+      if (showSavedActions && savedInvoiceId(updated)) setSaved(updated!);
+      else toast({ title: "Invoice updated", description: updated?.invoiceNumber || invoice.invoiceNumber });
     } catch (error: any) {
       console.error('Error updating invoice:', error);
       toast({
@@ -222,11 +231,13 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
         variant: "destructive",
       });
     } finally {
+      saving.current = false;
       setLoading(false);
     }
   };
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
@@ -436,5 +447,7 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
         </form>
       </DialogContent>
     </Dialog>
+    <InvoiceSavedDialog invoice={saved} title={saved ? `${saved.invoiceNumber || "Invoice"} updated` : undefined} onClose={() => setSaved(null)} onInvoiceUpdated={onInvoiceUpdated} />
+    </>
   );
 }

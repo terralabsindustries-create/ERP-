@@ -74,7 +74,7 @@ attendanceSchema.statics.paidWeight = function (status) {
     case 'present':
     case 'holiday':
     case 'week-off':
-    case 'leave': // paid leave; unpaid leave handled separately if needed
+    case 'leave': // a leave mark; approved unpaid leave is LOP (utils/leavePolicy.js)
       return 1;
     case 'half-day':
       return 0.5;

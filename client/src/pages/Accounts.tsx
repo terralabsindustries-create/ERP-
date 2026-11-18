@@ -9,12 +9,14 @@ import { CreatePaymentDialog } from "@/components/payments/CreatePaymentDialog";
 import { NewTransactionDialog } from "@/components/accounts/NewTransactionDialog";
 import { AccountsReports } from "@/components/accounts/AccountsReports";
 import { BankReconciliation } from "@/components/accounts/BankReconciliation";
+import { PaymentAccountsView } from "@/components/payments/PaymentAccountsView";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useDebounced } from "@/hooks/useDebounced";
 import apiClient from "@/lib/apiClient";
 import { fmtDate, formatINR, humanize } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { loadAccountsSummary, type Balances, type Loaded, type MonthTotals } from "@/lib/accountsSummary";
 
 interface Txn {
   _id: string;
@@ -29,14 +31,32 @@ interface Txn {
   reference?: string;
   createdAt: string;
   transactionDate?: string;
+  transferDetails?: { toAccountType?: string; toAccount?: string };
 }
 
-type View = "all" | "income" | "expense" | "other" | "reconciliation" | "reports";
+type View = "all" | "income" | "expense" | "other" | "payment-accounts" | "reconciliation" | "reports";
 const PAGE_SIZE = 25;
 const METHOD: Record<string, string> = { cash: "Cash", bank_transfer: "Bank transfer", cheque: "Cheque", card: "Card", upi: "UPI", wallet: "Wallet", other: "Other" };
 
-// Money in and money out; opening balances and adjustments sit on their own.
-const direction = (t: Txn) => (t.transactionType === "income" ? "in" : t.transactionType === "expense" ? "out" : "other");
+// The non-income/expense types the "Balances & adjustments" tab lists.
+const OTHER_TYPES = "transfer,opening_balance,adjustment";
+
+/**
+ * Money in and money out. A transfer is money out of its source and money in
+ * to its destination, so it reads that way when one account is filtered;
+ * across all accounts it moves nothing, like opening balances and adjustments.
+ */
+const direction = (t: Txn, account = "all") => {
+  if (t.transactionType === "income") return "in";
+  if (t.transactionType === "expense") return "out";
+  if (t.transactionType === "transfer" && account !== "all") {
+    const to = t.transferDetails?.toAccountType;
+    if (t.accountType === account && to !== account) return "out";
+    if (to === account && t.accountType !== account) return "in";
+  }
+  return "other";
+};
+const accountText = (t: Txn) => (t.transactionType === "transfer" && t.transferDetails?.toAccount ? `${t.accountName} → ${t.transferDetails.toAccount}` : t.accountName);
 
 export default function Accounts() {
   const { hasPermission, user } = useAuth();
@@ -46,49 +66,39 @@ export default function Accounts() {
   const [rows, setRows] = useState<Txn[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [balances, setBalances] = useState<{ cashBalance: number; bankBalance: number } | null>(null);
-  const [month, setMonth] = useState<{ in: number; out: number } | null>(null);
+  const [balances, setBalances] = useState<Loaded<Balances>>({ state: "loading" });
+  const [month, setMonth] = useState<Loaded<MonthTotals>>({ state: "loading" });
   const [search, setSearch] = useState("");
   const q = useDebounced(search.trim());
-  const [view, setView] = useState<View>("all");
+  // ?view=payment-accounts opens that tab (the payment forms link to it).
+  const [view, setView] = useState<View>(() => (new URLSearchParams(window.location.search).get("view") === "payment-accounts" ? "payment-accounts" : "all"));
   const [account, setAccount] = useState("all");
   const [page, setPage] = useState(1);
   const [dialog, setDialog] = useState<"new" | "receive" | null>(null);
 
   const canEdit = hasPermission("Accounts: Create & Edit");
 
+  // Balances and this month's totals load independently: one failing shows
+  // that figure as unavailable and leaves the other as loaded.
   const loadSummary = useCallback(async () => {
-    try {
-      const b = (await apiClient.getAccountBalances()) as { currentBalances?: { cashBalance?: number; bankBalance?: number } };
-      setBalances({ cashBalance: b?.currentBalances?.cashBalance || 0, bankBalance: b?.currentBalances?.bankBalance || 0 });
-      const start = new Date();
-      start.setDate(1);
-      start.setHours(0, 0, 0, 0);
-      const ledger = (await apiClient.getAccountLedger({ startDate: start.toISOString(), limit: 100 })) as { transactions?: Txn[] };
-      const list = ledger?.transactions || [];
-      setMonth({
-        in: list.filter((t) => t.transactionType === "income").reduce((s, t) => s + t.amount, 0),
-        out: list.filter((t) => t.transactionType === "expense").reduce((s, t) => s + t.amount, 0)
-      });
-    } catch {
-      setBalances({ cashBalance: 0, bankBalance: 0 });
-    }
+    const summary = await loadAccountsSummary(apiClient);
+    setBalances(summary.balances);
+    setMonth(summary.month);
   }, []);
 
   const load = useCallback(async () => {
-    if (view === "reports" || view === "reconciliation") return;
+    if (view === "reports" || view === "reconciliation" || view === "payment-accounts") return;
     setLoading(true);
     try {
       const p: Record<string, string> = { page: String(page), limit: String(PAGE_SIZE), sortBy: "createdAt", sortOrder: "desc" };
       if (q) p.search = q;
       if (view === "income" || view === "expense") p.transactionType = view;
+      if (view === "other") p.transactionType = OTHER_TYPES;
       if (account !== "all") p.accountType = account;
       const res = (await apiClient.getAccountTransactions(p)) as { transactions?: Txn[]; pagination?: { totalTransactions?: number } };
-      let list = res?.transactions || [];
-      // "Other" (opening balances, transfers, adjustments) has no single type filter on the API.
-      if (view === "other") list = list.filter((t) => direction(t) === "other");
+      const list = res?.transactions || [];
       setRows(list);
-      setTotal(view === "other" ? list.length : res?.pagination?.totalTransactions ?? list.length);
+      setTotal(res?.pagination?.totalTransactions ?? list.length);
     } catch (error) {
       toast({ title: "Transactions could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     } finally {
@@ -109,9 +119,18 @@ export default function Accounts() {
     loadSummary();
   };
 
-  const totalBalance = (balances?.cashBalance || 0) + (balances?.bankBalance || 0);
-  const net = (month?.in || 0) - (month?.out || 0);
   const amt = (n: number) => formatINR(n, { compact: Math.abs(n) >= 1e5 });
+  const bal = balances.state === "ready" ? balances.value : null;
+  const totalBalance = bal ? bal.cashBalance + bal.bankBalance : 0;
+  const totals = month.state === "ready" ? month.value : null;
+  const net = totals ? totals.in - totals.out : 0;
+  const unavailable = (what: string, error: string) => ({
+    value: <span className="text-muted-foreground">—</span>,
+    hint: <span title={error}>{what} unavailable · <button type="button" className="underline underline-offset-2" onClick={() => loadSummary()}>Retry</button></span>,
+    tone: "warning" as const
+  });
+  const balanceMetric = (label: string, value: number, hint: string) =>
+    bal ? { label, value: amt(value), hint } : balances.state === "failed" ? { label, ...unavailable("Balance", balances.error) } : { label, value: "…", hint };
 
   const columns: Column<Txn>[] = [
     { id: "date", header: "Date", cell: (t) => <span className="whitespace-nowrap">{fmtDate(t.transactionDate || t.createdAt)}</span>, sortValue: (t) => t.transactionDate || t.createdAt, className: "w-[120px]" },
@@ -119,7 +138,7 @@ export default function Accounts() {
       id: "description",
       header: "Description",
       cell: (t) => {
-        const d = direction(t);
+        const d = direction(t, account);
         const Icon = d === "in" ? ArrowDownLeft : d === "out" ? ArrowUpRight : Scale;
         return (
           <div className="flex min-w-0 items-center gap-3">
@@ -143,7 +162,7 @@ export default function Accounts() {
       cell: (t) => (
         <div className="flex flex-wrap items-center gap-1">
           <Tag>{t.category}</Tag>
-          {direction(t) === "other" && humanize(t.transactionType).toLowerCase() !== t.category.toLowerCase() && (
+          {t.transactionType !== "income" && t.transactionType !== "expense" && humanize(t.transactionType).toLowerCase() !== t.category.toLowerCase() && (
             <span className="text-xs text-muted-foreground">{humanize(t.transactionType)}</span>
           )}
         </div>
@@ -151,25 +170,25 @@ export default function Accounts() {
       sortValue: (t) => t.category,
       hideBelow: "lg"
     },
-    { id: "account", header: "Account", cell: (t) => <Stack top={t.accountName} bottom={METHOD[t.paymentMethod] || humanize(t.paymentMethod)} />, sortValue: (t) => t.accountName, hideBelow: "md" },
+    { id: "account", header: "Account", cell: (t) => <Stack top={accountText(t)} bottom={METHOD[t.paymentMethod] || humanize(t.paymentMethod)} />, sortValue: (t) => accountText(t), hideBelow: "md" },
     {
       id: "in",
       header: "Money in",
       align: "right",
-      cell: (t) => (direction(t) !== "out" ? <span className={cn(direction(t) === "in" && "font-semibold text-success-strong")}>{formatINR(t.amount)}</span> : ""),
-      sortValue: (t) => (direction(t) !== "out" ? t.amount : 0)
+      cell: (t) => (direction(t, account) !== "out" ? <span className={cn(direction(t, account) === "in" && "font-semibold text-success-strong")}>{formatINR(t.amount)}</span> : ""),
+      sortValue: (t) => (direction(t, account) !== "out" ? t.amount : 0)
     },
     {
       id: "out",
       header: "Money out",
       align: "right",
-      cell: (t) => (direction(t) === "out" ? <span className="font-semibold text-destructive-strong">{formatINR(t.amount)}</span> : ""),
-      sortValue: (t) => (direction(t) === "out" ? t.amount : 0)
+      cell: (t) => (direction(t, account) === "out" ? <span className="font-semibold text-destructive-strong">{formatINR(t.amount)}</span> : ""),
+      sortValue: (t) => (direction(t, account) === "out" ? t.amount : 0)
     }
   ];
 
-  const inView = rows.filter((t) => direction(t) === "in").reduce((s, t) => s + t.amount, 0);
-  const outView = rows.filter((t) => direction(t) === "out").reduce((s, t) => s + t.amount, 0);
+  const inView = rows.filter((t) => direction(t, account) === "in").reduce((s, t) => s + t.amount, 0);
+  const outView = rows.filter((t) => direction(t, account) === "out").reduce((s, t) => s + t.amount, 0);
 
   return (
     <PageShell>
@@ -194,17 +213,21 @@ export default function Accounts() {
       />
 
       <MetricBar
-        loading={!balances}
+        loading={balances.state === "loading" && month.state === "loading"}
         metrics={[
-          { label: "Total balance", value: amt(totalBalance), hint: "Cash and bank together", tone: totalBalance < 0 ? "danger" : "default" },
-          { label: "Cash in hand", value: amt(balances?.cashBalance || 0), hint: "Cash account", onClick: () => setAccount(account === "cash" ? "all" : "cash"), active: account === "cash" },
-          { label: "Bank", value: amt(balances?.bankBalance || 0), hint: "Bank accounts", onClick: () => setAccount(account === "bank" ? "all" : "bank"), active: account === "bank" },
-          {
-            label: "Net this month",
-            value: `${net < 0 ? "−" : ""}${amt(Math.abs(net))}`,
-            hint: month ? `${formatINR(month.in)} in · ${formatINR(month.out)} out` : undefined,
-            tone: net < 0 ? "danger" : "success"
-          }
+          { ...balanceMetric("Total balance", totalBalance, "Cash and bank together"), ...(bal && { tone: totalBalance < 0 ? "danger" : "default" }) },
+          { ...balanceMetric("Cash in hand", bal?.cashBalance || 0, "Cash account"), onClick: () => setAccount(account === "cash" ? "all" : "cash"), active: account === "cash" },
+          { ...balanceMetric("Bank", bal?.bankBalance || 0, "Bank accounts"), onClick: () => setAccount(account === "bank" ? "all" : "bank"), active: account === "bank" },
+          totals
+            ? {
+                label: "Net this month",
+                value: `${net < 0 ? "−" : ""}${amt(Math.abs(net))}`,
+                hint: `${formatINR(totals.in)} in · ${formatINR(totals.out)} out`,
+                tone: net < 0 ? "danger" : "success"
+              }
+            : month.state === "failed"
+              ? { label: "Net this month", ...unavailable("Monthly total", month.error) }
+              : { label: "Net this month", value: "…" }
         ]}
       />
 
@@ -217,12 +240,15 @@ export default function Accounts() {
             { value: "income", label: "Money in", icon: ArrowDownLeft },
             { value: "expense", label: "Money out", icon: ArrowUpRight },
             { value: "other", label: "Balances & adjustments", icon: Landmark },
+            { value: "payment-accounts", label: "Payment accounts", icon: Landmark },
             { value: "reconciliation", label: "Bank reconciliation", icon: Scale },
             ...(isOwner ? [{ value: "reports" as const, label: "Profit & loss", icon: BarChart3 }] : [])
           ]}
         />
 
-        {view === "reconciliation" ? (
+        {view === "payment-accounts" ? (
+          <PaymentAccountsView canEdit={canEdit} canDelete={hasPermission("Accounts: Delete")} />
+        ) : view === "reconciliation" ? (
           <BankReconciliation canEdit={canEdit} />
         ) : view === "reports" && isOwner ? (
           <AccountsReports />
@@ -259,10 +285,10 @@ export default function Accounts() {
               rowKey={(t) => t._id}
               loading={loading}
               mobile={(t) => {
-                const d = direction(t);
+                const d = direction(t, account);
                 return (
                   <div className="flex items-start justify-between gap-3">
-                    <Stack top={<span className="font-medium">{t.description}</span>} bottom={`${fmtDate(t.transactionDate || t.createdAt)} · ${t.category} · ${t.accountName}`} />
+                    <Stack top={<span className="font-medium">{t.description}</span>} bottom={`${fmtDate(t.transactionDate || t.createdAt)} · ${t.category} · ${accountText(t)}`} />
                     <span className={cn("num shrink-0 font-semibold", d === "in" && "text-success-strong", d === "out" && "text-destructive-strong")}>
                       {d === "out" ? "−" : d === "in" ? "+" : ""}
                       {formatINR(t.amount)}

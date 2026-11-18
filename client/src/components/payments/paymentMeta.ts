@@ -21,6 +21,8 @@ export interface PaymentRecord {
   invoiceNumber?: string;
   amount: number;
   paymentMethod: PaymentMethod;
+  /** The account it was received into, by name (never the account number). */
+  paymentAccountId?: { _id: string; nickname: string; kind: string; isActive?: boolean } | string | null;
   paymentDate: string;
   status: PaymentStatus;
   referenceNumber?: string;

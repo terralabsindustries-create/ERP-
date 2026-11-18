@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,6 +10,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { formatCurrency } from "@/lib/utils";
 import apiClient from "@/lib/apiClient";
+import { BillSavedDialog, type SavedBill } from "@/components/purchase-bills/BillSavedDialog";
 
 interface LineItem {
   description: string;
@@ -153,8 +154,14 @@ export function NewPurchaseBillDialog({ open, onOpenChange, onSaved, bill, defau
     return { taxable, sgst, cgst, igst, gst, total: round2(taxable + gst) };
   }, [items, isInterState]);
 
+  // One save at a time: a second click or Enter while saving creates nothing.
+  const saving = useRef(false);
+  // The bill just saved, for its Print / Download actions.
+  const [saved, setSaved] = useState<{ bill: SavedBill; title: string } | null>(null);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saving.current) return;
 
     if (!vendorId) {
       toast({ title: "Vendor required", description: "Please select a vendor", variant: "destructive" });
@@ -189,17 +196,18 @@ export function NewPurchaseBillDialog({ open, onOpenChange, onSaved, bill, defau
       })),
     };
 
+    saving.current = true;
     setLoading(true);
     try {
-      if (isEdit) {
-        await apiClient.updatePurchaseBill(bill._id, payload);
-        toast({ title: "Bill updated", description: "Purchase bill updated successfully" });
-      } else {
-        await apiClient.createPurchaseBill(payload);
-        toast({ title: "Bill created", description: "Purchase bill recorded successfully" });
-      }
+      const res = (isEdit
+        ? await apiClient.updatePurchaseBill(bill._id, payload)
+        : await apiClient.createPurchaseBill(payload)) as { bill?: SavedBill } | undefined;
       onSaved();
       onOpenChange(false);
+      // Saved: offer Print / Download. Nothing is downloaded or printed by itself.
+      const savedBill = res?.bill;
+      if (savedBill?._id) setSaved({ bill: savedBill, title: `${savedBill.billNumber || "Bill"} ${isEdit ? "updated" : "created"}` });
+      else toast({ title: isEdit ? "Bill updated" : "Bill created" });
     } catch (error: any) {
       console.error("Error saving purchase bill", error);
       toast({
@@ -208,11 +216,13 @@ export function NewPurchaseBillDialog({ open, onOpenChange, onSaved, bill, defau
         variant: "destructive",
       });
     } finally {
+      saving.current = false;
       setLoading(false);
     }
   };
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[760px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
@@ -224,7 +234,10 @@ export function NewPurchaseBillDialog({ open, onOpenChange, onSaved, bill, defau
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Vendor *</Label>
-              <Select value={vendorId} onValueChange={setVendorId}>
+              {/* Radix resets a controlled value it has no option for yet (the vendor
+                  list is still loading when an edit opens) by calling this with "".
+                  No real choice is "", so that call is ignored — as in CreateQuotationDialog. */}
+              <Select value={vendorId} onValueChange={(value) => value && setVendorId(value)}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select vendor" />
                 </SelectTrigger>
@@ -452,5 +465,7 @@ export function NewPurchaseBillDialog({ open, onOpenChange, onSaved, bill, defau
         </form>
       </DialogContent>
     </Dialog>
+    <BillSavedDialog bill={saved?.bill || null} title={saved?.title} onClose={() => setSaved(null)} />
+    </>
   );
 }

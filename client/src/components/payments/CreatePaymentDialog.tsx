@@ -10,6 +10,7 @@ import apiClient from "@/lib/apiClient";
 import { formatINR } from "@/lib/printWorkflow";
 import { METHOD_LABELS, newIdempotencyKey, type PaymentMethod } from "./paymentMeta";
 import { localDate } from "@/lib/format";
+import { PaymentAccountSelect, paymentAccountProblem, usePaymentAccounts } from "./PaymentAccountSelect";
 
 interface CreatePaymentDialogProps {
   open: boolean;
@@ -39,6 +40,7 @@ const emptyForm = () => ({
   invoiceId: NO_INVOICE,
   amount: "",
   paymentMethod: "cash" as PaymentMethod,
+  paymentAccountId: "",
   status: "completed" as "completed" | "pending",
   paymentDate: localDate(),
   referenceNumber: "",
@@ -57,6 +59,7 @@ export function CreatePaymentDialog({ open, onOpenChange, onPaymentCreated }: Cr
   // The key of the last submission: sent again only with the same payment, so
   // a retry after a dropped connection cannot record it twice.
   const attempt = useRef<{ signature: string; key: string } | null>(null);
+  const receiving = usePaymentAccounts(open);
 
   useEffect(() => {
     if (!open) return;
@@ -95,12 +98,15 @@ export function CreatePaymentDialog({ open, onOpenChange, onPaymentCreated }: Cr
     if (selectedInvoice && form.status === "completed" && amount > selectedInvoice.balanceAmount + 0.01) {
       return setError(`That is more than the ${formatINR(selectedInvoice.balanceAmount)} still due on ${selectedInvoice.invoiceNumber}.`);
     }
+    const accountProblem = paymentAccountProblem(receiving.accounts, form.paymentMethod, form.paymentAccountId);
+    if (accountProblem) return setError(accountProblem);
 
     const payload = {
       customerId: form.customerId,
       invoiceId: form.invoiceId === NO_INVOICE ? undefined : form.invoiceId,
       amount,
       paymentMethod: form.paymentMethod,
+      paymentAccountId: form.paymentAccountId || undefined,
       status: form.status,
       paymentDate: form.paymentDate,
       referenceNumber: form.referenceNumber || undefined,
@@ -215,6 +221,14 @@ export function CreatePaymentDialog({ open, onOpenChange, onPaymentCreated }: Cr
               </Select>
             </div>
           </div>
+
+          <PaymentAccountSelect
+            accounts={receiving.accounts}
+            loading={receiving.loading}
+            method={form.paymentMethod}
+            value={form.paymentAccountId}
+            onChange={(v) => set("paymentAccountId", v)}
+          />
 
           <div className="space-y-1.5">
             <Label htmlFor="pay-ref">Reference</Label>

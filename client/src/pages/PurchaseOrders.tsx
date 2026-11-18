@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { format } from "date-fns";
 import { Ban, ClipboardList, FilePlus2, Loader2, PackageCheck, Pencil, Plus, Send, Trash2, X } from "lucide-react";
@@ -19,6 +19,7 @@ import { useDebounced } from "@/hooks/useDebounced";
 import apiClient from "@/lib/apiClient";
 import { fmtDate, formatINR, plural } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { newIdempotencyKey } from "@/components/payments/paymentMeta";
 
 type Status = "draft" | "sent" | "acknowledged" | "partial" | "completed" | "cancelled";
 type View = "open" | "draft" | "sent" | "partial" | "completed" | "cancelled" | "all";
@@ -81,6 +82,17 @@ const STATUS: Record<Status, { label: string; tone: PillTone }> = {
   cancelled: { label: "Cancelled", tone: "neutral" }
 };
 const lineId = (l: POLine) => (typeof l.inventoryId === "object" ? l.inventoryId._id : l.inventoryId);
+/** One row per stock item: an older order may list the same item on two lines. */
+const receiveRows = (po: PO) => {
+  const rows = new Map<string, { id: string; itemName: string; quantity: number; receivedQuantity: number }>();
+  for (const l of po.items) {
+    const row = rows.get(lineId(l)) || { id: lineId(l), itemName: l.itemName, quantity: 0, receivedQuantity: 0 };
+    row.quantity += l.quantity;
+    row.receivedQuantity += l.receivedQuantity;
+    rows.set(row.id, row);
+  }
+  return [...rows.values()];
+};
 const vendorIdOf = (po: PO) => (typeof po.vendorId === "object" ? po.vendorId._id : po.vendorId);
 const isOverdue = (po: PO) => ["sent", "acknowledged", "partial"].includes(po.status) && !!po.expectedDelivery && new Date(po.expectedDelivery) < new Date(new Date().setHours(0, 0, 0, 0));
 const progress = (po: PO) => {
@@ -123,6 +135,7 @@ export default function PurchaseOrders() {
   const [receiving, setReceiving] = useState<PO | null>(null);
   const [receiveQty, setReceiveQty] = useState<Record<string, string>>({});
   const [receiveRef, setReceiveRef] = useState("");
+  const receiveAttempt = useRef<{ signature: string; key: string } | null>(null);
   const [receiveBusy, setReceiveBusy] = useState(false);
   const [confirm, setConfirm] = useState<{ po: PO; action: "cancel" | "delete" } | null>(null);
 
@@ -258,21 +271,27 @@ export default function PurchaseOrders() {
   };
 
   const openReceive = (po: PO) => {
-    setReceiveQty(Object.fromEntries(po.items.map((l) => [lineId(l), String(Math.max(0, l.quantity - l.receivedQuantity))])));
+    setReceiveQty(Object.fromEntries(receiveRows(po).map((r) => [r.id, String(Math.max(0, r.quantity - r.receivedQuantity))])));
     setReceiveRef("");
+    receiveAttempt.current = null;
     setReceiving(po);
   };
 
   const receive = async () => {
     if (!receiving) return;
-    const lines = receiving.items.map((l) => ({ inventoryId: lineId(l), quantity: Number(receiveQty[lineId(l)]) || 0 })).filter((l) => l.quantity > 0);
+    const lines = receiveRows(receiving).map((r) => ({ inventoryId: r.id, quantity: Number(receiveQty[r.id]) || 0 })).filter((l) => l.quantity > 0);
     if (!lines.length) {
       toast({ title: "Enter what arrived", variant: "destructive" });
       return;
     }
+    const payload = { lines, reference: receiveRef || undefined };
+    // The same submission retried (a double click, a dropped connection) keeps
+    // its key, so the server records the delivery once.
+    const signature = JSON.stringify(payload);
+    if (receiveAttempt.current?.signature !== signature) receiveAttempt.current = { signature, key: newIdempotencyKey() };
     setReceiveBusy(true);
     try {
-      const res = (await apiClient.post(`/purchase-orders/${receiving._id}/receive`, { lines, reference: receiveRef || undefined })) as { purchaseOrder?: PO };
+      const res = (await apiClient.post(`/purchase-orders/${receiving._id}/receive`, { ...payload, idempotencyKey: receiveAttempt.current.key })) as { purchaseOrder?: PO };
       toast({ title: res?.purchaseOrder?.status === "completed" ? "Order received in full" : "Delivery recorded", description: "Stock was added to Paper & stock." });
       setReceiving(null);
       load();
@@ -580,10 +599,10 @@ export default function PurchaseOrders() {
           {receiving && (
             <div className="space-y-3">
               <div className="divide-y rounded-md border">
-                {receiving.items.map((l) => {
+                {receiveRows(receiving).map((l) => {
                   const due = l.quantity - l.receivedQuantity;
                   return (
-                    <div key={lineId(l)} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                    <div key={l.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
                       <Stack top={<span className="font-medium">{l.itemName}</span>} bottom={`${l.receivedQuantity} of ${l.quantity} received`} />
                       <Input
                         type="number"
@@ -591,8 +610,8 @@ export default function PurchaseOrders() {
                         min="0"
                         max={due}
                         disabled={due <= 0}
-                        value={receiveQty[lineId(l)] ?? ""}
-                        onChange={(e) => setReceiveQty((r) => ({ ...r, [lineId(l)]: e.target.value }))}
+                        value={receiveQty[l.id] ?? ""}
+                        onChange={(e) => setReceiveQty((r) => ({ ...r, [l.id]: e.target.value }))}
                         className="h-8 w-24 text-right"
                         aria-label={`Quantity of ${l.itemName} received`}
                       />

@@ -9,7 +9,7 @@ const Delivery = require('../models/Delivery');
 const ActivityLog = require('../models/ActivityLog');
 const { protect } = require('../middleware/auth');
 
-const { orgUserFilter } = require('../utils/accessScope');
+const { orgUserFilter, orgScope } = require('../utils/accessScope');
 const mongoose = require('mongoose');
 
 const router = express.Router();
@@ -166,7 +166,8 @@ router.post('/events', protect, eventValidation, validate, async (req, res) => {
 
     // Validate related entities if provided
     if (jobId) {
-      const job = await Job.findOne({ _id: jobId });
+      // Only a job of the caller's own business can be linked.
+      const job = await Job.findOne({ _id: jobId, ...orgScope(req.user) });
       if (!job) {
         return res.status(404).json({
           status: 'error',

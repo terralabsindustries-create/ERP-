@@ -228,6 +228,8 @@ export interface CounterPaymentInput {
   invoiceId: string;
   amount: number;
   paymentMethod: CounterPaymentMethod;
+  /** The account the money was received into (Cash, Paytm, a bank). */
+  paymentAccountId?: string;
   paymentDate?: string;
   referenceNumber?: string;
   notes?: string;

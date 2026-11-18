@@ -16,6 +16,8 @@ type Transaction = {
   postedAt?: string;
   transactionNumber: string;
   transactionType: "income" | "expense" | "transfer" | "opening_balance";
+  /** Set by the server relative to the bank account: a transfer into it is "in". */
+  direction?: "in" | "out";
   description: string;
   reference?: string;
   amount: number;
@@ -31,8 +33,10 @@ type Record = {
 };
 type Preview = { accounts: string[]; history: Record[]; previous?: Record | null; openingBalance?: number; transactions?: Transaction[] };
 
-const signedCents = (transaction: Transaction) =>
-  (transaction.transactionType === "expense" || transaction.transactionType === "transfer" ? -1 : 1) * Math.round(transaction.amount * 100);
+const signedCents = (transaction: Transaction) => {
+  const out = transaction.direction ? transaction.direction === "out" : transaction.transactionType === "expense" || transaction.transactionType === "transfer";
+  return (out ? -1 : 1) * Math.round(transaction.amount * 100);
+};
 
 export function BankReconciliation({ canEdit }: { canEdit: boolean }) {
   const { toast } = useToast();

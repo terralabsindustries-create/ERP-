@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Invoice = require('../models/Invoice');
 const Payment = require('../models/Payment');
 const AccountTransaction = require('../models/AccountTransaction');
+const PaymentAccount = require('../models/PaymentAccount');
 const transactions = require('../utils/transactions');
 
 /**
@@ -218,28 +219,79 @@ async function commitPaymentChange({ before, after, write, undoWrite }) {
     // Existing receipts may already have a manually entered account entry.
     // Do not invent a second one when an old receipt is edited or deleted.
     if (before && !existing) return result;
-    if (existing?.reconciled) throw new LedgerError('This payment has a reconciled account entry. Undo its reconciliation before changing the payment.', 409, 'PAYMENT_RECONCILED');
     const allocations = allocationsOf(source);
     const singleInvoice = allocations.length === 1 ? idOf(allocations[0].invoiceId) : null;
+    // The account the money was received into decides where the entry sits;
+    // without one (older payments, or no accounts set up) the method does.
+    const receivingAccount = source.paymentAccountId
+      ? await PaymentAccount.findById(idOf(source.paymentAccountId)).session(session).lean()
+      : null;
+    const where = receivingAccount
+      ? { accountType: PaymentAccount.ledgerType(receivingAccount.kind), accountName: receivingAccount.nickname, paymentAccountId: receivingAccount._id }
+      : { accountType: source.paymentMethod === 'cash' ? 'cash' : 'bank', accountName: source.paymentMethod === 'cash' ? 'Cash Account' : 'Bank Account' };
+    // A refunded payment was received, then paid back: the receipt stays
+    // received on its day and the refund goes out on its own (below). Failed,
+    // cancelled and deleted payments were never received.
+    const receiptStatus = !after ? 'reversed'
+      : ['completed', 'refunded'].includes(source.status) ? 'completed'
+        : source.status === 'pending' ? 'pending' : 'reversed';
     const accountData = {
       transactionType: 'income', category: 'sales', amount: round2(source.amount),
       description: `Customer payment from ${source.customerName || 'customer'} (${source.paymentId})`,
       postedAt: source.paymentDate || new Date(), paymentMethod: source.paymentMethod,
-      accountType: source.paymentMethod === 'cash' ? 'cash' : 'bank',
-      accountName: source.paymentMethod === 'cash' ? 'Cash Account' : 'Bank Account',
+      ...where,
       reference: source.paymentId, referenceNumber: source.referenceNumber,
       customerId: idOf(source.customerId), invoiceId: singleInvoice,
       sourcePaymentId: accountId, userId: idOf(source.userId), dataScope: source.dataScope,
-      status: after ? source.status === 'completed' ? 'completed' : source.status === 'pending' ? 'pending' : 'reversed' : 'reversed'
+      status: receiptStatus
     };
-    await AccountTransaction.findOneAndUpdate(
-      { sourcePaymentId: accountId },
-      { $set: accountData, $setOnInsert: { transactionNumber: `TXN-PAY-${accountId}` } },
-      { upsert: true, new: true, runValidators: true, session }
-    );
-    onUndo(() => existing
-      ? AccountTransaction.replaceOne({ _id: existing._id }, existing)
-      : AccountTransaction.deleteOne({ sourcePaymentId: accountId }));
+    // A reconciled receipt is on a bank statement: it may not change, but the
+    // payment may still be refunded (the refund is a new entry).
+    const sameDay = (a, b) => a && b && new Date(a).toISOString().slice(0, 10) === new Date(b).toISOString().slice(0, 10);
+    const receiptUnchanged = existing && existing.status === accountData.status && round2(existing.amount) === accountData.amount &&
+      String(existing.paymentAccountId || '') === String(accountData.paymentAccountId || '') && existing.accountType === accountData.accountType &&
+      sameDay(existing.postedAt, accountData.postedAt);
+    if (existing?.reconciled && !receiptUnchanged) {
+      throw new LedgerError('This payment has a reconciled account entry. Undo its reconciliation before changing the payment.', 409, 'PAYMENT_RECONCILED');
+    }
+    if (!existing?.reconciled) {
+      const receiptUnset = receivingAccount ? {} : { paymentAccountId: '' };
+      await AccountTransaction.findOneAndUpdate(
+        { sourcePaymentId: accountId },
+        { $set: accountData, ...(Object.keys(receiptUnset).length ? { $unset: receiptUnset } : {}), $setOnInsert: { transactionNumber: `TXN-PAY-${accountId}` } },
+        { upsert: true, new: true, runValidators: true, session }
+      );
+      onUndo(() => existing
+        ? AccountTransaction.replaceOne({ _id: existing._id }, existing)
+        : AccountTransaction.deleteOne({ sourcePaymentId: accountId }));
+    }
+
+    // The refund: money out of the same account, on the day it was refunded.
+    const refunded = after && source.status === 'refunded';
+    const refund = await AccountTransaction.findOne({ sourceRefundPaymentId: accountId }).session(session).lean();
+    if (refund?.reconciled) throw new LedgerError('This payment\'s refund has a reconciled account entry. Undo its reconciliation before changing the payment.', 409, 'PAYMENT_RECONCILED');
+    if (refunded || refund) {
+      const refundData = refunded
+        ? {
+          transactionType: 'expense', category: 'Customer refund',
+          amount: round2(source.refundDetails?.refundAmount || source.amount),
+          description: `Refund to ${source.customerName || 'customer'} (${source.paymentId})`,
+          postedAt: source.refundDetails?.refundDate || new Date(), paymentMethod: source.paymentMethod,
+          ...where,
+          reference: source.paymentId, customerId: idOf(source.customerId), invoiceId: singleInvoice,
+          sourceRefundPaymentId: accountId, userId: idOf(source.userId), dataScope: source.dataScope,
+          status: 'completed'
+        }
+        : { status: 'reversed' };
+      await AccountTransaction.findOneAndUpdate(
+        { sourceRefundPaymentId: accountId },
+        { $set: refundData, ...(refunded && !receivingAccount ? { $unset: { paymentAccountId: '' } } : {}), $setOnInsert: { transactionNumber: `TXN-RFD-${accountId}` } },
+        { upsert: refunded, new: true, runValidators: true, session }
+      );
+      onUndo(() => refund
+        ? AccountTransaction.replaceOne({ _id: refund._id }, refund)
+        : AccountTransaction.deleteOne({ sourceRefundPaymentId: accountId }));
+    }
     return result;
   });
 }

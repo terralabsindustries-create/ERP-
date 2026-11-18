@@ -17,6 +17,7 @@ import {
   type CustomerLite
 } from "@/lib/api/walkIn";
 import { formatINR } from "@/lib/format";
+import { PaymentAccountSelect, paymentAccountProblem, usePaymentAccounts } from "@/components/payments/PaymentAccountSelect";
 import { cn } from "@/lib/utils";
 import { JOB_TYPE_LABEL, METHOD_LABEL, errorText, fmtPhone, specsSummary } from "./counterJobMeta";
 
@@ -64,6 +65,10 @@ export function CounterBillingDialog({ job, onOpenChange, onBilled }: { job: Cou
   const [collect, setCollect] = useState("");
   const [collectTouched, setCollectTouched] = useState(false);
   const [method, setMethod] = useState<CounterPaymentMethod>("cash");
+  // Where the money is received: what is collected now, and the advance taken earlier.
+  const [accountId, setAccountId] = useState("");
+  const [advanceAccountId, setAdvanceAccountId] = useState("");
+  const receiving = usePaymentAccounts(!!job && canPay);
   const [reference, setReference] = useState("");
   const [markCollected, setMarkCollected] = useState(true);
   const [step, setStep] = useState("");
@@ -76,6 +81,8 @@ export function CounterBillingDialog({ job, onOpenChange, onBilled }: { job: Cou
     setCollect("");
     setCollectTouched(false);
     setMethod("cash");
+    setAccountId("");
+    setAdvanceAccountId("");
     setReference("");
     setMarkCollected(job.status === "ready");
     setError("");
@@ -123,6 +130,14 @@ export function CounterBillingDialog({ job, onOpenChange, onBilled }: { job: Cou
     if (calc.subtotal <= 0) return "The bill is ₹0 — enter the rates.";
     if (calc.disc < 0 || calc.disc > calc.subtotal) return "The discount can't be more than the bill.";
     if (collectNow < 0 || collectNow > balance + 0.001) return `You can collect at most ${formatINR(balance)} now.`;
+    if (canPay && collectNow > 0) {
+      const p = paymentAccountProblem(receiving.accounts, method, accountId);
+      if (p) return p;
+    }
+    if (canPay && advance > 0) {
+      const p = paymentAccountProblem(receiving.accounts, job?.pricing.advanceMethod || "cash", advanceAccountId);
+      if (p) return `Advance: ${p.charAt(0).toLowerCase()}${p.slice(1)}`;
+    }
     return "";
   };
 
@@ -160,6 +175,7 @@ export function CounterBillingDialog({ job, onOpenChange, onBilled }: { job: Cou
             invoiceId: invoice._id,
             amount: advance,
             paymentMethod: job.pricing.advanceMethod || "cash",
+            paymentAccountId: advanceAccountId || undefined,
             paymentDate: job.createdAt,
             referenceNumber: job.jobNumber,
             notes: `Advance taken with counter job ${job.jobNumber}`
@@ -171,6 +187,7 @@ export function CounterBillingDialog({ job, onOpenChange, onBilled }: { job: Cou
             invoiceId: invoice._id,
             amount: collectNow,
             paymentMethod: method,
+            paymentAccountId: accountId || undefined,
             referenceNumber: reference.trim() || job.jobNumber,
             notes: `Collected at the counter for ${job.jobNumber}`
           }).catch((err) => failures.push(`payment: ${errorText(err)}`));
@@ -341,6 +358,17 @@ export function CounterBillingDialog({ job, onOpenChange, onBilled }: { job: Cou
                       <span className="num">{formatINR(advance)}</span>
                     </div>
                   )}
+                  {advance > 0 && (
+                    <PaymentAccountSelect
+                      id="bill-advance-account"
+                      label="Advance was received into"
+                      accounts={receiving.accounts}
+                      loading={receiving.loading}
+                      method={job.pricing.advanceMethod || "cash"}
+                      value={advanceAccountId}
+                      onChange={(v) => { setAdvanceAccountId(v); setError(""); }}
+                    />
+                  )}
                   <div className="flex items-center justify-between gap-3 text-sm font-medium">
                     <span>Balance to collect</span>
                     <span className="num">{formatINR(balance)}</span>
@@ -384,6 +412,16 @@ export function CounterBillingDialog({ job, onOpenChange, onBilled }: { job: Cou
                       </div>
                     </div>
                   </div>
+                  {collectNow > 0 && (
+                    <PaymentAccountSelect
+                      id="bill-account"
+                      accounts={receiving.accounts}
+                      loading={receiving.loading}
+                      method={method}
+                      value={accountId}
+                      onChange={(v) => { setAccountId(v); setError(""); }}
+                    />
+                  )}
                   {method !== "cash" && collectNow > 0 && (
                     <div className="space-y-1.5">
                       <Label htmlFor="bill-ref">{method === "upi" ? "UPI reference" : "Card approval code"}</Label>

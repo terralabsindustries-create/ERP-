@@ -18,6 +18,7 @@ import { isAreaUnit } from "@/lib/billing";
 import { sellingRate } from "@/components/billing/stock";
 import { localDate } from "@/lib/format";
 import { moveFocusOnEnter } from "@/lib/formKeys";
+import { QuotationSavedDialog, type SavedQuotation } from "@/components/quotations/QuotationSavedDialog";
 
 /** A line to start a quotation with, in the quotation API's terms (e.g. from the print estimator). */
 export interface QuotationItem {
@@ -291,8 +292,14 @@ export const CreateQuotationDialog = ({
   // lines) plus the design charge, less the discount, plus GST at each rate.
   const totals = draftTotals(items, { amount: formData.design_charge, gstRate: formData.design_charge_tax_rate }, formData.discount_amount, formData.is_interstate);
 
+  // One save at a time: a second click while saving creates nothing.
+  const saving = useRef(false);
+  // The quotation just saved, for its Print / Download / Send actions.
+  const [saved, setSaved] = useState<{ quotation: SavedQuotation; title: string; edited: boolean } | null>(null);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saving.current) return;
 
     const problem = !formData.customer_id
       ? "Select a customer."
@@ -304,6 +311,7 @@ export const CreateQuotationDialog = ({
       return;
     }
 
+    saving.current = true;
     setLoading(true);
     try {
       const payload = {
@@ -335,27 +343,26 @@ export const CreateQuotationDialog = ({
       };
 
       if (quotation) {
-        await apiClient.updateQuotation(quotation._id, payload);
-        toast({
-          title: `${quotation.quotationNumber} updated`,
-          description: quotation.status === "sent" ? "The customer has the earlier version — send it again so they see the changes." : undefined,
-        });
+        const res = (await apiClient.updateQuotation(quotation._id, payload)) as { quotation?: SavedQuotation } | undefined;
+        if (quotation.status === "sent") {
+          toast({ title: `${quotation.quotationNumber} updated`, description: "The customer has the earlier version — send it again so they see the changes." });
+        }
         setOpen(false);
         onQuotationUpdated?.();
+        // Saved: offer Print / Download / Send. Nothing is downloaded or printed by itself.
+        if (res?.quotation?._id) setSaved({ quotation: res.quotation, title: `${quotation.quotationNumber} updated`, edited: true });
+        else if (quotation.status !== "sent") toast({ title: `${quotation.quotationNumber} updated` });
         return;
       }
 
-      await apiClient.createQuotation(payload);
-
-      toast({
-        title: "Success",
-        description: "Quotation created successfully",
-      });
+      const res = (await apiClient.createQuotation(payload)) as { quotation?: SavedQuotation } | undefined;
 
       setOpen(false);
       setFormData(emptyForm);
       setItems([newLineDraft(nextKey.current++)]);
       onQuotationCreated?.();
+      if (res?.quotation?._id) setSaved({ quotation: res.quotation, title: `${res.quotation.quotationNumber || "Quotation"} created`, edited: false });
+      else toast({ title: "Quotation created" });
     } catch (error) {
       console.error(quotation ? 'Error updating quotation:' : 'Error creating quotation:', error);
       toast({
@@ -364,6 +371,7 @@ export const CreateQuotationDialog = ({
         variant: "destructive",
       });
     } finally {
+      saving.current = false;
       setLoading(false);
     }
   };
@@ -679,6 +687,12 @@ export const CreateQuotationDialog = ({
       open={showCreateCustomer}
       onOpenChange={setShowCreateCustomer}
       onCustomerCreated={handleCustomerCreated}
+    />
+    <QuotationSavedDialog
+      quotation={saved?.quotation || null}
+      title={saved?.title}
+      onClose={() => setSaved(null)}
+      onSent={() => (saved?.edited ? onQuotationUpdated?.() : onQuotationCreated?.())}
     />
     </>
   );

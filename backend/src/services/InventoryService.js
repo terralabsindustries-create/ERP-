@@ -86,6 +86,17 @@ class InventoryService {
   }
 
   /**
+   * Reverses a change made by changeStock (an undo step). Throws if it cannot
+   * — the stock was used in the meantime — so the caller's undo logs it as a
+   * count someone must correct.
+   */
+  static async revertChange(filter, delta) {
+    const back = await this.changeStock(filter, -delta);
+    if (!back) throw new Error(`stock of item ${filter._id} could not be moved back by ${-delta}`);
+    return back;
+  }
+
+  /**
    * Sets a stock item's quantity (a stock count) in one atomic write, and
    * reports what it was just before. Returns null if there is no such item.
    */

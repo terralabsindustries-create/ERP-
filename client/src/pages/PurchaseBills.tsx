@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { CheckCircle2, Download, FilePlus2, Pencil, Plus, ReceiptText, Trash2 } from "lucide-react";
+import { CheckCircle2, Download, FilePlus2, Pencil, Plus, Printer, ReceiptText, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -11,6 +11,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useDebounced } from "@/hooks/useDebounced";
 import apiClient from "@/lib/apiClient";
+import { printOutcomeMessage } from "@/lib/printPdf";
 import { daysUntil, dueLabel, fmtDate, formatINR } from "@/lib/format";
 
 interface Bill {
@@ -144,9 +145,19 @@ export default function PurchaseBills() {
   const download = async (b: Bill) => {
     try {
       toast({ title: `Preparing ${b.billNumber}…` });
-      await apiClient.downloadPurchaseBillPDF(b._id);
+      await apiClient.downloadPurchaseBillPDF(b._id, b.billNumber);
     } catch (error) {
       toast({ title: "Download failed", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+    }
+  };
+
+  // The same PDF as Download, straight to the print dialog (see lib/printPdf).
+  const print = async (b: Bill) => {
+    try {
+      const note = printOutcomeMessage(await apiClient.printPurchaseBillPDF(b._id, b.billNumber), b.billNumber);
+      if (note) toast(note);
+    } catch (error) {
+      toast({ title: "Could not print", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
     }
   };
 
@@ -313,6 +324,7 @@ export default function PurchaseBills() {
             actions={(b) => [
               { label: "Edit bill", icon: Pencil, onClick: () => setDialog({ open: true, bill: b }), hidden: !canEdit },
               { label: "Mark as paid", icon: CheckCircle2, onClick: () => markPaid(b), hidden: !canPay || b.paymentStatus === "paid" },
+              { label: "Print", icon: Printer, onClick: () => print(b) },
               { label: "Download PDF", icon: Download, onClick: () => download(b) },
               { label: "Delete bill", icon: Trash2, destructive: true, separated: true, onClick: () => setDeleting(b), hidden: !canDelete }
             ]}

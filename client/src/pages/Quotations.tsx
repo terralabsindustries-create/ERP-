@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Ban, CheckCircle, ClipboardList, Download, Lock, Mail, MessageSquare, Pencil, Plus, Receipt, RotateCcw, Send, TimerOff, Trash2, XCircle } from "lucide-react";
+import { Ban, CheckCircle, ClipboardList, Download, Lock, Mail, MessageSquare, Pencil, Plus, Printer, Receipt, RotateCcw, Send, TimerOff, Trash2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -12,6 +12,8 @@ import { SendQuotationEmailDialog, SendQuotationWhatsAppDialog } from "@/compone
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
+import { printOutcomeMessage } from "@/lib/printPdf";
+import { InvoiceSavedDialog, savedInvoiceId, type SavedInvoice } from "@/components/invoices/InvoiceSavedDialog";
 import { daysUntil, fmtDate, formatINR, plural } from "@/lib/format";
 
 type QuotationStatus = "draft" | "sent" | "approved" | "rejected" | "expired" | "converted" | "closed";
@@ -68,6 +70,7 @@ export default function Quotations() {
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState<Quotation | null>(null);
   const [editing, setEditing] = useState<QuotationRecord | null>(null);
+  const [converted, setConverted] = useState<{ invoice: SavedInvoice; from: string } | null>(null);
 
   const canEdit = hasPermission("Quotations: Create & Edit");
   const canDelete = hasPermission("Quotations: Delete");
@@ -119,15 +122,19 @@ export default function Quotations() {
 
   const download = async (q: Quotation) => {
     try {
-      const blob = await apiClient.downloadQuotationPDF(q._id);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `Quotation_${q.quotationNumber}.pdf`;
-      a.click();
-      URL.revokeObjectURL(url);
+      await apiClient.downloadQuotationPDF(q._id, q.quotationNumber);
     } catch (error) {
       toast({ title: "PDF not ready", description: error instanceof Error ? error.message : "Check the company details in Settings.", variant: "destructive" });
+    }
+  };
+
+  // The same PDF as Download, straight to the print dialog (see lib/printPdf).
+  const print = async (q: Quotation) => {
+    try {
+      const note = printOutcomeMessage(await apiClient.printQuotationPDF(q._id, q.quotationNumber), q.quotationNumber);
+      if (note) toast(note);
+    } catch (error) {
+      toast({ title: "Could not print", description: error instanceof Error ? error.message : "Check the company details in Settings.", variant: "destructive" });
     }
   };
 
@@ -136,10 +143,12 @@ export default function Quotations() {
     if (!q) return;
     setBusy(true);
     try {
-      const res = (await apiClient.convertQuotationToInvoice(q._id)) as { invoice?: { invoiceNumber?: string } };
-      toast({ title: "Invoice created", description: `${q.quotationNumber} → ${res?.invoice?.invoiceNumber ?? "draft invoice"}` });
+      const res = (await apiClient.convertQuotationToInvoice(q._id)) as { invoice?: SavedInvoice };
       setConverting(null);
       load();
+      // Saved: offer the invoice's Print / Download / Send. Nothing downloads by itself.
+      if (savedInvoiceId(res?.invoice)) setConverted({ invoice: res!.invoice!, from: q.quotationNumber });
+      else toast({ title: "Invoice created", description: `${q.quotationNumber} → ${res?.invoice?.invoiceNumber ?? "draft invoice"}` });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not convert this quotation.";
       // The server may have finished even though we stopped waiting.
@@ -182,6 +191,7 @@ export default function Quotations() {
     const finished = q.status === "converted" || q.status === "closed";
     return [
       { label: "Edit quotation", icon: Pencil, onClick: () => startEdit(q), hidden: !canEdit || !EDITABLE.includes(q.status) },
+      { label: "Print", icon: Printer, onClick: () => print(q) },
       { label: "Download PDF", icon: Download, onClick: () => download(q) },
       { label: "Email to customer", icon: Mail, onClick: () => setEmailing(q), hidden: !canSend || finished },
       { label: "Send on WhatsApp", icon: MessageSquare, onClick: () => setWhatsapping(q), hidden: !canWhatsApp || finished },
@@ -426,6 +436,11 @@ export default function Quotations() {
         </DialogContent>
       </Dialog>
 
+      <InvoiceSavedDialog
+        invoice={converted?.invoice || null}
+        title={converted ? `${converted.from} → ${converted.invoice.invoiceNumber || "invoice"}` : undefined}
+        onClose={() => setConverted(null)}
+      />
       <SendQuotationEmailDialog quotation={emailing} onOpenChange={(o) => !o && setEmailing(null)} onSent={load} />
       <SendQuotationWhatsAppDialog quotation={whatsapping} onOpenChange={(o) => !o && setWhatsapping(null)} onSent={load} />
       <ConfirmDialog open={!!deleting} onOpenChange={(o) => !o && setDeleting(null)} title={`Delete ${deleting?.quotationNumber}?`} description="The quotation is removed permanently." onConfirm={remove} />

@@ -8,6 +8,7 @@ const Invoice = require('../models/Invoice');
 const { protect } = require('../middleware/auth');
 const { userCan } = require('../middleware/requirePermission');
 const { orgScope } = require('../utils/accessScope');
+const { jobScope } = require('../utils/jobAccess');
 const { staffScopeQuery } = require('../utils/dataScopeHelper');
 const { visibleTasks, isTeamLead } = require('./tasks');
 
@@ -54,7 +55,8 @@ async function liveAlerts(user) {
   }
 
   if (userCan(user, 'Jobs')) {
-    const scope = orgScope(user);
+    // A designer is alerted about their own job tickets (utils/jobAccess.js).
+    const scope = jobScope(user);
     checks.push(
       Job.countDocuments({ ...scope, ...OPEN_JOB, dueDate: { $lt: today } }).then((n) =>
         n && { id: 'jobs-overdue', severity: 'danger', count: n, title: `${n} job${n === 1 ? '' : 's'} past the delivery date`, link: '/production' }

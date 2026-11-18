@@ -20,6 +20,7 @@ import { StockAvailability } from "@/components/billing/StockAvailability";
 import { sellingRate, stockItemNamed, stockNeeded, unitText, type StockItem } from "@/components/billing/stock";
 import { isAreaUnit } from "@/lib/billing";
 import { localDate } from "@/lib/format";
+import { InvoiceSavedDialog, savedInvoiceId, type SavedInvoice } from "@/components/invoices/InvoiceSavedDialog";
 
 interface AdvancedCreateInvoiceDialogProps {
   open: boolean;
@@ -271,7 +272,13 @@ export function AdvancedCreateInvoiceDialog({
     return "";
   };
 
+  // One save at a time: a second click or Enter while saving creates nothing.
+  const saving = useRef(false);
+  // The invoice just saved, for its Print / Download / Send actions.
+  const [saved, setSaved] = useState<{ invoice: SavedInvoice; title: string } | null>(null);
+
   const submitInvoice = async (status: "draft" | "sent") => {
+    if (saving.current) return;
     const problem = !formData.customerId
       ? "Select a customer."
       : formData.items.length === 0
@@ -287,6 +294,7 @@ export function AdvancedCreateInvoiceDialog({
       return;
     }
 
+    saving.current = true;
     setLoading(true);
     try {
       const invoiceData = {
@@ -305,15 +313,14 @@ export function AdvancedCreateInvoiceDialog({
       };
 
       const response: any = await apiClient.createInvoice(invoiceData);
+      const invoice: SavedInvoice = response?.invoice || response;
 
-      toast({
-        title: status === "draft" ? "Draft saved" : "Invoice issued",
-        description: response?.invoice?.invoiceNumber || undefined,
-      });
-
-      onInvoiceCreated(response?.invoice || response);
+      onInvoiceCreated(invoice);
       onOpenChange(false);
       setFormData(emptyForm());
+      // Saved: offer Print / Download / Send. Nothing is downloaded or printed by itself.
+      if (savedInvoiceId(invoice)) setSaved({ invoice, title: status === "draft" ? "Draft invoice saved" : "Invoice issued" });
+      else toast({ title: status === "draft" ? "Draft saved" : "Invoice issued", description: invoice?.invoiceNumber || undefined });
     } catch (error: any) {
       console.error('Error creating invoice:', error);
       if (error.stockCheck?.length > 0) {
@@ -333,6 +340,7 @@ export function AdvancedCreateInvoiceDialog({
         });
       }
     } finally {
+      saving.current = false;
       setLoading(false);
     }
   };
@@ -740,6 +748,7 @@ export function AdvancedCreateInvoiceDialog({
       customers={customers}
       onJobCreated={handleJobCreated}
     />
+    <InvoiceSavedDialog invoice={saved?.invoice || null} title={saved?.title} onClose={() => setSaved(null)} onInvoiceUpdated={() => onInvoiceCreated(saved?.invoice)} />
     </>
   );
 }

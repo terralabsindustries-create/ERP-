@@ -11,15 +11,32 @@ import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
 import { Search, User, Mail, Phone, Plus, Trash2 } from "lucide-react";
 import { JobInvoiceDialog } from "./JobInvoiceDialog";
-import { ViewInvoiceDialog } from "../invoices/ViewInvoiceDialog";
+import { InvoiceSavedDialog } from "../invoices/InvoiceSavedDialog";
 import { UNITS_OF_MEASUREMENT } from "../inventory/CreateItemDialog";
 import { CustomerTypePicker } from "../customers/CustomerTypePicker";
 import { StockAvailability, StockCheckList } from "../billing/StockAvailability";
 import { sellingRate, stockItemNamed, stockNeeded, unitText, type StockItem } from "../billing/stock";
-import { HSN_PATTERN, draftTotals, lineDraftFromJobItem } from "../billing/lineDraft";
+import { HSN_PATTERN, draftTotals, jobItemPieces, lineDraftFromJobItem } from "../billing/lineDraft";
 import { localDate } from "@/lib/format";
+import { priceLine } from "@/lib/billing";
 
 const AREA_UNITS = ['sqft', 'sqm'];
+
+/**
+ * An item's area and total, priced as its invoice will be (lib/billing.ts,
+ * the same as the server). An area item is length × width per piece, times
+ * the number of pieces (its quantity), times the rate per sq ft / sq m:
+ *   6 ft × 4 ft = 24 sq ft a piece; 2 pieces = 48 sq ft; @ ₹12 = ₹576.
+ * Anything else is quantity × unit price. itemTotal includes the item's GST.
+ */
+function priceJobItem(item: InvoiceItem): InvoiceItem {
+  const gst = (amount: number) => amount + (amount * (Number(item.gstRate) || 0)) / 100;
+  if (item.itemType === 'Square Feet') {
+    const p = priceLine({ quantity: item.quantity || 0, unitPrice: item.unitPrice, unit: item.unit === 'sqm' ? 'sqm' : 'sqft', length: item.length, width: item.width });
+    return p.isArea ? { ...item, totalSquareFeet: p.totalArea, itemTotal: gst(p.amount) } : { ...item, totalSquareFeet: 0, itemTotal: 0 };
+  }
+  return { ...item, itemTotal: gst(priceLine({ quantity: item.quantity, unitPrice: item.unitPrice }).amount) };
+}
 // Square-foot dimensions are stored in feet throughout jobs, billing and stock.
 // Inches are an input/display choice, converted at the form boundary.
 const shownDimension = (feet: number | undefined, unit: 'ft' | 'in') =>
@@ -141,6 +158,7 @@ export function CreateJobDialog({
   const [createdInvoice, setCreatedInvoice] = useState<any>(null);
   const [showInvoiceView, setShowInvoiceView] = useState(false);
   const [isGeneratingInvoice, setIsGeneratingInvoice] = useState(false);
+  const generatingInvoice = useRef(false);
   const invoiceTriggerRef = useRef<HTMLButtonElement>(null);
   const submitButtonRef = useRef<HTMLButtonElement>(null);
   // Set the moment a create starts, before React re-renders the button as
@@ -273,25 +291,7 @@ export function CreateJobDialog({
       const newItems = [...prev.items];
       newItems[index] = { ...newItems[index], [field]: value };
 
-      const item = newItems[index];
-
-      // Handle Square Feet items differently
-      if (item.itemType === 'Square Feet') {
-        // Calculate total square feet if length and width are provided
-        if (item.length && item.width) {
-          item.totalSquareFeet = item.length * item.width;
-          const subtotal = item.totalSquareFeet * item.unitPrice;
-          const gstAmount = (subtotal * item.gstRate) / 100;
-          item.itemTotal = subtotal + gstAmount;
-        } else {
-          item.itemTotal = 0;
-        }
-      } else {
-        // Handle regular quantity items
-        const subtotal = item.quantity * item.unitPrice;
-        const gstAmount = (subtotal * item.gstRate) / 100;
-        item.itemTotal = subtotal + gstAmount;
-      }
+      newItems[index] = priceJobItem(newItems[index]);
 
       return { ...prev, items: newItems };
     });
@@ -305,7 +305,8 @@ export function CreateJobDialog({
     updateItem(index, 'unit', unit);
     updateItem(index, 'itemType', isAreaUnit ? 'Square Feet' : 'Numbers');
     if (unit !== formData.items[index].unit) changeDimensionUnit(index, 'ft');
-    if (!isAreaUnit && !formData.items[index].quantity) {
+    // A count item needs a quantity, an area item a number of pieces: 1 unless one was entered.
+    if (!formData.items[index].quantity) {
       updateItem(index, 'quantity', 1);
     }
   };
@@ -419,21 +420,23 @@ export function CreateJobDialog({
   const jobItemsGst = jobTotals.lines.reduce((sum, line) => sum + line.gstAmount, 0);
 
   const handleGenerateInvoiceDirectly = async () => {
-    if (!createdJob) return;
+    // One invoice per click: a second click while generating creates nothing.
+    if (!createdJob || generatingInvoice.current) return;
 
+    generatingInvoice.current = true;
     setIsGeneratingInvoice(true);
     try {
       // The server prices every line from its price before tax and the job
       // ticket's GST rate, and the design charge at its own rate, so the
-      // invoice comes to the job ticket's total. An area item on a job ticket
-      // is one piece of length × width, as the ticket priced it.
+      // invoice comes to the job ticket's total. An area item keeps its number
+      // of pieces: length × width × pieces.
       const items = (createdJob.items || []).map((item: any) => ({
         itemName: item.itemName,
         description: item.description || '',
         hsnCode: item.hsnCode || '',
         itemType: item.itemType || 'Numbers',
         unit: item.unit || 'pieces',
-        quantity: item.itemType === 'Square Feet' ? 1 : item.quantity || 0,
+        quantity: item.itemType === 'Square Feet' ? jobItemPieces(item) : item.quantity || 0,
         length: item.length || 0,
         width: item.width || 0,
         unitPrice: item.unitPrice,
@@ -466,29 +469,12 @@ export function CreateJobDialog({
         throw new Error('Invoice ID not received from server');
       }
 
-      setCreatedInvoice(created?.invoice || created);
-
-      toast({
-        title: "Success",
-        description: "Invoice generated successfully",
-      });
-
-      // Close the question dialog and show the invoice
+      // Saved: close the question and offer Print / Download / Send.
+      // Nothing is downloaded or printed until one is chosen.
+      setCreatedInvoice({ ...(created?.invoice || created), _id: invoiceId });
       setShowInvoiceQuestion(false);
       setShowInvoiceCreation(false);
       setShowInvoiceView(true);
-
-      // Optionally auto-download PDF after a delay
-      setTimeout(async () => {
-        try {
-          console.log('📥 Auto-downloading PDF for invoice:', invoiceId);
-          await apiClient.downloadInvoicePDF(invoiceId);
-          console.log('✅ PDF downloaded automatically');
-        } catch (downloadError) {
-          console.error('Error auto-downloading PDF:', downloadError);
-          // Don't show error to user since invoice is already created
-        }
-      }, 500);
 
     } catch (error: any) {
       console.error('Error generating invoice:', error);
@@ -509,6 +495,7 @@ export function CreateJobDialog({
         });
       }
     } finally {
+      generatingInvoice.current = false;
       setIsGeneratingInvoice(false);
     }
   };
@@ -566,6 +553,14 @@ export function CreateJobDialog({
             toast({
               title: "Validation Error",
               description: `Item ${i + 1}: Width is required for Square Feet items`,
+              variant: "destructive",
+            });
+            return;
+          }
+          if (!Number.isInteger(Number(item.quantity)) || !(Number(item.quantity) >= 1)) {
+            toast({
+              title: "Validation Error",
+              description: `Item ${i + 1}: the number of pieces must be a whole number, 1 or more`,
               variant: "destructive",
             });
             return;
@@ -637,17 +632,16 @@ export function CreateJobDialog({
         estimatedCost: formData.estimatedCost ? parseFloat(formData.estimatedCost) : 0,
         dueDate: formData.dueDate || null,
         notes: formData.notes.trim(),
-        // An area item is priced as one piece of length × width (the form has
-        // no quantity for it), so a quantity left over from before the unit
-        // was switched must not multiply it on the invoice.
+        // An area item's quantity is its number of pieces; its area and total
+        // are length × width × pieces, priced again here so what is saved is
+        // what the form showed.
         items: formData.items.map((item) => ({
-          ...item,
+          ...priceJobItem(item),
           dimensionUnit: undefined,
           lengthInput: undefined,
           widthInput: undefined,
           itemName: item.itemName.trim(),
-          description: (item.description || '').trim(),
-          ...(item.itemType === 'Square Feet' ? { quantity: 1 } : {})
+          description: (item.description || '').trim()
         })),
         designCharge: formData.designCharge,
         printSpecs: {
@@ -1178,7 +1172,7 @@ export function CreateJobDialog({
               </CardHeader>
               <CardContent className="space-y-4">
                 {formData.items.map((item, index) => (
-                  <div key={index} className="grid grid-cols-1 md:grid-cols-8 gap-2 p-4 border rounded-lg">
+                  <div key={index} className={`grid grid-cols-1 gap-2 p-4 border rounded-lg ${item.itemType === 'Square Feet' ? 'md:grid-cols-9' : 'md:grid-cols-8'}`}>
                     <div className="space-y-1">
                       <Label className="text-xs">Item Name</Label>
                       <div className="relative autocomplete-container">
@@ -1233,22 +1227,8 @@ export function CreateJobDialog({
                                         totalSquareFeet: isAreaUnit ? (newItems[index].totalSquareFeet || 0) : 0,
                                       };
 
-                                      if (isAreaUnit) {
-                                        const l = newItems[index].length || 0;
-                                        const w = newItems[index].width || 0;
-                                        if (l && w) {
-                                          newItems[index].totalSquareFeet = l * w;
-                                          const subtotal = newItems[index].totalSquareFeet! * newItems[index].unitPrice;
-                                          const gstAmount = (subtotal * newItems[index].gstRate) / 100;
-                                          newItems[index].itemTotal = subtotal + gstAmount;
-                                        } else {
-                                          newItems[index].itemTotal = 0;
-                                        }
-                                      } else {
-                                        const subtotal = (newItems[index].quantity || 1) * newItems[index].unitPrice;
-                                        const gstAmount = (subtotal * newItems[index].gstRate) / 100;
-                                        newItems[index].itemTotal = subtotal + gstAmount;
-                                      }
+                                      if (!newItems[index].quantity) newItems[index].quantity = 1;
+                                      newItems[index] = priceJobItem(newItems[index]);
 
                                       return { ...prev, items: newItems };
                                     });
@@ -1353,6 +1333,20 @@ export function CreateJobDialog({
                         </div>
 
                         <div className="space-y-1">
+                          <Label htmlFor={`job-pieces-${index}`} className="text-xs">Number of Pieces</Label>
+                          <Input
+                            id={`job-pieces-${index}`}
+                            type="number"
+                            inputMode="numeric"
+                            step="1"
+                            min="1"
+                            value={item.quantity || ''}
+                            onChange={(e) => updateItem(index, 'quantity', Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+                            placeholder="1"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
                           <Label className="text-xs">
                             {item.unit === 'sqm' ? 'Price per Sq M' : 'Price per Sq Ft'}
                           </Label>
@@ -1436,7 +1430,7 @@ export function CreateJobDialog({
                         {item.itemType === 'Square Feet' && (
                           <span className="text-xs text-muted-foreground">
                             {item.length && item.width
-                              ? `${item.totalSquareFeet?.toFixed(2)} ${item.unit === 'sqm' ? 'sq m' : 'sq ft'} (${item.unit === 'sqm' ? item.length : shownDimension(item.length, item.dimensionUnit || 'ft')} × ${item.unit === 'sqm' ? item.width : shownDimension(item.width, item.dimensionUnit || 'ft')} ${item.unit === 'sqm' ? 'm' : item.dimensionUnit || 'ft'})`
+                              ? `${item.totalSquareFeet?.toFixed(2)} ${item.unit === 'sqm' ? 'sq m' : 'sq ft'} (${item.unit === 'sqm' ? item.length : shownDimension(item.length, item.dimensionUnit || 'ft')} × ${item.unit === 'sqm' ? item.width : shownDimension(item.width, item.dimensionUnit || 'ft')} ${item.unit === 'sqm' ? 'm' : item.dimensionUnit || 'ft'} × ${item.quantity || 0} ${Number(item.quantity) === 1 ? 'pc' : 'pcs'})`
                               : 'Set L & W'}
                           </span>
                         )}
@@ -1455,7 +1449,7 @@ export function CreateJobDialog({
                       </div>
                     </div>
 
-                    <div className="space-y-1 md:col-span-8">
+                    <div className={`space-y-1 ${item.itemType === 'Square Feet' ? 'md:col-span-9' : 'md:col-span-8'}`}>
                       <Label htmlFor={`job-note-${index}`} className="text-xs">Note for this item</Label>
                       <Input
                         id={`job-note-${index}`}
@@ -1467,7 +1461,7 @@ export function CreateJobDialog({
                     </div>
                     {(() => {
                       const stock = stockItemNamed(inventoryItems, item.itemName);
-                      return stock ? <StockAvailability className="md:col-span-8" item={stock} needed={stockNeededFor(item, stock.unit)} /> : null;
+                      return stock ? <StockAvailability className={item.itemType === 'Square Feet' ? 'md:col-span-9' : 'md:col-span-8'} item={stock} needed={stockNeededFor(item, stock.unit)} /> : null;
                     })()}
                   </div>
                 ))}
@@ -1738,34 +1732,31 @@ export function CreateJobDialog({
       {createdJob && showInvoiceCreation && (
         <JobInvoiceDialog
           job={createdJob}
-          onInvoiceGenerated={() => {
+          onInvoiceGenerated={(invoice) => {
+            // Saved: the same Print / Download / Send actions as a direct invoice.
             setShowInvoiceCreation(false);
             setShowInvoiceQuestion(false);
-            onOpenChange(false);
-            setCreatedJob(null);
-            setCreatedJobId(null);
-            onJobCreated();
+            setCreatedInvoice(invoice);
+            setShowInvoiceView(true);
           }}
         >
           <button ref={invoiceTriggerRef} style={{ display: 'none' }} />
         </JobInvoiceDialog>
       )}
 
-      {/* Invoice View Dialog */}
-      {createdInvoice && (
-        <ViewInvoiceDialog
-          open={showInvoiceView}
-          onOpenChange={(open) => {
-            setShowInvoiceView(open);
-            if (!open) {
-              onOpenChange(false);
-              onJobCreated();
-            }
-          }}
-          invoice={createdInvoice}
-          onInvoiceUpdated={() => undefined}
-        />
-      )}
+      {/* The saved invoice's actions: Print, Download, Send or Close */}
+      <InvoiceSavedDialog
+        invoice={showInvoiceView ? createdInvoice : null}
+        title={createdInvoice ? `${createdInvoice.invoiceNumber || "Invoice"} generated` : undefined}
+        onClose={() => {
+          setShowInvoiceView(false);
+          setCreatedInvoice(null);
+          setCreatedJob(null);
+          setCreatedJobId(null);
+          onOpenChange(false);
+          onJobCreated();
+        }}
+      />
     </>
   );
 }

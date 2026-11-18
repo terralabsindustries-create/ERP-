@@ -55,7 +55,9 @@ export default function ProductionBoard() {
   const [searchParams] = useSearchParams();
   const focusStage = searchParams.get("stage");
   const navigate = useNavigate();
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
+  // Mirrors backend/src/utils/jobAccess.js: a designer is shown the job tickets they created.
+  const ownJobsOnly = user?.role === "designer" && !user?.canViewAllData;
   const { toast } = useToast();
   const canMove = hasPermission("Jobs: Change Status");
 
@@ -170,9 +172,7 @@ export default function ProductionBoard() {
           eyebrow="Production"
           title="Production Board"
           description={
-            canMove
-              ? "Every job ticket by stage. Drag a card, or use its arrow, to move it along."
-              : "Every job ticket by stage."
+            `${ownJobsOnly ? "Your job tickets by stage." : "Every job ticket by stage."}${canMove ? " Drag a card, or use its arrow, to move it along." : ""}`
           }
           actions={
             <>

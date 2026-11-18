@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "build:desktop": "vite build --mode desktop",
-    "test:config": "node --test tests/vite-config.test.mjs"
+    "test:config": "node --test tests/vite-config.test.mjs",
+    "test:accounts": "node --test tests/accounts-summary.test.mjs"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",

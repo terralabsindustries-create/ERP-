@@ -11,7 +11,9 @@ const AccountTransaction = require('../models/AccountTransaction');
 const Settings = require('../models/Settings');
 const { settingsOwnerId, businessSettings } = require('../utils/businessSettings');
 const { orgScope, orgUserFilter, orgMemberIds } = require('../utils/accessScope');
+const { jobScope } = require('../utils/jobAccess');
 const { staffScopeQuery, canViewAllStaffData } = require('../utils/dataScopeHelper');
+const { accountScope } = require('../utils/accountScope');
 
 const router = express.Router();
 
@@ -33,10 +35,12 @@ const sum = (Model, match, field) =>
 router.get('/stats', protect, async (req, res) => {
   try {
     const user = req.user;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // Business days follow India time, including on servers running in UTC.
+    const istOffset = 330 * 60 * 1000;
+    const istDay = new Date(Date.now() + istOffset).toISOString().slice(0, 10);
+    const today = new Date(Date.parse(`${istDay}T00:00:00Z`) - istOffset);
     const tomorrow = new Date(today.getTime() + 864e5);
-    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    const monthStart = new Date(Date.parse(`${istDay.slice(0, 7)}-01T00:00:00Z`) - istOffset);
     const settings = await businessSettings(user);
 
     const stats = {
@@ -59,7 +63,8 @@ router.get('/stats', protect, async (req, res) => {
     const work = [];
 
     if (userCan(user, 'Jobs')) {
-      const scope = orgScope(user);
+      // A designer's counts cover their own job tickets (utils/jobAccess.js).
+      const scope = jobScope(user);
       work.push(
         Job.countDocuments({ ...scope, createdAt: { $gte: today, $lt: tomorrow } }).then((n) => (stats.todaysJobs = n)),
         Job.countDocuments({ ...scope, ...OPEN_JOB, priority: 'urgent' }).then((n) => (stats.urgentJobs = n)),
@@ -90,9 +95,10 @@ router.get('/stats', protect, async (req, res) => {
     }
 
     if (userCan(user, 'Accounts')) {
-      // Same business-wide ledger as Accounts → balances.
+      // Same business-wide ledger and scope as Accounts → balances, including
+      // entries kept from logins that were since removed.
       work.push(
-        orgUserFilter(user).then((scope) => AccountTransaction.getAccountBalances(scope)).then((rows) => {
+        accountScope(user).then((scope) => AccountTransaction.getAccountBalances(scope)).then((rows) => {
           const balanceOf = (type) => rows.find((r) => r.accountType === type || r._id === type)?.balance || 0;
           stats.cashBalance = balanceOf('cash');
           stats.bankBalance = balanceOf('bank');
@@ -127,9 +133,9 @@ router.get('/stats', protect, async (req, res) => {
         overdueInvoices: 'Issued invoices with a balance due past their due date',
         receivables: 'Sum of balances due on issued invoices',
         invoicedThisMonth: 'Total of invoices issued this month',
-        collectedToday: 'Payments recorded today with status Completed',
-        cashBalance: 'Accounts: completed cash transactions',
-        bankBalance: 'Accounts: completed bank transactions',
+        collectedToday: 'Completed payments received today (India time)',
+        cashBalance: 'Current cash balance, including earlier receipts and payouts',
+        bankBalance: 'Current bank balance, including earlier receipts and payouts',
         lowStockItems: 'Active stock items at or below their minimum level',
         pendingDeliveries: 'Deliveries scheduled or in transit',
         monthlyTarget: 'Target you set on the dashboard'

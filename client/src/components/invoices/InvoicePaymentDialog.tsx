@@ -11,6 +11,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
 import { formatINR, localDate } from "@/lib/format";
+import { PaymentAccountSelect, paymentAccountProblem, usePaymentAccounts } from "@/components/payments/PaymentAccountSelect";
 
 export interface PayableInvoice {
   _id: string;
@@ -57,6 +58,8 @@ export function InvoicePaymentDialog({
   const [amount, setAmount] = useState("");
   const [paymentDate, setPaymentDate] = useState(localDate());
   const [method, setMethod] = useState<PaymentMethod>("cash");
+  const [accountId, setAccountId] = useState("");
+  const receiving = usePaymentAccounts(!!invoice);
   const [reference, setReference] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -77,6 +80,7 @@ export function InvoicePaymentDialog({
     setAmount(balance > 0 ? String(balance) : "");
     setPaymentDate(localDate());
     setMethod("cash");
+    setAccountId("");
     setReference("");
     setError(null);
     setSplit(null);
@@ -95,11 +99,14 @@ export function InvoicePaymentDialog({
   const record = async () => {
     if (!invoice) return;
     if (value === null || amountProblem) return setError(amountProblem || "Enter the amount received.");
+    const accountProblem = paymentAccountProblem(receiving.accounts, method, accountId);
+    if (accountProblem) return setError(accountProblem);
     const payload = {
       customerId: customerIdOf(invoice),
       invoiceId: invoice._id,
       amount: round2(value),
       paymentMethod: method,
+      paymentAccountId: accountId || undefined,
       paymentDate,
       referenceNumber: reference.trim() || undefined
     };
@@ -241,6 +248,7 @@ export function InvoicePaymentDialog({
                 <Input id="inv-pay-ref" value={reference} maxLength={100} onChange={(e) => setReference(e.target.value)} placeholder="UPI ref, cheque no." />
               </div>
             </div>
+            <PaymentAccountSelect id="inv-pay-account" accounts={receiving.accounts} loading={receiving.loading} method={method} value={accountId} onChange={setAccountId} />
             {amountProblem ? (
               <p className="text-xs text-destructive-strong">{amountProblem}</p>
             ) : (

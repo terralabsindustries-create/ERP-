@@ -598,47 +598,43 @@ class ApiClient {
     return this.post('/purchase-bills/generate', purchaseOrderIds ? { purchaseOrderIds } : {});
   }
 
-  async downloadPurchaseBillPDF(billId: string) {
+  /**
+   * A server-made PDF (invoice, quotation, purchase bill), fetched fresh so it
+   * always shows the document as last saved. `what` names it in errors.
+   */
+  private async fetchPdfFile(path: string, fallbackName: string, what: string): Promise<PdfFile> {
     const token = localStorage.getItem('token');
-    const response = await fetch(`${this.baseURL}/purchase-bills/${billId}/pdf`, {
+    const response = await fetch(`${this.baseURL}${path}`, {
       method: 'GET',
       headers: { 'Authorization': `Bearer ${token}` },
     });
-
     if (!response.ok) {
       const contentType = response.headers.get('content-type');
       if (contentType && contentType.includes('application/json')) {
         const errorData = await response.json();
-        throw new Error(errorData.message || `Failed to download PDF: ${response.status}`);
+        throw new Error(errorData.message || `Failed to get the ${what} PDF: ${response.status}`);
       }
-      throw new Error(`Failed to download PDF: ${response.status} ${response.statusText}`);
+      throw new Error(`Failed to get the ${what} PDF: ${response.status} ${response.statusText}`);
     }
-
     const blob = await response.blob();
-    if (blob.size === 0) {
-      throw new Error('PDF is empty - generation may have failed');
-    }
+    if (blob.size === 0) throw new Error('PDF is empty - generation may have failed');
+    // The server names the file after the document number, when the header is readable.
+    const match = response.headers.get('content-disposition')?.match(/filename="(.+)"/);
+    return { blob, filename: match?.[1] || fallbackName };
+  }
 
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
+  getPurchaseBillPdfFile(billId: string, billNumber?: string): Promise<PdfFile> {
+    return this.fetchPdfFile(`/purchase-bills/${billId}/pdf`, `PurchaseBill_${billNumber || billId}.pdf`, 'purchase bill');
+  }
 
-    const contentDisposition = response.headers.get('content-disposition');
-    let filename = `PurchaseBill_${billId}.pdf`;
-    if (contentDisposition) {
-      const filenameMatch = contentDisposition.match(/filename="(.+)"/);
-      if (filenameMatch && filenameMatch[1]) {
-        filename = filenameMatch[1];
-      }
-    }
+  /** Saves the purchase bill PDF. Only ever called from an explicit Download action. */
+  async downloadPurchaseBillPDF(billId: string, billNumber?: string) {
+    saveFile(await this.getPurchaseBillPdfFile(billId, billNumber));
+  }
 
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    setTimeout(() => {
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-    }, 100);
+  /** Opens the print dialog on the purchase bill PDF. Call it directly from a click handler (see printPdf). */
+  printPurchaseBillPDF(billId: string, billNumber?: string): Promise<PrintOutcome> {
+    return printPdf(() => this.getPurchaseBillPdfFile(billId, billNumber));
   }
 
   // Payment Management
@@ -689,16 +685,18 @@ class ApiClient {
   }
 
   // Quotation Management
-  async downloadQuotationPDF(id: string): Promise<Blob> {
-    const token = localStorage.getItem('token');
-    const response = await fetch(`${this.baseURL}/quotations/${id}/pdf`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({ message: 'Failed to download PDF' }));
-      throw new Error(err.message || 'Failed to download PDF');
-    }
-    return response.blob();
+  getQuotationPdfFile(id: string, quotationNumber?: string): Promise<PdfFile> {
+    return this.fetchPdfFile(`/quotations/${id}/pdf`, `Quotation_${quotationNumber || id}.pdf`, 'quotation');
+  }
+
+  /** Saves the quotation PDF. Only ever called from an explicit Download action. */
+  async downloadQuotationPDF(id: string, quotationNumber?: string) {
+    saveFile(await this.getQuotationPdfFile(id, quotationNumber));
+  }
+
+  /** Opens the print dialog on the quotation PDF. Call it directly from a click handler (see printPdf). */
+  printQuotationPDF(id: string, quotationNumber?: string): Promise<PrintOutcome> {
+    return printPdf(() => this.getQuotationPdfFile(id, quotationNumber));
   }
 
   async getQuotations(params?: any) {
@@ -835,32 +833,8 @@ class ApiClient {
   }
 
   // Invoice PDF: one file, from the server, for download, print and sending.
-  async getInvoicePdfFile(invoiceId: string): Promise<PdfFile> {
-    const token = localStorage.getItem('token');
-    const response = await fetch(`${this.baseURL}/invoices/${invoiceId}/pdf`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
-    });
-
-    if (!response.ok) {
-      const contentType = response.headers.get('content-type');
-      if (contentType && contentType.includes('application/json')) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `Failed to get the invoice PDF: ${response.status}`);
-      }
-      throw new Error(`Failed to get the invoice PDF: ${response.status} ${response.statusText}`);
-    }
-
-    const blob = await response.blob();
-    if (blob.size === 0) {
-      throw new Error('PDF is empty - generation may have failed');
-    }
-
-    // The server names the file after the invoice number, when the header is readable.
-    const match = response.headers.get('content-disposition')?.match(/filename="(.+)"/);
-    return { blob, filename: match?.[1] || `Invoice_${invoiceId}.pdf` };
+  getInvoicePdfFile(invoiceId: string): Promise<PdfFile> {
+    return this.fetchPdfFile(`/invoices/${invoiceId}/pdf`, `Invoice_${invoiceId}.pdf`, 'invoice');
   }
 
   async downloadInvoicePDF(invoiceId: string) {
@@ -1032,6 +1006,11 @@ class ApiClient {
 
   async getAccountStats() {
     return this.get('/accounts/stats/summary');
+  }
+
+  /** Income, expense and net of completed entries dated in [startDate, endDate). */
+  async getAccountPeriodTotals(params: { startDate: string; endDate: string }) {
+    return this.get(`/accounts/stats/period?${new URLSearchParams(params).toString()}`);
   }
 
   async getAccountReportSummary(period: string = 'month') {

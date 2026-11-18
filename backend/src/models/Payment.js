@@ -83,6 +83,14 @@ const paymentSchema = new mongoose.Schema({
     enum: ['cash', 'cheque', 'bank_transfer', 'card', 'upi', 'wallet'],
     default: 'cash'
   },
+  // The account the money was received into (models/PaymentAccount.js):
+  // Cash, Paytm, a bank account. Older payments, and payments of a business
+  // with no accounts set up, have none.
+  paymentAccountId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PaymentAccount',
+    index: true
+  },
   paymentDate: {
     type: Date,
     required: [true, 'Payment date is required'],
