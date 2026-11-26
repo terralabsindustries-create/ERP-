@@ -15,9 +15,9 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useDebounced } from "@/hooks/useDebounced";
 import apiClient from "@/lib/apiClient";
-import { printOutcomeMessage } from "@/lib/printPdf";
+import { preparePrintingWhenIdle, printOutcomeMessage } from "@/lib/printPdf";
 import { dueLabel, fmtDate, formatINR } from "@/lib/format";
-import { invoiceState, isInvoiceOverdue as isOverdue } from "@/lib/invoiceStatus";
+import { invoiceState, isInvoiceOverdue as isOverdue, isInvoiceSettled } from "@/lib/invoiceStatus";
 
 export interface InvoiceRow {
   _id: string;
@@ -68,6 +68,9 @@ interface ViewStats extends InvoicePaymentBreakdown {
 }
 
 const customerOf = (i: InvoiceRow) => i.customerId?.name || i.customerName || "—";
+// The job ticket's current title, else the title stored on the invoice (it
+// stays after the job ticket is deleted; a counter job's number and description).
+const jobOf = (i: InvoiceRow) => i.jobId?.title || i.jobTitle || "";
 const balanceOf = (i: InvoiceRow) => i.balanceAmount ?? Math.max(0, i.totalAmount - (i.paidAmount ?? i.amountPaid ?? 0));
 
 /**
@@ -76,6 +79,8 @@ const balanceOf = (i: InvoiceRow) => i.balanceAmount ?? Math.max(0, i.totalAmoun
  * however many there are.
  */
 export function InvoicesView() {
+  // Rows have Print: load printing in the background so the first print does not wait for it.
+  useEffect(preparePrintingWhenIdle, []);
   const { hasPermission } = useAuth();
   const { toast } = useToast();
   const [params] = useSearchParams();
@@ -251,7 +256,8 @@ export function InvoicesView() {
       id: "number",
       header: "Invoice",
       cell: (i) => (
-        <EntityCell title={i.invoiceNumber} mono subtitle={i.jobId?.title || i.jobTitle} />
+        // Every row has a second line, so rows keep one height.
+        <EntityCell title={i.invoiceNumber} mono subtitle={jobOf(i) ? <span title={jobOf(i)}>{jobOf(i)}</span> : "No job ticket"} />
       ),
       sortValue: (i) => i.invoiceNumber,
       className: "min-w-[170px]"
@@ -259,7 +265,7 @@ export function InvoicesView() {
     {
       id: "customer",
       header: "Customer",
-      cell: (i) => <EntityCell avatar={customerOf(i)} title={customerOf(i)} subtitle={i.customerId?.phone} />,
+      cell: (i) => <EntityCell avatar={customerOf(i)} title={customerOf(i)} subtitle={i.customerId?.phone || "No phone number"} />,
       sortValue: (i) => customerOf(i).toLowerCase(),
       className: "min-w-[200px]"
     },
@@ -271,7 +277,7 @@ export function InvoicesView() {
         <Stack
           top={<span className="whitespace-nowrap">{fmtDate(i.dueDate)}</span>}
           bottom={
-            i.paymentStatus !== "paid" && !["draft", "cancelled"].includes(i.status) && i.dueDate ? (
+            !isInvoiceSettled(i) && !["draft", "cancelled"].includes(i.status) && i.dueDate ? (
               <span className={isOverdue(i) ? "text-destructive-strong" : undefined}>{dueLabel(i.dueDate)}</span>
             ) : undefined
           }

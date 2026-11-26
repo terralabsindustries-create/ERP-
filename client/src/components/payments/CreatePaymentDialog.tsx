@@ -11,18 +11,12 @@ import { formatINR } from "@/lib/printWorkflow";
 import { METHOD_LABELS, newIdempotencyKey, type PaymentMethod } from "./paymentMeta";
 import { localDate } from "@/lib/format";
 import { PaymentAccountSelect, paymentAccountProblem, usePaymentAccounts } from "./PaymentAccountSelect";
+import { CustomerSearch, customerIdOf, type CustomerOption } from "@/components/customers/CustomerSearch";
 
 interface CreatePaymentDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onPaymentCreated?: () => void;
-}
-
-interface CustomerOption {
-  _id: string;
-  id?: string;
-  name: string;
-  company?: string;
 }
 
 interface InvoiceOption {
@@ -50,7 +44,7 @@ const emptyForm = () => ({
 /** Record money received from a customer, optionally against one of their unpaid invoices. */
 export function CreatePaymentDialog({ open, onOpenChange, onPaymentCreated }: CreatePaymentDialogProps) {
   const [form, setForm] = useState(emptyForm);
-  const [customers, setCustomers] = useState<CustomerOption[]>([]);
+  const [customer, setCustomer] = useState<CustomerOption | null>(null);
   const [invoices, setInvoices] = useState<InvoiceOption[]>([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -66,10 +60,6 @@ export function CreatePaymentDialog({ open, onOpenChange, onPaymentCreated }: Cr
     setForm(emptyForm());
     setError(null);
     attempt.current = null;
-    apiClient
-      .getCustomer({ limit: 100 })
-      .then((res: { customers?: CustomerOption[] }) => setCustomers(res?.customers || []))
-      .catch(() => setCustomers([]));
   }, [open]);
 
   useEffect(() => {
@@ -142,19 +132,17 @@ export function CreatePaymentDialog({ open, onOpenChange, onPaymentCreated }: Cr
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="pay-customer">Customer</Label>
-            <Select value={form.customerId} onValueChange={(v) => setForm((prev) => ({ ...prev, customerId: v, invoiceId: NO_INVOICE, amount: "" }))}>
-              <SelectTrigger id="pay-customer">
-                <SelectValue placeholder="Choose a customer" />
-              </SelectTrigger>
-              <SelectContent>
-                {customers.map((c) => (
-                  <SelectItem key={c._id || c.id} value={c._id || c.id || ""}>
-                    {c.name}
-                    {c.company ? ` — ${c.company}` : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <CustomerSearch
+              id="pay-customer"
+              value={form.customerId}
+              customer={customer}
+              onSelect={(c) => {
+                setCustomer(c);
+                const id = customerIdOf(c);
+                // Another customer's invoices and amount do not carry over.
+                setForm((prev) => (prev.customerId === id ? prev : { ...prev, customerId: id, invoiceId: NO_INVOICE, amount: "" }));
+              }}
+            />
           </div>
 
           <div className="space-y-1.5">

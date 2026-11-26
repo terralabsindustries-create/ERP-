@@ -309,7 +309,7 @@ describe('the job ticket an invoice is for', () => {
   });
 
   test('an edit cannot link another business\'s job, nor move a job ticket to another customer', async () => {
-    const created = await adminA().post('/api/invoices', { customerId: String(custA._id), jobId: String(jobA._id), items: [line('Design work', 1)] });
+    const created = await adminA().post('/api/invoices', { customerId: String(custA._id), jobId: String(jobA._id), items: [line('Design work', 1)], allowAdditionalInvoice: true });
     const id = created.body.data.invoice._id;
 
     expect((await adminA().put(`/api/invoices/${id}`, { jobId: String(jobB._id) })).status).toBe(404);

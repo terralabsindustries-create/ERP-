@@ -25,7 +25,16 @@ async function createOrg(label, { staffPermissions = ['Dashboard'], managerPermi
       ...extra
     });
 
-  const admin = await make('admin', { permissions: ALL_PERMISSIONS });
+  const admin = await make('admin', {
+    permissions: ALL_PERMISSIONS,
+    subscription: {
+      isActive: true,
+      plan: 'free',
+      startDate: new Date(),
+      endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      autoRenew: false
+    }
+  });
   const manager = await make('manager', {
     fullName: `${label.toUpperCase()} Manager`,
     permissions: managerPermissions || ['Dashboard', 'Jobs', 'Staff & Tasks', 'Customers', 'Invoicing', 'Payments', 'Reports'],

@@ -75,11 +75,16 @@ const startOfToday = () => {
 // The views of the invoice list. "Unpaid" and "overdue" only count issued
 // invoices: a draft or a cancelled invoice is not owed.
 const ISSUED = { status: { $nin: ['draft', 'cancelled'] } };
+// Paid means marked paid with nothing left due. Older invoices could be marked
+// paid with no money recorded (the old payment-status dialog); they still owe
+// their balance, so they count as unpaid until the money is recorded.
+const SETTLED = { paymentStatus: 'paid', balanceAmount: { $lte: 0.005 } };
+const OWED = { $or: [{ paymentStatus: { $ne: 'paid' } }, { balanceAmount: { $gt: 0.005 } }] };
 const INVOICE_VIEWS = {
   draft: () => ({ status: 'draft' }),
-  unpaid: () => ({ ...ISSUED, paymentStatus: { $ne: 'paid' } }),
-  overdue: () => ({ ...ISSUED, paymentStatus: { $ne: 'paid' }, dueDate: { $lt: startOfToday() } }),
-  paid: () => ({ ...ISSUED, paymentStatus: 'paid' }),
+  unpaid: () => ({ ...ISSUED, ...OWED }),
+  overdue: () => ({ ...ISSUED, ...OWED, dueDate: { $lt: startOfToday() } }),
+  paid: () => ({ ...ISSUED, ...SETTLED }),
   cancelled: () => ({ status: 'cancelled' })
 };
 
@@ -169,21 +174,25 @@ const invoiceValidation = [
 const idOf = (value) => (value && typeof value === 'object' ? value._id || value.id : value);
 
 /**
- * Why a job ticket cannot be linked to an invoice for `customerId`, or null if
- * it can: it must be one of the business's job tickets, raised for that
- * customer. A job of another business reads as not found, exactly like one
- * that does not exist, so ids of other businesses reveal nothing.
+ * The job ticket to link to an invoice for `customerId`, as { job }, or why it
+ * cannot be linked, as { problem }: it must be one of the business's job
+ * tickets, raised for that customer. A job of another business reads as not
+ * found, exactly like one that does not exist, so ids of other businesses
+ * reveal nothing.
  */
-async function jobLinkProblem(user, jobId, customerId) {
+async function linkableJob(user, jobId, customerId) {
   const job = mongoose.isValidObjectId(jobId)
-    ? await Job.findOne({ _id: jobId, ...orgScope(user) }).select('customerId')
+    ? await Job.findOne({ _id: jobId, ...orgScope(user) }).select('customerId title')
     : null;
-  if (!job) return { status: 404, message: 'Job ticket not found' };
+  if (!job) return { problem: { status: 404, message: 'Job ticket not found' } };
   if (String(job.customerId) !== String(customerId)) {
-    return { status: 400, message: 'This job ticket is for a different customer. Choose the job ticket\'s customer, or another job ticket.' };
+    return { problem: { status: 400, message: 'This job ticket is for a different customer. Choose the job ticket\'s customer, or another job ticket.' } };
   }
-  return null;
+  return { job };
 }
+
+/** `text` for use inside a regex, matched literally. */
+const escapeRegex = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * Lines (with their GST rates), design charge and discount → the stored lines,
@@ -212,7 +221,7 @@ router.get('/pending-jobs', protect, requirePermission('Invoicing: Create & Edit
       status: { $ne: 'cancelled' }
     };
     const search = String(req.query.search || '').trim();
-    if (search) filter.title = { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+    if (search) filter.title = { $regex: escapeRegex(search), $options: 'i' };
 
     const [jobs, totalJobs] = await Promise.all([
       Job.find(filter)
@@ -301,13 +310,19 @@ router.get('/', protect, [
       query = { $and: queryConditions };
     }
 
-    // Add search filter with proper $and combination
+    // Add search filter with proper $and combination. The text is matched
+    // literally, so "(" or "C++" finds what was typed instead of failing. A
+    // job is found by the title stored on the invoice, and by the current
+    // title of the job ticket it links to (older invoices did not store one).
     if (search) {
+      const rx = { $regex: escapeRegex(search), $options: 'i' };
+      const jobIds = await Job.find({ ...orgScope(req.user), title: rx }).select('_id').limit(500).lean();
       const searchCondition = {
         $or: [
-          { invoiceNumber: { $regex: search, $options: 'i' } },
-          { customerName: { $regex: search, $options: 'i' } },
-          { jobTitle: { $regex: search, $options: 'i' } }
+          { invoiceNumber: rx },
+          { customerName: rx },
+          { jobTitle: rx },
+          ...(jobIds.length ? [{ jobId: { $in: jobIds.map((j) => j._id) } }] : [])
         ]
       };
 
@@ -468,9 +483,35 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
     // A linked job ticket must be this business's, for this customer. The
     // client sends "" (or nothing) for no job.
     const jobId = idOf(req.body.jobId);
+    let job = null;
     if (jobId) {
-      const problem = await jobLinkProblem(req.user, jobId, customer._id);
-      if (problem) return res.status(problem.status).json({ status: 'error', message: problem.message });
+      const link = await linkableJob(req.user, jobId, customer._id);
+      if (link.problem) return res.status(link.problem.status).json({ status: 'error', message: link.problem.message });
+      job = link.job;
+
+      // A job ticket already billed is not billed again by accident (a stale
+      // Job Tickets page, a second tab, a second person). Billing it in parts
+      // stays possible: the client asks for it with allowAdditionalInvoice.
+      // Cancelled invoices don't count, as everywhere else.
+      if (req.body.allowAdditionalInvoice !== true) {
+        const existing = await Invoice.findOne({ ...orgScope(req.user), jobId, status: { $ne: 'cancelled' } })
+          .select('invoiceNumber totalAmount status paymentStatus noGst')
+          .sort({ createdAt: -1 });
+        if (existing) {
+          // A No GST bill is not named to a login that may not see it.
+          const visible = !existing.noGst || userCan(req.user, 'Invoicing (View No GST)');
+          return res.status(409).json({
+            status: 'error',
+            code: 'JOB_ALREADY_INVOICED',
+            message: visible
+              ? `This job ticket is already billed on ${existing.invoiceNumber}.`
+              : 'This job ticket is already billed.',
+            details: visible
+              ? { invoiceId: existing._id, invoiceNumber: existing.invoiceNumber, totalAmount: existing.totalAmount, status: existing.status, paymentStatus: existing.paymentStatus }
+              : {}
+          });
+        }
+      }
     }
 
     // Only these fields are taken from the request; everything else is derived.
@@ -500,8 +541,15 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
     };
     if (req.body.status) invoiceData.status = req.body.status;
 
-    if (jobId) invoiceData.jobId = jobId;
-    if (req.body.jobTitle) invoiceData.jobTitle = req.body.jobTitle;
+    // The job ticket's title is stored with the invoice, so the invoice keeps
+    // its job description in lists, search and history even if the job ticket
+    // is later deleted. A standalone invoice may carry a label of its own.
+    if (job) {
+      invoiceData.jobId = job._id;
+      invoiceData.jobTitle = job.title;
+    } else if (typeof req.body.jobTitle === 'string' && req.body.jobTitle.trim()) {
+      invoiceData.jobTitle = req.body.jobTitle.trim();
+    }
 
     // Add dataScope if available
     if (req.user.dataScope) {
@@ -641,13 +689,21 @@ router.put('/:id', protect, requirePermission('Invoicing: Create & Edit'), [
       const jobId = idOf(req.body.jobId);
       // "" or "no-job" unsets the optional job reference.
       invoice.jobId = jobId && mongoose.isValidObjectId(jobId) ? jobId : null;
+      // Taken off its job ticket, the invoice no longer carries that job's title.
+      if (!invoice.jobId && invoice.isModified('jobId')) invoice.jobTitle = undefined;
     }
     // A job ticket newly linked, or kept while the customer changes, must be
     // this business's and the invoice's customer's. An older invoice saved
     // with another link is left alone while neither changes.
     if (invoice.jobId && (invoice.isModified('jobId') || invoice.isModified('customerId'))) {
-      const problem = await jobLinkProblem(req.user, invoice.jobId, invoice.customerId);
-      if (problem) return res.status(problem.status).json({ status: 'error', message: problem.message });
+      const link = await linkableJob(req.user, invoice.jobId, invoice.customerId);
+      if (link.problem) return res.status(link.problem.status).json({ status: 'error', message: link.problem.message });
+      invoice.jobTitle = link.job.title;
+    } else if (invoice.jobId) {
+      // The same job ticket: take its current title. One deleted since keeps
+      // the title the invoice already has.
+      const linked = await Job.findOne({ _id: invoice.jobId, ...orgScope(req.user) }).select('title').lean();
+      if (linked) invoice.jobTitle = linked.title;
     }
     if (req.body.invoiceDate) invoice.invoiceDate = req.body.invoiceDate;
     if (req.body.dueDate) invoice.dueDate = req.body.dueDate;
@@ -655,15 +711,10 @@ router.put('/:id', protect, requirePermission('Invoicing: Create & Edit'), [
       if (req.body[field] !== undefined) invoice[field] = req.body[field];
     }
 
-    // A changed total moves the payment state with it: a partly paid invoice
-    // whose total came down to what was paid is now settled, and a settled one
-    // whose total went up is partly paid again.
-    if (pricingChanged && (invoice.paidAmount || 0) > 0) {
-      const settled = invoice.paidAmount + 0.001 >= newTotal;
-      invoice.paymentStatus = settled ? 'paid' : 'partial';
-      if (settled && invoice.status !== 'cancelled') invoice.status = 'paid';
-      else if (!settled && invoice.status === 'paid') invoice.status = 'sent';
-    }
+    // A changed total moves the payment state with it (the pre-save hook,
+    // Invoice.paymentStateFor): a partly paid invoice whose total came down to
+    // what was paid is settled, and a settled one whose total went up is partly
+    // paid again.
 
     // Saved only over the version read above: a payment recorded meanwhile
     // moved paidAmount, and the totals here were worked out without it.
@@ -808,7 +859,9 @@ router.get('/stats/views', protect, async (req, res) => {
     monthStart.setHours(0, 0, 0, 0);
     const today = startOfToday();
     const issued = { $not: { $in: ['$status', ['draft', 'cancelled']] } };
-    const owed = { $and: [issued, { $ne: ['$paymentStatus', 'paid'] }] };
+    // Same rule as SETTLED / OWED above.
+    const settled = { $and: [{ $eq: ['$paymentStatus', 'paid'] }, { $lte: [{ $ifNull: ['$balanceAmount', 0] }, 0.005] }] };
+    const owed = { $and: [issued, { $not: [settled] }] };
     const [row] = await Invoice.aggregate([
       { $match: base },
       {
@@ -817,7 +870,7 @@ router.get('/stats/views', protect, async (req, res) => {
           all: { $sum: 1 },
           draft: { $sum: { $cond: [{ $eq: ['$status', 'draft'] }, 1, 0] } },
           cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
-          paid: { $sum: { $cond: [{ $and: [issued, { $eq: ['$paymentStatus', 'paid'] }] }, 1, 0] } },
+          paid: { $sum: { $cond: [{ $and: [issued, settled] }, 1, 0] } },
           unpaid: { $sum: { $cond: [owed, 1, 0] } },
           overdue: { $sum: { $cond: [{ $and: [owed, { $lt: ['$dueDate', today] }] }, 1, 0] } },
           invoiced: { $sum: { $cond: [issued, '$totalAmount', 0] } },

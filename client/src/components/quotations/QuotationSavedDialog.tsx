@@ -1,12 +1,10 @@
 import { useState } from "react";
 import { Mail, MessageSquare } from "lucide-react";
-import { DocumentSavedDialog, type SendOption } from "@/components/documents/DocumentSavedDialog";
+import { DocumentSavedDialog, type DocumentDetail, type SendOption } from "@/components/documents/DocumentSavedDialog";
 import { SendQuotationEmailDialog, SendQuotationWhatsAppDialog, type SendableQuotation } from "@/components/quotations/SendQuotationDialogs";
 import { useAuth } from "@/contexts/AuthContext";
-import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
 import { formatINR } from "@/lib/format";
-import { printOutcomeMessage } from "@/lib/printPdf";
 
 export interface SavedQuotation extends SendableQuotation {
   status?: string;
@@ -23,7 +21,6 @@ const FINISHED = ["converted", "closed"];
  */
 export function QuotationSavedDialog({ quotation, title, onClose, onSent }: { quotation: SavedQuotation | null; title?: string; onClose: () => void; onSent?: () => void }) {
   const { hasPermission } = useAuth();
-  const { toast } = useToast();
   const [sendVia, setSendVia] = useState<"email" | "whatsapp" | null>(null);
   if (!quotation?._id) return null;
 
@@ -41,18 +38,22 @@ export function QuotationSavedDialog({ quotation, title, onClose, onSent }: { qu
     onClose();
   };
 
+  const details: DocumentDetail[] = [
+    { label: "Quotation no.", value: number, mono: true },
+    ...(quotation.customer_id?.name ? [{ label: "Customer", value: quotation.customer_id.name }] : []),
+    ...(quotation.total_amount !== undefined ? [{ label: "Amount", value: formatINR(quotation.total_amount), strong: true }] : [])
+  ];
+
   return (
     <>
       <DocumentSavedDialog
         open={!sendVia}
         onOpenChange={(open) => !open && onClose()}
         title={title || `${number} saved`}
-        description={[number, quotation.customer_id?.name, quotation.total_amount !== undefined ? formatINR(quotation.total_amount) : null].filter(Boolean).join(" · ")}
-        onPrint={async () => {
-          const note = printOutcomeMessage(await apiClient.printQuotationPDF(quotation._id, quotation.quotationNumber), number);
-          if (note) toast(note);
-        }}
-        onDownload={() => apiClient.downloadQuotationPDF(quotation._id, quotation.quotationNumber)}
+        details={details}
+        documentKey={quotation._id}
+        documentName={number}
+        loadPdf={(signal) => apiClient.getQuotationPdfFile(quotation._id, quotation.quotationNumber, signal)}
         sendOptions={sendOptions}
       />
       <SendQuotationEmailDialog quotation={sendVia === "email" ? quotation : null} onOpenChange={finishSend} onSent={() => onSent?.()} />

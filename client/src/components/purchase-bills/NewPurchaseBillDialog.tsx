@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { MAX_SUGGESTIONS, SuggestionPopover } from "@/components/ui/suggestion-popover";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -297,51 +298,47 @@ export function NewPurchaseBillDialog({ open, onOpenChange, onSaved, bill, defau
                 return (
                   <div key={index} className="rounded-md border p-3 space-y-2">
                     <div className="grid grid-cols-12 gap-2">
-                      <div className="col-span-12 sm:col-span-5 relative autocomplete-container">
-                        <Input
-                          placeholder="Description *"
-                          value={it.description}
-                          onChange={(e) => {
-                            updateItem(index, "description", e.target.value);
-                            setShowSuggestions((prev) => ({ ...prev, [index]: true }));
-                          }}
-                          onFocus={() => setShowSuggestions((prev) => ({ ...prev, [index]: true }))}
-                          onBlur={() => {
-                            setTimeout(() => setShowSuggestions((prev) => ({ ...prev, [index]: false })), 200);
-                          }}
-                          autoComplete="off"
-                        />
-                        {it.description && showSuggestions[index] && inventoryItems.length > 0 && (() => {
-                          const matches = inventoryItems
-                            .filter((inv) => inv.name?.toLowerCase().includes(it.description.toLowerCase()))
-                            .slice(0, 6);
-                          if (matches.length === 0) return null;
-                          return (
-                            <div
-                              className="absolute z-10 w-full mt-1 bg-popover border rounded-md shadow-lg max-h-60 overflow-y-auto"
-                              onMouseDown={(e) => e.preventDefault()}
-                            >
-                              {matches.map((invItem) => (
-                                <button
-                                  type="button"
-                                  key={invItem._id || invItem.id}
-                                  className="w-full text-left p-2.5 hover:bg-muted border-b last:border-b-0 flex items-center justify-between gap-2"
-                                  onClick={() => selectInventoryItem(index, invItem)}
-                                >
-                                  <div className="min-w-0">
-                                    <div className="font-medium truncate">{invItem.name}</div>
-                                    <div className="text-xs text-muted-foreground truncate">
-                                      {invItem.category || "Uncategorized"} · Stock: {invItem.quantity ?? 0}
-                                    </div>
-                                  </div>
-                                  <div className="text-xs text-muted-foreground whitespace-nowrap">
-                                    {formatCurrency(invItem.unitCost || 0)}
-                                  </div>
-                                </button>
-                              ))}
+                      <div className="col-span-12 sm:col-span-5">
+                        <SuggestionPopover
+                          open={!!showSuggestions[index]}
+                          onOpenChange={(next) => setShowSuggestions((prev) => ({ ...prev, [index]: next }))}
+                          // Suggestions only once something is typed, and only when it matches.
+                          items={
+                            it.description
+                              ? inventoryItems
+                                  .filter((inv) => inv.name?.toLowerCase().includes(it.description.toLowerCase()))
+                                  .slice(0, MAX_SUGGESTIONS)
+                              : []
+                          }
+                          getKey={(invItem) => invItem._id || invItem.id || invItem.name}
+                          onSelect={(invItem) => selectInventoryItem(index, invItem)}
+                          listLabel="Inventory items"
+                          itemClassName="p-2.5"
+                          renderItem={(invItem) => (
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="font-medium truncate">{invItem.name}</div>
+                                <div className="text-xs text-muted-foreground truncate">
+                                  {invItem.category || "Uncategorized"} · Stock: {invItem.quantity ?? 0}
+                                </div>
+                              </div>
+                              <div className="text-xs text-muted-foreground whitespace-nowrap">
+                                {formatCurrency(invItem.unitCost || 0)}
+                              </div>
                             </div>
-                          );
-                        })()}
+                          )}
+                        >
+                          <Input
+                            placeholder="Description *"
+                            value={it.description}
+                            onChange={(e) => {
+                              updateItem(index, "description", e.target.value);
+                              setShowSuggestions((prev) => ({ ...prev, [index]: true }));
+                            }}
+                            onFocus={() => setShowSuggestions((prev) => ({ ...prev, [index]: true }))}
+                            autoComplete="off"
+                          />
+                        </SuggestionPopover>
                       </div>
                       <div className="col-span-6 sm:col-span-3">
                         <Input

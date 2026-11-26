@@ -26,6 +26,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { draftTotals, lineDraftFromJobItem, lineInput } from "@/components/billing/lineDraft";
 import { describeArea, gstByRate, priceLine } from "@/lib/billing";
 import { formatINR } from "@/lib/format";
+import { CustomerSearch, customerIdOf, type CustomerOption } from "@/components/customers/CustomerSearch";
 
 interface JobInvoiceDialogProps {
   children: React.ReactNode;
@@ -39,11 +40,14 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
   const [loading, setLoading] = useState(false);
   // One save at a time: a second click or Enter while saving creates nothing.
   const saving = useRef(false);
-  const [customers, setCustomers] = useState<any[]>([]);
+  // The job's customer comes populated from the create response, or as an id.
+  const jobCustomer: CustomerOption | null = job.customerId && typeof job.customerId === "object" ? job.customerId : null;
+  const jobCustomerId = typeof job.customerId === "string" ? job.customerId : customerIdOf(jobCustomer);
+  const [customer, setCustomer] = useState<CustomerOption | null>(jobCustomer);
   const { toast } = useToast();
 
   const [formData, setFormData] = useState({
-    customer_id: job.customerId || "",
+    customer_id: jobCustomerId,
     payment_terms: "Immediate",
     notes: "",
     po_reference: "",
@@ -61,27 +65,6 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
   const totals = draftTotals(drafts, { amount: designCharge, gstRate: designChargeGstRate }, 0, formData.isInterState);
   const rates = gstByRate([...totals.lines, totals.design]);
 
-  // Fetch customers when dialog opens
-  const fetchCustomers = async () => {
-    try {
-      const customersData = await apiClient.listAll('/customers', 'customers');
-      console.log('👥 Processed customers:', customersData);
-      setCustomers(customersData);
-      
-      // Set default customer if job has one
-      if (job.customerId) {
-        setFormData(prev => ({ ...prev, customer_id: job.customerId }));
-      }
-    } catch (error) {
-      console.error('Error fetching customers:', error);
-      setCustomers([]); // Set empty array on error
-      toast({
-        title: "Error",
-        description: "Failed to fetch customers",
-        variant: "destructive",
-      });
-    }
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -159,7 +142,7 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild onClick={fetchCustomers}>
+      <DialogTrigger asChild>
         {children}
       </DialogTrigger>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
@@ -177,20 +160,15 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
           {/* Customer Selection */}
           <div className="space-y-2">
             <Label htmlFor="customer">Customer</Label>
-            <Select value={formData.customer_id} onValueChange={(value) => 
-              setFormData(prev => ({ ...prev, customer_id: value }))
-            }>
-              <SelectTrigger>
-                <SelectValue placeholder="Select customer" />
-              </SelectTrigger>
-              <SelectContent>
-                {Array.isArray(customers) && customers.map((customer) => (
-                  <SelectItem key={customer.id} value={customer.id}>
-                    {customer.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <CustomerSearch
+              id="customer"
+              value={formData.customer_id}
+              customer={customer}
+              onSelect={(c) => {
+                setCustomer(c);
+                setFormData(prev => ({ ...prev, customer_id: customerIdOf(c) }));
+              }}
+            />
           </div>
 
           {/* Additional Fields */}

@@ -21,6 +21,9 @@ export const BASE_URL: string =
       })()
     : LOCAL_API);
 
+// The server makes a PDF in well under a second; this is only for a stalled connection.
+const PDF_TIMEOUT_MS = 45_000;
+
 interface ApiResponse<T = any> {
   status: 'success' | 'error';
   message?: string;
@@ -76,6 +79,9 @@ class ApiClient {
       }
 
       if (!response.ok) {
+        if (response.status === 402 && (data as any).code === 'SUBSCRIPTION_EXPIRED') {
+          window.dispatchEvent(new Event('subscription:expired'));
+        }
         // The session ended (token expired or the login was removed): sign out
         // everywhere instead of failing every request with the same error.
         if (response.status === 401 && currentToken && !endpoint.startsWith('/auth/') && !endpoint.startsWith('/portal/')) {
@@ -602,12 +608,35 @@ class ApiClient {
    * A server-made PDF (invoice, quotation, purchase bill), fetched fresh so it
    * always shows the document as last saved. `what` names it in errors.
    */
-  private async fetchPdfFile(path: string, fallbackName: string, what: string): Promise<PdfFile> {
+  private async fetchPdfFile(path: string, fallbackName: string, what: string, signal?: AbortSignal): Promise<PdfFile> {
     const token = localStorage.getItem('token');
-    const response = await fetch(`${this.baseURL}${path}`, {
-      method: 'GET',
-      headers: { 'Authorization': `Bearer ${token}` },
-    });
+    // A stalled connection must not leave a Print or Download spinning forever.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'TimeoutError')), PDF_TIMEOUT_MS);
+    const onAbort = () => controller.abort(signal?.reason);
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      return await this.readPdfResponse(
+        await fetch(`${this.baseURL}${path}`, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${token}` },
+          signal: controller.signal,
+        }),
+        fallbackName,
+        what
+      );
+    } catch (error) {
+      if (signal?.aborted) throw new DOMException(`The ${what} PDF was cancelled`, 'AbortError');
+      if (controller.signal.aborted) throw new Error(`The ${what} PDF took too long to arrive. Check the connection and try again.`);
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    }
+  }
+
+  private async readPdfResponse(response: Response, fallbackName: string, what: string): Promise<PdfFile> {
     if (!response.ok) {
       const contentType = response.headers.get('content-type');
       if (contentType && contentType.includes('application/json')) {
@@ -623,8 +652,8 @@ class ApiClient {
     return { blob, filename: match?.[1] || fallbackName };
   }
 
-  getPurchaseBillPdfFile(billId: string, billNumber?: string): Promise<PdfFile> {
-    return this.fetchPdfFile(`/purchase-bills/${billId}/pdf`, `PurchaseBill_${billNumber || billId}.pdf`, 'purchase bill');
+  getPurchaseBillPdfFile(billId: string, billNumber?: string, signal?: AbortSignal): Promise<PdfFile> {
+    return this.fetchPdfFile(`/purchase-bills/${billId}/pdf`, `PurchaseBill_${billNumber || billId}.pdf`, 'purchase bill', signal);
   }
 
   /** Saves the purchase bill PDF. Only ever called from an explicit Download action. */
@@ -685,8 +714,8 @@ class ApiClient {
   }
 
   // Quotation Management
-  getQuotationPdfFile(id: string, quotationNumber?: string): Promise<PdfFile> {
-    return this.fetchPdfFile(`/quotations/${id}/pdf`, `Quotation_${quotationNumber || id}.pdf`, 'quotation');
+  getQuotationPdfFile(id: string, quotationNumber?: string, signal?: AbortSignal): Promise<PdfFile> {
+    return this.fetchPdfFile(`/quotations/${id}/pdf`, `Quotation_${quotationNumber || id}.pdf`, 'quotation', signal);
   }
 
   /** Saves the quotation PDF. Only ever called from an explicit Download action. */
@@ -833,8 +862,8 @@ class ApiClient {
   }
 
   // Invoice PDF: one file, from the server, for download, print and sending.
-  getInvoicePdfFile(invoiceId: string): Promise<PdfFile> {
-    return this.fetchPdfFile(`/invoices/${invoiceId}/pdf`, `Invoice_${invoiceId}.pdf`, 'invoice');
+  getInvoicePdfFile(invoiceId: string, signal?: AbortSignal): Promise<PdfFile> {
+    return this.fetchPdfFile(`/invoices/${invoiceId}/pdf`, `Invoice_${invoiceId}.pdf`, 'invoice', signal);
   }
 
   async downloadInvoicePDF(invoiceId: string) {

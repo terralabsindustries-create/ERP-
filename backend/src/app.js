@@ -124,6 +124,10 @@ app.use('/api', (req, res, next) => {
   });
 });
 
+// Enforce the business-wide entitlement on every ERP API, including routes
+// that do not use moduleGuard. Billing and account recovery remain available.
+app.use('/api', require('./middleware/requireSubscription').requireSubscription);
+
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/proof-share', require('./routes/proofShare'));
 

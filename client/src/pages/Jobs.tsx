@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import { StatCard } from "@/components/common/StatTile";
 import { useSearchParams } from "react-router-dom";
 import { JobStatusBadge, PriorityBadge } from "@/components/jobs/JobStatusBadge";
-import { dueState, STAGES } from "@/lib/printWorkflow";
+import { dueState, formatINR, STAGES } from "@/lib/printWorkflow";
+import { invoiceState } from "@/lib/invoiceStatus";
 import {
   Plus,
   Search,
@@ -17,6 +18,7 @@ import {
   Edit,
   Trash2,
   UserPlus,
+  Eye,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,11 +42,23 @@ import { CreateTaskDialog } from "@/components/staff/CreateTaskDialog";
 import { UpdateStatusDialog } from "@/components/jobs/UpdateStatusDialog";
 import { AdvancedCreateInvoiceDialog } from "@/components/invoices/AdvancedCreateInvoiceDialog";
 import { EditInvoiceDialog } from "@/components/invoices/EditInvoiceDialog";
+import { ViewInvoiceDialog } from "@/components/invoices/ViewInvoiceDialog";
 import { CreateQuotationDialog } from "@/components/quotations/CreateQuotationDialog";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-import { ConfirmDialog } from "@/components/data";
+import { ConfirmDialog, StatusPill } from "@/components/data";
+
+/** An invoice a job ticket is billed on, as GET /api/jobs returns it (never a cancelled one). */
+type JobInvoice = {
+  _id: string;
+  invoiceNumber: string;
+  totalAmount?: number;
+  status: string;
+  paymentStatus: string;
+  balanceAmount?: number;
+  dueDate?: string;
+};
 
 export default function Jobs() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -65,6 +79,10 @@ export default function Jobs() {
   const [updateStatusDialog, setUpdateStatusDialog] = useState({ open: false, jobId: "", currentStatus: "" });
   const [showInvoiceDialog, setShowInvoiceDialog] = useState(false);
   const [selectedJob, setSelectedJob] = useState<any>(null);
+  // "Create another invoice" on a billed job: billing it in parts, on purpose.
+  const [additionalInvoice, setAdditionalInvoice] = useState(false);
+  // The invoice opened from a job's row (View invoice).
+  const [viewingInvoice, setViewingInvoice] = useState<JobInvoice | null>(null);
   const [quotationJob, setQuotationJob] = useState<any>(null);
   const [showQuotationDialog, setShowQuotationDialog] = useState(false);
   const [invoiceToEdit, setInvoiceToEdit] = useState<any>(null);
@@ -76,6 +94,8 @@ export default function Jobs() {
   // A login may see job tickets without being able to change them (e.g. the
   // accountant, who bills them); only the actions it holds are offered.
   const canInvoice = hasPermission("Invoicing: Create & Edit");
+  // Reading an invoice is open to the same logins as the server allows (app.js).
+  const canViewInvoice = canInvoice || ["Invoicing", "Invoicing (View No GST)", "Payments", "Accounts"].some((p) => hasPermission(p));
   const canQuote = hasPermission("Quotations: Create & Edit");
   const canCreateJob = hasPermission("Jobs: Create & Edit");
   const canChangeStatus = hasPermission("Jobs: Change Status");
@@ -167,8 +187,9 @@ export default function Jobs() {
     }
   };
 
-  const handleGenerateInvoice = (job: any) => {
+  const handleGenerateInvoice = (job: any, additional = false) => {
     setSelectedJob(job);
+    setAdditionalInvoice(additional);
     setShowInvoiceDialog(true);
   };
 
@@ -232,6 +253,9 @@ export default function Jobs() {
   const activeJobs = jobs.filter(job => !["completed", "delivered", "cancelled"].includes(job.status)).length;
   const completedJobs = jobs.filter(job => ["completed", "delivered"].includes(job.status)).length;
   // What a job was billed for (its invoices, incl. GST); the estimate until it is billed.
+  // job.invoices holds the job's non-cancelled invoices only (GET /api/jobs), so
+  // a job is billed as soon as it has one, whatever its payment state.
+  const isBilled = (job: { invoices?: JobInvoice[] }) => (job.invoices?.length || 0) > 0;
   const billedOf = (job: any) => (job.invoices || []).reduce((sum: number, inv: any) => sum + (inv.totalAmount || 0), 0);
   const estimateOf = (job: any) => job.estimated_cost || job.estimatedCost || 0;
   const totalRevenue = jobs.reduce((sum, job) => sum + billedOf(job), 0);
@@ -415,8 +439,27 @@ export default function Jobs() {
                         </div>
                       </td>
                       <td className="px-4 py-3 text-right font-medium tabular-nums">
-                        {job.invoices?.length > 0 ? (
-                          formatCurrency(Math.round(billedOf(job)))
+                        {isBilled(job) ? (
+                          <div className="flex flex-col items-end gap-1">
+                            <span>{formatINR(billedOf(job))}</span>
+                            {/* Each invoice the job is billed on, with how much of it is paid. */}
+                            {(job.invoices as JobInvoice[]).map((inv) => {
+                              const st = invoiceState(inv);
+                              return (
+                                <button
+                                  key={inv._id}
+                                  type="button"
+                                  disabled={!canViewInvoice}
+                                  className="group inline-flex items-center gap-1.5 text-xs font-normal disabled:cursor-default"
+                                  onClick={() => setViewingInvoice(inv)}
+                                  title={`View invoice ${inv.invoiceNumber} — ${formatINR(inv.totalAmount || 0)}`}
+                                >
+                                  <span className="font-mono text-muted-foreground group-hover:text-foreground group-hover:underline">{inv.invoiceNumber}</span>
+                                  <StatusPill tone={st.tone}>{st.label}</StatusPill>
+                                </button>
+                              );
+                            })}
+                          </div>
                         ) : (
                           <div className="flex flex-col items-end gap-1">
                             {estimateOf(job) > 0 && (
@@ -441,7 +484,7 @@ export default function Jobs() {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        {(canInvoice || canQuote || canChangeStatus || canAssign || canDeleteJob) && (
+                        {(canInvoice || canViewInvoice || canQuote || canChangeStatus || canAssign || canDeleteJob) && (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="icon" className="h-8 w-8">
@@ -458,17 +501,32 @@ export default function Jobs() {
                                 Create quotation
                               </DropdownMenuItem>
                             )}
-                            {canInvoice && (
+                            {canViewInvoice && isBilled(job) && (
+                              <DropdownMenuItem onClick={() => setViewingInvoice(job.invoices[0])}>
+                                <Eye className="h-4 w-4" />
+                                View invoice
+                              </DropdownMenuItem>
+                            )}
+                            {canInvoice && isBilled(job) && (
                               <>
-                                <DropdownMenuItem onClick={() => handleGenerateInvoice(job)}>
-                                  <FileText className="h-4 w-4" />
-                                  {billedOf(job) > 0 ? "Create another invoice" : "Create invoice"}
-                                </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => handleEditInvoice(job)}>
                                   <FileEdit className="h-4 w-4" />
-                                  Edit Invoice
+                                  Edit invoice
                                 </DropdownMenuItem>
+                                {/* Billing a job in parts is allowed, but only on purpose. */}
+                                {job.status !== "cancelled" && (
+                                  <DropdownMenuItem onClick={() => handleGenerateInvoice(job, true)}>
+                                    <FileText className="h-4 w-4" />
+                                    Create another invoice
+                                  </DropdownMenuItem>
+                                )}
                               </>
+                            )}
+                            {canInvoice && !isBilled(job) && job.status !== "cancelled" && (
+                              <DropdownMenuItem onClick={() => handleGenerateInvoice(job)}>
+                                <FileText className="h-4 w-4" />
+                                Create invoice
+                              </DropdownMenuItem>
                             )}
                             {canChangeStatus && (
                               <DropdownMenuItem onClick={() => handleUpdateStatus(job.id)}>
@@ -548,6 +606,7 @@ export default function Jobs() {
             setShowInvoiceDialog(false);
           }}
           preselectedJob={selectedJob}
+          allowAdditionalInvoice={additionalInvoice}
           preselectedCustomer={{
             _id: selectedJob.customerId,
             name: selectedJob.customer,
@@ -574,6 +633,13 @@ export default function Jobs() {
           if (!open) setInvoiceToEdit(null);
         }}
         invoice={invoiceToEdit}
+        onInvoiceUpdated={fetchJobs}
+      />
+      {/* Payments, edits and cancellation made from here show on the job straight away. */}
+      <ViewInvoiceDialog
+        open={!!viewingInvoice}
+        onOpenChange={(open) => !open && setViewingInvoice(null)}
+        invoice={viewingInvoice as never}
         onInvoiceUpdated={fetchJobs}
       />
       <ConfirmDialog

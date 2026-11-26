@@ -129,7 +129,9 @@ router.get('/', protect, [
       .populate('createdBy', 'fullName')
       .populate({
         path: 'invoices',
-        select: '_id invoiceNumber items totalAmount status noGst',
+        // The Job Tickets screen shows the job's invoice: its number, amount and
+        // how much of it is paid.
+        select: '_id invoiceNumber items totalAmount status paymentStatus paidAmount balanceAmount dueDate noGst createdAt',
         // Cancelled invoices don't count, and No GST ones only for logins allowed to see them.
         match: { status: { $ne: 'cancelled' }, ...(userCan(req.user, 'Invoicing (View No GST)') ? {} : { noGst: { $ne: true } }) },
         options: { sort: { createdAt: -1 } }

@@ -82,38 +82,97 @@ interface PrintPage {
   heightMm: number;
 }
 
-/** Draws each page of the PDF to an image, at its own size. */
-async function renderPages(blob: Blob): Promise<PrintPage[]> {
-  const [pdfjs, worker] = await Promise.all([import("pdfjs-dist"), import("pdfjs-dist/build/pdf.worker.min.mjs?url")]);
-  pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
-  const pdf = await pdfjs.getDocument({ data: new Uint8Array(await blob.arrayBuffer()) }).promise;
+type PdfJs = typeof import("pdfjs-dist");
+type PdfWorker = InstanceType<PdfJs["PDFWorker"]>;
+
+/*
+  pdf.js is about 1.7 MB (500 KB compressed) and starts a worker thread. Loaded
+  on the Print click, that download and start-up came before anything else, so
+  the first print of a session waited for it — seconds on a shop's connection.
+  `preparePrinting` loads it ahead, when a screen that can print opens, and
+  every print then shares the one worker instead of starting a new one.
+*/
+let engine: Promise<{ pdfjs: PdfJs; worker: PdfWorker }> | null = null;
+
+function loadEngine() {
+  engine ||= Promise.all([import("pdfjs-dist"), import("pdfjs-dist/build/pdf.worker.min.mjs?url")])
+    .then(([pdfjs, workerUrl]) => {
+      pdfjs.GlobalWorkerOptions.workerSrc = workerUrl.default;
+      const worker = new pdfjs.PDFWorker();
+      return worker.promise.then(() => ({ pdfjs, worker }));
+    })
+    .catch((error) => {
+      engine = null; // try again on the next print
+      throw error;
+    });
+  return engine;
+}
+
+/**
+ * Gets printing ready in the background: call it when a screen with a Print
+ * action opens. Safe to call often; it does the work once per session, and
+ * does nothing on phones and in the desktop app, which print the PDF itself.
+ */
+export function preparePrinting(): void {
+  if (desktopBridge()?.printPdf || isMobileDevice()) return;
+  loadEngine().catch(() => undefined);
+}
+
+const abortError = () => new DOMException("Printing was cancelled", "AbortError");
+
+export const isAbortError = (error: unknown) => error instanceof DOMException && error.name === "AbortError";
+
+const encodePng = (canvas: HTMLCanvasElement) =>
+  new Promise<Blob>((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("The page could not be drawn for printing"))), "image/png")
+  );
+
+/**
+ * Draws each page of the PDF to an image, at its own size. A page's PNG is
+ * encoded (off the main thread) while the next page is drawn, so at most two
+ * page bitmaps exist at once.
+ */
+async function renderPages(blob: Blob, signal?: AbortSignal): Promise<PrintPage[]> {
+  const [{ pdfjs, worker }, data] = await Promise.all([loadEngine(), blob.arrayBuffer()]);
+  if (signal?.aborted) throw abortError();
+  const pdf = await pdfjs.getDocument({ data: new Uint8Array(data), worker }).promise;
   const pages: PrintPage[] = [];
+  const encodes: Promise<void>[] = [];
+  let encoding: Promise<void> = Promise.resolve();
   try {
     for (let n = 1; n <= pdf.numPages; n += 1) {
+      if (signal?.aborted) throw abortError();
       const page = await pdf.getPage(n);
       const size = page.getViewport({ scale: 1 });
       const viewport = page.getViewport({ scale: PRINT_DPI / 72 });
       const canvas = document.createElement("canvas");
       canvas.width = Math.ceil(viewport.width);
       canvas.height = Math.ceil(viewport.height);
-      const context = canvas.getContext("2d");
-      if (!context) throw new Error("This browser could not draw the invoice for printing");
+      const context = canvas.getContext("2d", { alpha: false });
+      if (!context) throw new Error("This browser could not draw the document for printing");
       context.fillStyle = "#ffffff";
       context.fillRect(0, 0, canvas.width, canvas.height);
-      await page.render({ canvasContext: context, viewport }).promise;
-      const image = await new Promise<Blob>((resolve, reject) =>
-        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("The invoice page could not be drawn"))), "image/png")
-      );
-      pages.push({ url: URL.createObjectURL(image), widthMm: size.width * MM_PER_POINT, heightMm: size.height * MM_PER_POINT });
-      // Let go of the 35 MB bitmap before drawing the next page.
-      canvas.width = 0;
-      canvas.height = 0;
+      await page.render({ canvasContext: context, viewport, intent: "print" }).promise;
       page.cleanup();
+      const index = n - 1;
+      const encoded = encodePng(canvas).then((image) => {
+        pages[index] = { url: URL.createObjectURL(image), widthMm: size.width * MM_PER_POINT, heightMm: size.height * MM_PER_POINT };
+        // Let go of the 35 MB bitmap.
+        canvas.width = 0;
+        canvas.height = 0;
+      });
+      encodes.push(encoded);
+      await encoding;
+      encoding = encoded;
     }
+    await encoding;
+    if (signal?.aborted) throw abortError();
   } catch (error) {
-    pages.forEach((p) => URL.revokeObjectURL(p.url));
+    await Promise.allSettled(encodes);
+    pages.forEach((p) => p && URL.revokeObjectURL(p.url));
     throw error;
   } finally {
+    // The shared worker stays; only this document is let go.
     await pdf.destroy();
   }
   return pages;
@@ -153,7 +212,7 @@ function clearLastPrint() {
   lastPrint = null;
 }
 
-function printInFrame(pages: PrintPage[], title: string): Promise<void> {
+function printInFrame(pages: PrintPage[], title: string, signal?: AbortSignal): Promise<void> {
   clearLastPrint();
   const frame = document.createElement("iframe");
   frame.title = title;
@@ -164,20 +223,34 @@ function printInFrame(pages: PrintPage[], title: string): Promise<void> {
   lastPrint = current;
 
   return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error("The invoice did not load for printing")), 20000);
-    frame.onload = async () => {
+    // Settled once: a frame that loads after the timeout or a cancel must not
+    // open the print dialog after all.
+    let settled = false;
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
       window.clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onAbort = () => finish(abortError());
+    const timer = window.setTimeout(() => finish(new Error("The document did not load for printing")), 20000);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    frame.onload = async () => {
       try {
         const win = frame.contentWindow;
         const doc = frame.contentDocument;
-        if (!win || !doc) throw new Error("The invoice could not be opened for printing");
+        if (!win || !doc) throw new Error("The document could not be opened for printing");
         await Promise.all(Array.from(doc.images).map((img) => img.decode().catch(() => undefined)));
+        if (settled) return;
         win.addEventListener("afterprint", () => setTimeout(() => lastPrint === current && clearLastPrint(), 1000));
         win.focus();
+        // Chrome holds the page here until the print dialog is closed.
         win.print();
-        resolve();
+        finish();
       } catch (error) {
-        reject(error);
+        finish(error);
       }
     };
     frame.srcdoc = printSheet(pages, title);
@@ -185,22 +258,33 @@ function printInFrame(pages: PrintPage[], title: string): Promise<void> {
   });
 }
 
+export interface PrintOptions {
+  /** Aborting it (e.g. the dialog that started the print was closed) stops the print before its dialog opens. */
+  signal?: AbortSignal;
+}
+
 /**
- * Prints the PDF that `load` fetches.
+ * Prints the PDF that `load` fetches (or has already fetched).
  *
  * Call it straight from the click handler, before anything is awaited: where
  * the PDF has to open in a new tab, the tab is opened at once, while the
  * browser still counts it as the user's click (a tab opened after the download
  * would be blocked as a pop-up), and filled when the file arrives.
+ *
+ * A cancelled print rejects with an AbortError (see `isAbortError`); nothing
+ * is printed, opened or downloaded.
  */
-export async function printPdf(load: () => Promise<PdfFile>): Promise<PrintOutcome> {
+export async function printPdf(load: () => Promise<PdfFile>, { signal }: PrintOptions = {}): Promise<PrintOutcome> {
   const desktop = desktopBridge();
   const mode = desktop?.printPdf ? "window" : isMobileDevice() ? "tab" : "frame";
+  // pdf.js loads alongside the PDF rather than after it.
+  if (mode === "frame") loadEngine().catch(() => undefined);
   const tab = mode === "tab" ? window.open("", "_blank") : null;
 
   let file: PdfFile;
   try {
     file = await load();
+    if (signal?.aborted) throw abortError();
   } catch (error) {
     tab?.close();
     throw error;
@@ -223,11 +307,27 @@ export async function printPdf(load: () => Promise<PdfFile>): Promise<PrintOutco
   }
 
   try {
-    await printInFrame(await renderPages(file.blob), file.filename.replace(/\.pdf$/i, ""));
+    await printInFrame(await renderPages(file.blob, signal), file.filename.replace(/\.pdf$/i, ""), signal);
     return "dialog";
-  } catch {
+  } catch (error) {
     clearLastPrint();
+    if (isAbortError(error) || signal?.aborted) throw abortError();
     saveFile(file);
     return "downloaded";
   }
+}
+
+/**
+ * `preparePrinting` once the browser is idle: for pages whose rows have a
+ * Print action, so loading it never competes with the page's own loading.
+ * Returns a cleanup for useEffect.
+ */
+export function preparePrintingWhenIdle(): () => void {
+  const idle = (globalThis as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }).requestIdleCallback;
+  if (idle) {
+    const handle = idle(preparePrinting, { timeout: 5000 });
+    return () => (globalThis as { cancelIdleCallback?: (h: number) => void }).cancelIdleCallback?.(handle);
+  }
+  const timer = setTimeout(preparePrinting, 2000);
+  return () => clearTimeout(timer);
 }

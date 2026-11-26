@@ -23,6 +23,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertTriangle, Plus, Trash2, Calculator } from "lucide-react";
 import apiClient from "@/lib/apiClient";
 import { jobFitsCustomer } from "@/lib/invoiceJob";
+import { CustomerSearch, customerIdOf, type CustomerOption } from "@/components/customers/CustomerSearch";
 import { useToast } from "@/hooks/use-toast";
 import { localDate } from "@/lib/format";
 import { BillingTotals } from "@/components/billing/BillingTotals";
@@ -86,7 +87,8 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
   // One save at a time: a second click or Enter while saving changes nothing.
   const saving = useRef(false);
   const [saved, setSaved] = useState<SavedInvoice | null>(null);
-  const [customers, setCustomers] = useState<any[]>([]);
+  // The customer picked here; until then the invoice's own (populated) customer is shown.
+  const [customer, setCustomer] = useState<CustomerOption | null>(null);
   const [jobs, setJobs] = useState<any[]>([]);
   const [formData, setFormData] = useState({
     customerId: "",
@@ -131,19 +133,9 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
 
   useEffect(() => {
     if (open) {
-      fetchCustomers();
       fetchJobs();
     }
   }, [open]);
-
-  const fetchCustomers = async () => {
-    try {
-      const data = await apiClient.listAll('/customers', 'customers');
-      setCustomers(data);
-    } catch (error) {
-      console.error('Error fetching customers:', error);
-    }
-  };
 
   const fetchJobs = async () => {
     try {
@@ -206,7 +198,12 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
     try {
       const response = (await apiClient.updateInvoice(invoice.id || (invoice._id as string), {
         customerId: formData.customerId,
-        jobId: formData.jobId === 'no-job' ? null : formData.jobId,
+        // Sent only when the job or the customer changed here. An invoice whose
+        // job ticket was deleted opens with no job picked; saving it otherwise
+        // unchanged must not take its job (and the job's title) off.
+        jobId: formData.jobId === (invoice.jobId?._id || "") && formData.customerId === (invoice.customerId?._id || String(invoice.customerId || ""))
+          ? undefined
+          : formData.jobId === 'no-job' ? null : formData.jobId,
         invoiceDate: formData.invoiceDate,
         dueDate: formData.dueDate,
         items: formData.items.map((l) => ({ itemName: l.itemName.trim(), description: l.description.trim(), hsnCode: l.hsnCode.trim(), ...lineInput(l) })),
@@ -259,29 +256,29 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="customerId">Customer</Label>
-              <Select
+              <CustomerSearch
+                id="customerId"
                 value={formData.customerId}
-                // A job ticket of the previous customer can't stay on the invoice.
-                onValueChange={(value) => setFormData(prev => ({ ...prev, customerId: value, jobId: jobFitsCustomer(jobs, prev.jobId, value) ? prev.jobId : "no-job" }))}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select customer" />
-                </SelectTrigger>
-                <SelectContent>
-                  {customers.map((customer) => (
-                    <SelectItem key={customer._id} value={customer._id}>
-                      {customer.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                customer={customer || (invoice?.customerId as CustomerOption | undefined)}
+                onSelect={(c) => {
+                  setCustomer(c);
+                  const id = customerIdOf(c);
+                  // A job ticket of the previous customer can't stay on the invoice.
+                  setFormData(prev => ({ ...prev, customerId: id, jobId: jobFitsCustomer(jobs, prev.jobId, id) ? prev.jobId : "no-job" }));
+                }}
+              />
             </div>
 
             <div className="space-y-2">
               <Label htmlFor="jobId">Job (Optional)</Label>
               <Select
                 value={formData.jobId}
-                onValueChange={(value) => setFormData(prev => ({ ...prev, jobId: value }))}
+                // Radix calls this with "" when the controlled value has no
+                // mounted option yet (the job list is still loading, or the
+                // dropdown was never opened). Taking that "" would read as a
+                // change and unlink the invoice from its job ticket on save,
+                // so only a real pick counts. "No job" is picked as "no-job".
+                onValueChange={(value) => { if (value) setFormData(prev => ({ ...prev, jobId: value })); }}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select job" />

@@ -93,14 +93,8 @@ function invoiceDeltas(before, after) {
     .filter(({ delta }) => Math.abs(delta) >= HALF_PAISA);
 }
 
-/** Payment status and invoice status that follow from a paid amount. */
-function paymentState(invoice, paidAmount) {
-  const total = round2(invoice.totalAmount);
-  const paymentStatus = paidAmount >= total ? 'paid' : paidAmount > 0 ? 'partial' : 'pending';
-  const fixed = ['draft', 'cancelled', 'refunded'].includes(invoice.status);
-  const status = fixed ? invoice.status : paymentStatus === 'paid' ? 'paid' : invoice.status === 'paid' ? 'sent' : invoice.status;
-  return { paidAmount, balanceAmount: round2(total - paidAmount), paymentStatus, status };
-}
+/** Payment status and invoice status that follow from a paid amount (one rule: Invoice.paymentStateFor). */
+const paymentState = (invoice, paidAmount) => Invoice.paymentStateFor(invoice, paidAmount);
 
 /**
  * Moves an invoice's paid amount by `delta`. An increase needs an issued

@@ -406,8 +406,40 @@ invoiceSchema.pre('save', function(next) {
   // 0 instead of a float residue like -0.19999999999999998.
   this.balanceAmount = round2(this.totalAmount - this.paidAmount);
 
+  // The payment state always follows the money: an invoice is never saved as
+  // paid while something is still due, nor left unpaid once it is settled.
+  const { paymentStatus, status } = invoiceSchema.statics.paymentStateFor(this, this.paidAmount);
+  this.paymentStatus = paymentStatus;
+  this.status = status;
+
   next();
 });
+
+/**
+ * Payment status and invoice status that follow from a paid amount — the one
+ * rule every write uses (this model's pre-save hook and services/paymentLedger).
+ *
+ * - paid: the total is more than 0 and the paid amount covers it. A ₹0 invoice
+ *   is never "paid" by itself: nothing was received.
+ * - partial: something was received, but not all of it.
+ * - pending: nothing received; "overdue" set by payment reminders is kept.
+ *
+ * Draft, cancelled and refunded invoices keep their status; otherwise the
+ * status reads "paid" exactly while the payment status does.
+ */
+invoiceSchema.statics.paymentStateFor = function (invoice, paidAmount) {
+  const round2 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+  const total = round2(invoice.totalAmount);
+  const paid = round2(paidAmount);
+  const paymentStatus = total > 0 && paid >= total - 0.005
+    ? 'paid'
+    : paid >= 0.005 ? 'partial' : invoice.paymentStatus === 'overdue' ? 'overdue' : 'pending';
+  const fixed = ['draft', 'cancelled', 'refunded'].includes(invoice.status);
+  const status = fixed ? invoice.status
+    : paymentStatus === 'paid' ? 'paid'
+      : invoice.status === 'paid' ? 'sent' : invoice.status;
+  return { paidAmount: paid, balanceAmount: round2(total - paid), paymentStatus, status };
+};
 
 /**
  * The next invoice number of a business: INV-YYYYMM-####, counting up within

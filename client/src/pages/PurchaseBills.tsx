@@ -11,7 +11,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useDebounced } from "@/hooks/useDebounced";
 import apiClient from "@/lib/apiClient";
-import { printOutcomeMessage } from "@/lib/printPdf";
+import { preparePrintingWhenIdle, printOutcomeMessage } from "@/lib/printPdf";
 import { daysUntil, dueLabel, fmtDate, formatINR } from "@/lib/format";
 
 interface Bill {
@@ -58,6 +58,8 @@ const statusOf = (b: Bill): { label: string; tone: PillTone } =>
         : { label: "Unpaid", tone: "info" };
 
 export default function PurchaseBills() {
+  // Rows have Print: load printing in the background so the first print does not wait for it.
+  useEffect(preparePrintingWhenIdle, []);
   const { hasPermission } = useAuth();
   const { toast } = useToast();
   const [params, setParams] = useSearchParams();

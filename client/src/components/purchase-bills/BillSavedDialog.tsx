@@ -1,8 +1,6 @@
-import { DocumentSavedDialog } from "@/components/documents/DocumentSavedDialog";
-import { useToast } from "@/hooks/use-toast";
+import { DocumentSavedDialog, type DocumentDetail } from "@/components/documents/DocumentSavedDialog";
 import apiClient from "@/lib/apiClient";
 import { formatINR } from "@/lib/format";
-import { printOutcomeMessage } from "@/lib/printPdf";
 
 export interface SavedBill {
   _id: string;
@@ -18,22 +16,25 @@ export interface SavedBill {
  * a customer. Nothing happens until an action is chosen.
  */
 export function BillSavedDialog({ bill, title, onClose }: { bill: SavedBill | null; title?: string; onClose: () => void }) {
-  const { toast } = useToast();
   if (!bill?._id) return null;
   const number = bill.billNumber || "Purchase bill";
   const supplier = bill.vendorName || (typeof bill.vendorId === "object" ? bill.vendorId?.name : undefined);
+
+  const details: DocumentDetail[] = [
+    { label: "Bill no.", value: number, mono: true },
+    ...(supplier ? [{ label: "Supplier", value: supplier }] : []),
+    ...(bill.totalAmount !== undefined ? [{ label: "Amount", value: formatINR(bill.totalAmount), strong: true }] : [])
+  ];
 
   return (
     <DocumentSavedDialog
       open
       onOpenChange={(open) => !open && onClose()}
       title={title || `${number} saved`}
-      description={[number, supplier, bill.totalAmount !== undefined ? formatINR(bill.totalAmount) : null].filter(Boolean).join(" · ")}
-      onPrint={async () => {
-        const note = printOutcomeMessage(await apiClient.printPurchaseBillPDF(bill._id, bill.billNumber), number);
-        if (note) toast(note);
-      }}
-      onDownload={() => apiClient.downloadPurchaseBillPDF(bill._id, bill.billNumber)}
+      details={details}
+      documentKey={bill._id}
+      documentName={number}
+      loadPdf={(signal) => apiClient.getPurchaseBillPdfFile(bill._id, bill.billNumber, signal)}
     />
   );
 }

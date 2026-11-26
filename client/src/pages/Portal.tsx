@@ -11,6 +11,7 @@ import { EmptyState } from "@/components/common/EmptyState";
 import { useAuth } from "@/contexts/AuthContext";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
+import { CustomerSearch, type CustomerOption } from "@/components/customers/CustomerSearch";
 
 interface PortalLink {
   _id: string;
@@ -23,13 +24,6 @@ interface PortalLink {
   lastUsedAt?: string;
   useCount: number;
   state: "active" | "expired" | "revoked";
-}
-
-interface CustomerOption {
-  _id: string;
-  name: string;
-  email?: string;
-  company?: string;
 }
 
 const STATE_BADGE = {
@@ -46,7 +40,7 @@ const Portal = () => {
   const { hasPermission } = useAuth();
   const canManage = hasPermission("Customer Portal: Manage Access");
   const { toast } = useToast();
-  const [customers, setCustomers] = useState<CustomerOption[]>([]);
+  const [selected, setSelected] = useState<CustomerOption | null>(null);
   const [links, setLinks] = useState<PortalLink[]>([]);
   const [loading, setLoading] = useState(true);
   const [customerId, setCustomerId] = useState("");
@@ -69,13 +63,7 @@ const Portal = () => {
 
   useEffect(() => {
     loadLinks();
-    apiClient
-      .getCustomer({ limit: 100, status: "active" })
-      .then((res: { customers?: CustomerOption[] }) => setCustomers(res?.customers || []))
-      .catch(() => setCustomers([]));
   }, [loadLinks]);
-
-  const selected = customers.find((c) => c._id === customerId);
 
   const createLink = async () => {
     if (!customerId) return;
@@ -138,19 +126,12 @@ const Portal = () => {
           <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_auto] lg:items-end">
             <div className="space-y-1.5">
               <Label htmlFor="portal-customer">Customer</Label>
-              <Select value={customerId} onValueChange={(v) => { setCustomerId(v); setIssued(null); }}>
-                <SelectTrigger id="portal-customer">
-                  <SelectValue placeholder="Choose a customer" />
-                </SelectTrigger>
-                <SelectContent>
-                  {customers.map((c) => (
-                    <SelectItem key={c._id} value={c._id}>
-                      {c.name}
-                      {c.company ? ` — ${c.company}` : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <CustomerSearch
+                id="portal-customer"
+                value={customerId}
+                customer={selected}
+                onSelect={(c) => { setSelected(c); setCustomerId(c._id); setIssued(null); }}
+              />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="portal-days">Link works for</Label>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { format } from "date-fns";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -7,8 +7,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { EditorSection, EditorSheet } from "@/components/users/EditorSheet";
-import { RecordPicker, type PickerOption } from "@/components/delivery/RecordPicker";
-import { fmtPhone, isPhone } from "@/components/delivery/deliveryMeta";
+import { CustomerSearch, type CustomerOption as CustomerRecord } from "@/components/customers/CustomerSearch";
+import { isPhone } from "@/components/delivery/deliveryMeta";
 import { useToast } from "@/hooks/use-toast";
 import { formatINR } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -107,8 +107,8 @@ export function RushOrderEditor({ open, onOpenChange, order, onSaved }: { open: 
   const { toast } = useToast();
   const [form, setForm] = useState<Form>(emptyForm);
   const [errors, setErrors] = useState<Errors>({});
-  const [customers, setCustomers] = useState<CustomerOption[]>([]);
-  const [customersLoading, setCustomersLoading] = useState(false);
+  // The saved customer picked here; an order being edited shows its own linked customer.
+  const [picked, setPicked] = useState<CustomerRecord | null>(null);
   const [saving, setSaving] = useState(false);
   const editing = !!order;
 
@@ -116,27 +116,16 @@ export function RushOrderEditor({ open, onOpenChange, order, onSaved }: { open: 
     if (!open) return;
     setForm(order ? formFrom(order) : emptyForm());
     setErrors({});
-    setCustomersLoading(true);
-    rushOrdersApi
-      .customers()
-      .then(setCustomers)
-      .catch(() => setCustomers([]))
-      .finally(() => setCustomersLoading(false));
   }, [open, order]);
-
-  const options: PickerOption[] = useMemo(
-    () => customers.map((c) => ({ id: c._id, title: c.name, subtitle: [c.company, fmtPhone(c.phone)].filter(Boolean).join(" · "), keywords: [c.phone, c.email].filter(Boolean).join(" ") })),
-    [customers]
-  );
 
   const set = <K extends keyof Form>(key: K, value: Form[K]) => {
     setForm((f) => ({ ...f, [key]: value }));
     if (errors[key]) setErrors((e) => ({ ...e, [key]: undefined }));
   };
 
-  const pickCustomer = (id: string) => {
-    const c = customers.find((x) => x._id === id);
-    setForm((f) => ({ ...f, customerId: id, customerName: c?.name || f.customerName, customerPhone: c?.phone || f.customerPhone, customerEmail: c?.email || f.customerEmail }));
+  const pickCustomer = (c: CustomerOption) => {
+    setPicked(c as CustomerRecord);
+    setForm((f) => ({ ...f, customerId: c._id, customerName: c.name || f.customerName, customerPhone: c.phone || f.customerPhone, customerEmail: c.email || f.customerEmail }));
     setErrors((e) => ({ ...e, customerName: undefined, customerPhone: undefined }));
   };
 
@@ -183,16 +172,13 @@ export function RushOrderEditor({ open, onOpenChange, order, onSaved }: { open: 
       }
     >
       <EditorSection title="Customer" description="Pick a saved customer, or just type a name and phone number.">
-        <RecordPicker
+        <CustomerSearch
           id="ro-customer-pick"
-          options={options}
           value={form.customerId}
-          onChange={(id) => (id ? pickCustomer(id) : set("customerId", ""))}
-          loading={customersLoading}
+          customer={picked || (order && typeof order.customerId === "object" ? (order.customerId as CustomerRecord) : null)}
+          onSelect={pickCustomer}
+          onClear={() => set("customerId", "")}
           placeholder="Search saved customers (optional)"
-          emptyText="No saved customer matches — type the details below"
-          allowClear
-          searchFirst
         />
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Name" htmlFor="ro-name" error={errors.customerName}>

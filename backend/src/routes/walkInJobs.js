@@ -536,6 +536,12 @@ router.put('/:id/invoice', protect, [
     job.customerId = invoice.customerId;
     job.history.push(historyEntry(req, { event: 'billed', note: invoice.invoiceNumber }));
     await job.save();
+    // The invoice names the counter job it bills, as an invoice raised from a
+    // job ticket names that job, so the invoice list shows what it was for.
+    // Only the label is written: the invoice's totals are left as they are.
+    if (!invoice.jobId) {
+      await Invoice.updateOne({ _id: invoice._id }, { $set: { jobTitle: WalkInJob.invoiceTitle(job) } }, { timestamps: false });
+    }
 
     log(req, job, { action: 'Counter Job Billed', description: `Counter job ${job.jobNumber} was billed on ${invoice.invoiceNumber}`, severity: 'medium' });
 

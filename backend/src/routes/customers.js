@@ -26,6 +26,25 @@ const customerValidation = [
   body('customerType').optional({ values: 'falsy' }).isIn(Customer.schema.path('customerType').enumValues).withMessage('Choose walk-in, agency or another customer type'),
 ];
 
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * What a customer search matches: the typed text anywhere in the name, company,
+ * email or phone, ignoring case. The text is matched literally — "+91" or
+ * "(022)" are not regex syntax. A phone-like search also matches numbers saved
+ * with spaces, dashes or brackets between the digits ("9847000000" finds
+ * "98470 00000").
+ */
+function customerSearchFilter(search) {
+  const text = escapeRegex(search);
+  const or = ['name', 'company', 'email', 'phone'].map((field) => ({ [field]: { $regex: text, $options: 'i' } }));
+  const digits = search.replace(/\D/g, '');
+  if (digits.length >= 3 && /^[\d\s()+-]+$/.test(search)) {
+    or.push({ phone: { $regex: digits.split('').join('[\\s()+-]*') } });
+  }
+  return or;
+}
+
 // @route   GET /api/customers
 // @desc    Get all customers for the authenticated user
 // @access  Private
@@ -56,27 +75,41 @@ router.get('/', protect, [
     }
 
     if (search) {
-      query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } },
-        { phone: { $regex: search, $options: 'i' } },
-        { company: { $regex: search, $options: 'i' } }
-      ];
+      query.$or = customerSearchFilter(search);
     }
-    
+
     // Calculate pagination
     const skip = (page - 1) * limit;
-    
-    // Build sort object
-    const sort = {};
-    sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
-    
-    // Execute query
-    const customers = await Customer.find(query)
-      .populate('createdBy', 'fullName email')
-      .sort(sort)
-      .skip(skip)
-      .limit(parseInt(limit));
+
+    let customers;
+    if (search && !req.query.sortBy) {
+      // A search from a picker: names that start with what was typed first,
+      // then the rest alphabetically — so "ra" lists Rahul before Abra.
+      const ranked = await Customer.aggregate([
+        { $match: query },
+        {
+          $addFields: {
+            _prefix: { $cond: [{ $regexMatch: { input: { $ifNull: ['$name', ''] }, regex: `^${escapeRegex(search)}`, options: 'i' } }, 0, 1] },
+            _name: { $toLower: { $ifNull: ['$name', ''] } }
+          }
+        },
+        { $sort: { _prefix: 1, _name: 1, _id: 1 } },
+        { $skip: skip },
+        { $limit: parseInt(limit) },
+        { $project: { _id: 1 } }
+      ]);
+      const ids = ranked.map((r) => r._id);
+      const byId = new Map((await Customer.find({ _id: { $in: ids } }).populate('createdBy', 'fullName email')).map((c) => [String(c._id), c]));
+      customers = ids.map((id) => byId.get(String(id))).filter(Boolean);
+    } else {
+      const sort = {};
+      sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
+      customers = await Customer.find(query)
+        .populate('createdBy', 'fullName email')
+        .sort(sort)
+        .skip(skip)
+        .limit(parseInt(limit));
+    }
     
     // Get total count
     const totalCustomers = await Customer.countDocuments(query);

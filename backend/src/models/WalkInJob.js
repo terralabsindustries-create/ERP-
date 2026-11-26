@@ -259,6 +259,9 @@ walkInJobSchema.statics.getCounterStats = async function (scope) {
   };
 };
 
+/** How the invoice a counter job is billed on names it: "WI261124-001 · Wedding cards". */
+walkInJobSchema.statics.invoiceTitle = (job) => [job.jobNumber, job.description].filter(Boolean).join(' · ');
+
 const WalkInJob = mongoose.model('WalkInJob', walkInJobSchema);
 
 Object.assign(WalkInJob, { STATUSES, QUEUE_STATUSES, JOB_TYPES, PRIORITIES, COLOR_MODES, SIDES, FINISHING, PAYMENT_METHODS, TRANSITIONS });

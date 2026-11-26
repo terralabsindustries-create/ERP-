@@ -88,6 +88,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("auth:expired", onExpired);
   }, [toast]);
 
+  useEffect(() => {
+    const onPlanExpired = () => setUser((current) => current ? {
+      ...current,
+      subscription: { ...current.subscription, isActive: false, plan: current.subscription?.plan || 'free', status: 'expired' }
+    } : current);
+    window.addEventListener('subscription:expired', onPlanExpired);
+    return () => window.removeEventListener('subscription:expired', onPlanExpired);
+  }, []);
+
   const signIn = async (email: string, password: string) => {
     try {
       const response = await apiClient.login(email, password);

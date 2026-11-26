@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, Link2, UserRound, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { CustomerSearch, useCustomerRecord } from "@/components/customers/CustomerSearch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { EditorSection, EditorSheet } from "@/components/users/EditorSheet";
@@ -166,8 +165,9 @@ export function CounterJobEditor({
 }) {
   const { toast } = useToast();
   const [form, setForm] = useState<Form>(emptyForm);
-  const [customers, setCustomers] = useState<CustomerLite[]>([]);
-  const [pickerOpen, setPickerOpen] = useState(false);
+  // The saved customer last picked or matched by phone here.
+  const [picked, setPicked] = useState<CustomerLite | null>(null);
+  const [match, setMatch] = useState<CustomerLite | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -175,10 +175,6 @@ export function CounterJobEditor({
     if (!open) return;
     setForm(job ? fromJob(job) : emptyForm());
     setError("");
-    customersApi
-      .all()
-      .then(setCustomers)
-      .catch(() => setCustomers([]));
   }, [open, job]);
 
   const set = <K extends keyof Form>(key: K, value: Form[K]) => {
@@ -186,17 +182,30 @@ export function CounterJobEditor({
     setError("");
   };
 
-  const linked = customers.find((c) => c._id === form.customerId) || null;
-  // A customer already in the list with the phone typed, offered for linking.
-  const match = useMemo(() => {
-    const key = phoneKey(form.customerPhone);
-    if (form.customerId || key.length !== 10) return null;
-    return customers.find((c) => phoneKey(c.phone) === key) || null;
-  }, [customers, form.customerPhone, form.customerId]);
+  const linked = useCustomerRecord(form.customerId, [picked, match]) as CustomerLite | null;
+  // A saved customer with the phone typed, offered for linking.
+  const phone = phoneKey(form.customerPhone);
+  useEffect(() => {
+    if (form.customerId || phone.length !== 10) {
+      setMatch(null);
+      return;
+    }
+    let live = true;
+    const timer = window.setTimeout(() => {
+      customersApi
+        .findByPhone(phone)
+        .then((c) => live && setMatch(c))
+        .catch(() => live && setMatch(null));
+    }, 200);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+  }, [phone, form.customerId]);
 
   const link = (c: CustomerLite) => {
+    setPicked(c);
     setForm((f) => ({ ...f, customerId: c._id, customerName: c.name, customerPhone: c.phone ? fmtPhone(c.phone) : f.customerPhone, customerEmail: c.email || f.customerEmail }));
-    setPickerOpen(false);
     setError("");
   };
 
@@ -256,32 +265,9 @@ export function CounterJobEditor({
               </Button>
             </div>
           ) : (
-            <Popover open={pickerOpen} onOpenChange={setPickerOpen} modal>
-              <PopoverTrigger asChild>
-                <Button type="button" variant="outline" size="sm" disabled={!customers.length}>
-                  <UserRound />
-                  {customers.length ? "Pick an existing customer" : "No saved customers"}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-[min(22rem,calc(100vw-2rem))] p-0" align="start">
-                <Command>
-                  <CommandInput placeholder="Search name or phone" />
-                  <CommandList>
-                    <CommandEmpty>No customer found.</CommandEmpty>
-                    <CommandGroup>
-                      {customers.map((c) => (
-                        <CommandItem key={c._id} value={`${c.name} ${c.phone || ""} ${c._id}`} onSelect={() => link(c)}>
-                          <div className="min-w-0">
-                            <div className="truncate">{c.name}</div>
-                            {c.phone && <div className="truncate text-xs text-muted-foreground">{fmtPhone(c.phone)}</div>}
-                          </div>
-                        </CommandItem>
-                      ))}
-                    </CommandGroup>
-                  </CommandList>
-                </Command>
-              </PopoverContent>
-            </Popover>
+            <div className="min-w-0 flex-1">
+              <CustomerSearch id="cj-customer-pick" value="" onSelect={(c) => link(c as CustomerLite)} placeholder="Pick an existing customer — name or phone" />
+            </div>
           )}
         </div>
         <div className="grid gap-3 sm:grid-cols-2">

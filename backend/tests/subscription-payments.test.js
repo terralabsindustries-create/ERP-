@@ -14,6 +14,7 @@ const rzpClient = require('../src/services/razorpayClient');
 const svc = require('../src/services/subscriptionService');
 const { addCalendarMonthsIST, listPacks } = require('../src/config/subscriptionPlans');
 const SubscriptionPurchase = require('../src/models/SubscriptionPurchase');
+const User = require('../src/models/User');
 const RazorpayWebhookEvent = require('../src/models/RazorpayWebhookEvent');
 const Payment = require('../src/models/Payment');
 const AccountTransaction = require('../src/models/AccountTransaction');
@@ -77,6 +78,38 @@ beforeEach(async () => {
 });
 
 describe('plan catalog and orders', () => {
+  test('an expired business cannot use ERP APIs but can read billing and buy a plan', async () => {
+    await User.updateOne({ _id: org.admin._id }, { $set: {
+      'subscription.isActive': false,
+      'subscription.endDate': new Date(Date.now() - 1000)
+    } });
+    const denied = await get('/api/dashboard/stats', org.tokens.admin);
+    expect(denied.status).toBe(402);
+    expect(denied.body.code).toBe('SUBSCRIPTION_EXPIRED');
+    expect((await get('/api/dashboard/stats', org.tokens.staff1)).status).toBe(402);
+    expect((await get('/api/razorpay/plans', org.tokens.admin)).status).toBe(200);
+    expect((await get('/api/razorpay/subscription', org.tokens.admin)).status).toBe(200);
+    expect((await get('/api/auth/me', org.tokens.admin)).body.data.user.subscription.status).toBe('expired');
+    expect((await buyOrder(org.tokens.admin, 'M1')).status).toBe(200);
+    await User.updateOne({ _id: org.admin._id }, { $set: {
+      'subscription.isActive': true,
+      'subscription.endDate': new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+    } });
+  });
+
+  test('the plan and subscription routes used by the dashboard are available', async () => {
+    const [plans, subscription] = await Promise.all([
+      get('/api/razorpay/plans', org.tokens.admin),
+      get('/api/razorpay/subscription', org.tokens.admin)
+    ]);
+    expect(plans.status).toBe(200);
+    expect(plans.body).toMatchObject({ success: true, canPurchase: true });
+    expect(plans.body.packs).toHaveLength(4);
+    expect(subscription.status).toBe(200);
+    expect(subscription.body).toMatchObject({ success: true, canPurchase: true, purchases: [] });
+    expect(subscription.body.subscription).toEqual(expect.objectContaining({ isActive: expect.any(Boolean) }));
+  });
+
   test.each([['M1', 199900, 1], ['M3', 539700, 3], ['M6', 959400, 6], ['M12', 1678800, 12]])(
     '%s is charged %i paise for %i month(s), calculated by the server', async (packId, amount, months) => {
       const res = await buyOrder(org.tokens.admin, packId);
@@ -361,6 +394,9 @@ describe('renewal and calendar months', () => {
   });
 
   test('renewing after expiry starts from the payment time and never shortens access', async () => {
+    // An unexpired free trial would correctly remain active between the two
+    // historical purchases; this case isolates paid renewal after a lapse.
+    await User.updateOne({ _id: org.admin._id }, { $set: { 'subscription.isActive': false } });
     await settleAt('M1', ist('2026-01-31T10:00:00'));
     expect((await entitlement(org.admin)).endDate).toEqual(ist('2026-02-28T10:00:00'));
     const paid = new Date(Math.floor((Date.now() - 1000) / 1000) * 1000);
@@ -368,6 +404,7 @@ describe('renewal and calendar months', () => {
     const ent = await entitlement(org.admin);
     expect(ent.endDate).toEqual(addCalendarMonthsIST(paid, 1));
     expect(ent.startDate).toEqual(paid);
+    await User.updateOne({ _id: org.admin._id }, { $set: { 'subscription.isActive': true } });
   });
 
   test('a late webhook for an earlier payment lands in order and gives the same expiry', async () => {

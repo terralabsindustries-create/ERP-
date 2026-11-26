@@ -6,12 +6,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
+import { CustomerSearch, customerIdOf, type CustomerOption } from "@/components/customers/CustomerSearch";
 
 interface QuickCreateJobDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Reuses the caller's already-fetched customer list rather than fetching its own. */
-  customers: any[];
   /** Receives the newly created job, so a caller opening this inline can auto-select it. */
   onJobCreated: (job?: any) => void;
 }
@@ -24,13 +23,14 @@ interface QuickCreateJobDialogProps {
  * invoice from. Only `title` and `customerId` are actually required by the
  * API; everything else here is optional, matching the backend's own defaults.
  */
-export function QuickCreateJobDialog({ open, onOpenChange, customers, onJobCreated }: QuickCreateJobDialogProps) {
+export function QuickCreateJobDialog({ open, onOpenChange, onJobCreated }: QuickCreateJobDialogProps) {
   const [formData, setFormData] = useState({
     title: "",
     customerId: "",
     priority: "medium" as 'low' | 'medium' | 'high' | 'urgent',
     dueDate: "",
   });
+  const [customer, setCustomer] = useState<CustomerOption | null>(null);
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
 
@@ -65,7 +65,7 @@ export function QuickCreateJobDialog({ open, onOpenChange, customers, onJobCreat
       // already uses (from GET /jobs), rather than the populated `customerId`
       // object the create endpoint returns — so the new entry renders the same
       // as every other job in the dropdown.
-      const customerName = customers.find((c) => (c._id || c.id) === formData.customerId)?.name;
+      const customerName = customer && customerIdOf(customer) === formData.customerId ? customer.name : undefined;
       onJobCreated({ ...job, customer: customerName || job?.customerId?.name });
       onOpenChange(false);
       setFormData({ title: "", customerId: "", priority: "medium", dueDate: "" });
@@ -103,21 +103,15 @@ export function QuickCreateJobDialog({ open, onOpenChange, customers, onJobCreat
 
           <div className="space-y-2">
             <Label htmlFor="job-customer">Customer *</Label>
-            <Select
+            <CustomerSearch
+              id="job-customer"
               value={formData.customerId}
-              onValueChange={(value) => setFormData((prev) => ({ ...prev, customerId: value }))}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select customer" />
-              </SelectTrigger>
-              <SelectContent>
-                {customers.map((customer) => (
-                  <SelectItem key={customer._id || customer.id} value={customer._id || customer.id}>
-                    {customer.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              customer={customer}
+              onSelect={(c) => {
+                setCustomer(c);
+                setFormData((prev) => ({ ...prev, customerId: customerIdOf(c) }));
+              }}
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-4">

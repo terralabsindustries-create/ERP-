@@ -47,7 +47,7 @@ import {
   AlertTriangle
 } from "lucide-react";
 import apiClient from "@/lib/apiClient";
-import { printOutcomeMessage } from "@/lib/printPdf";
+import { preparePrinting, printOutcomeMessage } from "@/lib/printPdf";
 import { getTemplateBodyText, getTemplateVariableNumbers } from "@/lib/whatsappTemplates";
 import { useToast } from "@/hooks/use-toast";
 import { EditInvoiceDialog } from "./EditInvoiceDialog";
@@ -92,7 +92,9 @@ interface Invoice {
   jobId?: {
     _id: string;
     title: string;
-  };
+  } | null;
+  /** Stored on the invoice: stays after the job ticket is deleted. */
+  jobTitle?: string;
   invoiceDate: string;
   dueDate: string;
   items: InvoiceItem[];
@@ -141,6 +143,9 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice: listedInvoice, 
   const paymentHistory = details && details.key === invoiceKey ? details.paymentHistory : [];
   const [loading, setLoading] = useState(false);
   const [printing, setPrinting] = useState(false);
+  useEffect(() => {
+    if (open) preparePrinting();
+  }, [open]);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showEmailDialog, setShowEmailDialog] = useState(false);
   const [showWhatsAppDialog, setShowWhatsAppDialog] = useState(false);
@@ -407,7 +412,7 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice: listedInvoice, 
   // A payment can be split across invoices: count only the part applied here.
   const appliedOf = (payment: PaymentRecord) => payment.appliedAmount ?? payment.amount;
   const recordedAmount = paymentHistory.filter((payment) => payment.status === "completed").reduce((sum, payment) => sum + appliedOf(payment), 0);
-  const paymentStatusConfig = getPaymentStatusConfig(balanceAmount <= 0 ? "paid" : paidAmount > 0 ? "partial" : "pending");
+  const paymentStatusConfig = getPaymentStatusConfig(invoice.totalAmount > 0 && balanceAmount <= 0.005 ? "paid" : paidAmount > 0 ? "partial" : "pending");
 
   return (
     <>
@@ -495,10 +500,10 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice: listedInvoice, 
                     <span className="text-muted-foreground">Due Date:</span>
                     <span className="font-semibold">{new Date(invoice.dueDate).toLocaleDateString()}</span>
                   </div>
-                  {invoice.jobId && (
-                    <div className="flex justify-between text-sm">
+                  {(invoice.jobId?.title || invoice.jobTitle) && (
+                    <div className="flex justify-between gap-3 text-sm">
                       <span className="text-muted-foreground">Job:</span>
-                      <span className="font-semibold">{invoice.jobId.title}</span>
+                      <span className="text-right font-semibold">{invoice.jobId?.title || invoice.jobTitle}</span>
                     </div>
                   )}
                 </div>

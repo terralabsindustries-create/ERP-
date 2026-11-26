@@ -12,7 +12,7 @@ import { SendQuotationEmailDialog, SendQuotationWhatsAppDialog } from "@/compone
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
-import { printOutcomeMessage } from "@/lib/printPdf";
+import { preparePrintingWhenIdle, printOutcomeMessage } from "@/lib/printPdf";
 import { InvoiceSavedDialog, savedInvoiceId, type SavedInvoice } from "@/components/invoices/InvoiceSavedDialog";
 import { daysUntil, fmtDate, formatINR, plural } from "@/lib/format";
 
@@ -57,6 +57,8 @@ const EDITABLE: QuotationStatus[] = ["draft", "sent"];
 const lapsed = (q: Quotation) => OPEN.includes(q.status) && (daysUntil(q.valid_until) ?? 0) < 0;
 
 export default function Quotations() {
+  // Rows have Print: load printing in the background so the first print does not wait for it.
+  useEffect(preparePrintingWhenIdle, []);
   const { hasPermission } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();

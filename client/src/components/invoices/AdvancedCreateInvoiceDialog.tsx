@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { MAX_SUGGESTIONS, SuggestionPopover } from "@/components/ui/suggestion-popover";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -11,6 +12,7 @@ import apiClient from "@/lib/apiClient";
 import { jobFitsCustomer } from "@/lib/invoiceJob";
 import { Plus, Trash2, Calculator, UserPlus } from "lucide-react";
 import { CreateCustomerDialog } from "@/components/customers/CreateCustomerDialog";
+import { CustomerSearch, customerIdOf, useCustomerRecord, type CustomerOption } from "@/components/customers/CustomerSearch";
 import { QuickCreateJobDialog } from "@/components/jobs/QuickCreateJobDialog";
 import { BillingTotals } from "@/components/billing/BillingTotals";
 import { LinePricingFields } from "@/components/billing/LinePricingFields";
@@ -21,6 +23,7 @@ import { sellingRate, stockItemNamed, stockNeeded, unitText, type StockItem } fr
 import { isAreaUnit } from "@/lib/billing";
 import { localDate } from "@/lib/format";
 import { InvoiceSavedDialog, savedInvoiceId, type SavedInvoice } from "@/components/invoices/InvoiceSavedDialog";
+import { ConfirmDialog } from "@/components/data/ConfirmDialog";
 
 interface AdvancedCreateInvoiceDialogProps {
   open: boolean;
@@ -29,6 +32,11 @@ interface AdvancedCreateInvoiceDialogProps {
   onInvoiceCreated: (invoice?: any) => void;
   preselectedJob?: any;
   preselectedCustomer?: any;
+  /**
+   * The job ticket is knowingly billed again (billed in parts). Without it the
+   * server refuses a second invoice for a billed job, and the person is asked.
+   */
+  allowAdditionalInvoice?: boolean;
 }
 
 export function AdvancedCreateInvoiceDialog({
@@ -36,9 +44,11 @@ export function AdvancedCreateInvoiceDialog({
   onOpenChange,
   onInvoiceCreated,
   preselectedJob,
-  preselectedCustomer
+  preselectedCustomer,
+  allowAdditionalInvoice = false
 }: AdvancedCreateInvoiceDialogProps) {
-  const [customers, setCustomers] = useState<any[]>([]);
+  // The chosen customer's record, once picked or created here.
+  const [customer, setCustomer] = useState<CustomerOption | null>(null);
   const [jobs, setJobs] = useState<any[]>([]);
   const [inventoryItems, setInventoryItems] = useState<StockItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -46,21 +56,6 @@ export function AdvancedCreateInvoiceDialog({
   const [showCreateCustomer, setShowCreateCustomer] = useState(false);
   const [showCreateJob, setShowCreateJob] = useState(false);
   const { toast } = useToast();
-
-  // Hide suggestions when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as HTMLElement;
-      if (!target.closest('.autocomplete-container')) {
-        setShowSuggestions({});
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, []);
 
   // Helper function to get date 30 days from now
   const getDefaultDueDate = () => {
@@ -84,12 +79,13 @@ export function AdvancedCreateInvoiceDialog({
     termsAndConditions: ""
   });
   const [formData, setFormData] = useState(emptyForm);
+  // The customer shown read-only when the invoice is for a preselected job.
+  const fixedCustomer = useCustomerRecord(preselectedJob ? formData.customerId : "", [customer, preselectedCustomer, preselectedJob?.customerId]);
   const nextKey = useRef(1);
   const key = () => nextKey.current++;
 
   useEffect(() => {
     if (open) {
-      fetchCustomers();
       fetchJobs();
       fetchInventoryItems();
     }
@@ -156,21 +152,12 @@ export function AdvancedCreateInvoiceDialog({
     }
   }, [open, preselectedJob, preselectedCustomer]);
 
-  const fetchCustomers = async () => {
-    try {
-      const customersData = await apiClient.listAll('/customers', 'customers');
-      setCustomers(customersData);
-    } catch (error) {
-      console.error('Error fetching customers:', error);
-    }
-  };
-
   // The dialog just created a customer inline — add it to the list without a
   // refetch and select it, so the person invoicing never loses their place.
-  const handleCustomerCreated = (customer?: any) => {
-    if (customer) {
-      setCustomers((prev) => [...prev, customer]);
-      setFormData((prev) => ({ ...prev, customerId: customer._id || customer.id }));
+  const handleCustomerCreated = (created?: any) => {
+    if (created) {
+      setCustomer(created);
+      setFormData((prev) => ({ ...prev, customerId: customerIdOf(created), jobId: jobFitsCustomer(jobs, prev.jobId, customerIdOf(created)) ? prev.jobId : "" }));
     }
     setShowCreateCustomer(false);
   };
@@ -277,7 +264,11 @@ export function AdvancedCreateInvoiceDialog({
   // The invoice just saved, for its Print / Download / Send actions.
   const [saved, setSaved] = useState<{ invoice: SavedInvoice; title: string } | null>(null);
 
-  const submitInvoice = async (status: "draft" | "sent") => {
+  // The job ticket turned out to be billed already (by someone else, or in
+  // another tab): the invoice it is billed on, and the save that was refused.
+  const [alreadyBilled, setAlreadyBilled] = useState<{ status: "draft" | "sent"; invoiceNumber?: string; totalAmount?: number } | null>(null);
+
+  const submitInvoice = async (status: "draft" | "sent", additional = allowAdditionalInvoice) => {
     if (saving.current) return;
     const problem = !formData.customerId
       ? "Select a customer."
@@ -300,6 +291,7 @@ export function AdvancedCreateInvoiceDialog({
       const invoiceData = {
         customerId: formData.customerId,
         jobId: formData.jobId,
+        ...(additional && formData.jobId ? { allowAdditionalInvoice: true } : {}),
         invoiceDate: formData.invoiceDate,
         dueDate: formData.dueDate,
         items: formData.items.map((l) => ({ itemName: l.itemName.trim(), description: l.description.trim(), hsnCode: l.hsnCode.trim(), ...lineInput(l) })),
@@ -323,7 +315,9 @@ export function AdvancedCreateInvoiceDialog({
       else toast({ title: status === "draft" ? "Draft saved" : "Invoice issued", description: invoice?.invoiceNumber || undefined });
     } catch (error: any) {
       console.error('Error creating invoice:', error);
-      if (error.stockCheck?.length > 0) {
+      if (error.code === 'JOB_ALREADY_INVOICED') {
+        setAlreadyBilled({ status, invoiceNumber: error.details?.invoiceNumber, totalAmount: error.details?.totalAmount });
+      } else if (error.stockCheck?.length > 0) {
         const lines = (error.details as string[]) || error.stockCheck.map((s: any) =>
           `"${s.itemName}": Available ${s.availableQuantity}, Required ${s.requiredQuantity} (${s.unit})`
         );
@@ -401,54 +395,30 @@ export function AdvancedCreateInvoiceDialog({
                 // Fixed customer display when job is preselected
                 <div className="p-3 bg-muted/50 border rounded-md">
                   <div className="font-medium text-foreground">
-                    {customers.find(c => (c._id || c.id) === formData.customerId)?.name
-                      || preselectedCustomer?.name || 'Loading...'}
+                    {fixedCustomer?.name || preselectedCustomer?.name || 'Loading...'}
                   </div>
                   <div className="text-sm text-muted-foreground">
-                    {customers.find(c => (c._id || c.id) === formData.customerId)?.email
-                      || preselectedCustomer?.email || ''}
+                    {fixedCustomer?.email || preselectedCustomer?.email || ''}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">
                     (Fixed - Cannot be changed)
                   </div>
                 </div>
               ) : (
-                // Editable customer selection when no job is preselected
-                <Select
+                // Editable customer selection when no job is preselected.
+                // Changing the customer keeps every line and total; only a job
+                // ticket of the previous customer is dropped.
+                <CustomerSearch
+                  id="customerId"
                   value={formData.customerId}
-                  onValueChange={(value) => {
-                    // Radix calls this with "" to self-correct a controlled value
-                    // it doesn't recognize — which is exactly the state right
-                    // after we set customerId to a customer just created inline,
-                    // since its SelectItem has never been mounted (that only
-                    // happens once the dropdown has been opened). This is a
-                    // fully controlled Select, so as long as we don't act on
-                    // that spurious "", the value we set simply stays put.
-                    // A job ticket of the previous customer can't stay on the invoice.
-                    if (value) setFormData(prev => ({ ...prev, customerId: value, jobId: jobFitsCustomer(jobs, prev.jobId, value) ? prev.jobId : "" }));
+                  customer={customer}
+                  onSelect={(c) => {
+                    setCustomer(c);
+                    const id = customerIdOf(c);
+                    setFormData(prev => ({ ...prev, customerId: id, jobId: jobFitsCustomer(jobs, prev.jobId, id) ? prev.jobId : "" }));
                   }}
-                >
-                  <SelectTrigger>
-                    {/* Radix only resolves a label from a SelectItem that has been
-                        mounted at least once (i.e. the dropdown was opened while
-                        it was selected). Selecting a customer programmatically —
-                        right after creating one inline — skips that, so the
-                        display text is set explicitly here instead. */}
-                    <SelectValue placeholder="Select customer">
-                      {(() => {
-                        const c = customers.find((cust) => (cust._id || cust.id) === formData.customerId);
-                        return c ? `${c.name} - ${c.email}` : "";
-                      })()}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {customers.map((customer) => (
-                      <SelectItem key={customer._id || customer.id} value={customer._id || customer.id}>
-                        {customer.name} - {customer.email}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  onCreateNew={() => setShowCreateCustomer(true)}
+                />
               )}
             </div>
 
@@ -503,6 +473,7 @@ export function AdvancedCreateInvoiceDialog({
                     {jobs.map((job) => (
                       <SelectItem key={job._id || job.id} value={job._id || job.id}>
                         {job.title} - {job.customerId?.name || job.customer || 'Unknown Customer'}
+                        {job.invoices?.length > 0 && ` · billed (${job.invoices[0].invoiceNumber})`}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -552,64 +523,59 @@ export function AdvancedCreateInvoiceDialog({
               {formData.items.map((item, index) => (
                 <div key={item.key} className="space-y-3 p-4 border rounded-lg">
                   <div className="grid grid-cols-1 md:grid-cols-[1.3fr_1.3fr_7rem_auto] gap-2 md:items-end">
-                    <div className="space-y-1 relative autocomplete-container">
+                    <div className="space-y-1">
                       <Label htmlFor={`inv-item-${item.key}`} className="text-xs">Item name *</Label>
-                      <Input
-                        id={`inv-item-${item.key}`}
-                        value={item.itemName}
-                        onChange={(e) => {
-                          updateItem(index, { itemName: e.target.value });
-                          setShowSuggestions(prev => ({ ...prev, [index]: true }));
+                      <SuggestionPopover
+                        open={!!showSuggestions[index]}
+                        onOpenChange={(next) => setShowSuggestions(prev => ({ ...prev, [index]: next }))}
+                        items={(() => {
+                          const query = item.itemName.trim().toLowerCase();
+                          return (query ? inventoryItems.filter((inv) => inv.name.toLowerCase().includes(query)) : inventoryItems).slice(0, MAX_SUGGESTIONS);
+                        })()}
+                        getKey={(selectedItem) => selectedItem._id || selectedItem.id || selectedItem.name}
+                        onSelect={(selectedItem) => {
+                          // Stock counted in sq ft / sq m is priced by size;
+                          // anything else per unit, in the stock's unit.
+                          const invUnit = selectedItem.unit || 'pieces';
+                          const hsnCode = selectedItem.hsnCode || item.hsnCode;
+                          updateItem(index, {
+                            itemName: selectedItem.name,
+                            unitPrice: String(sellingRate(selectedItem)),
+                            description: item.description || selectedItem.description || '',
+                            hsnCode,
+                            unit: invUnit,
+                            pricing: isAreaUnit(invUnit) ? invUnit : 'unit',
+                            gstRate: item.gstRate || hsnRate(hsnCode)
+                          });
                         }}
-                        onFocus={() => setShowSuggestions(prev => ({ ...prev, [index]: true }))}
-                        placeholder="Type or pick an inventory item"
-                        autoComplete="off"
-                      />
-                      {showSuggestions[index] && (() => {
-                        const query = item.itemName.trim().toLowerCase();
-                        const matches = query
-                          ? inventoryItems.filter((inv) => inv.name.toLowerCase().includes(query)).slice(0, 8)
-                          : inventoryItems.slice(0, 8);
-                        return (
-                          <div className="absolute z-50 mt-1 w-full max-h-56 overflow-y-auto rounded-md border bg-popover text-popover-foreground shadow-md">
-                            {matches.length === 0 ? (
-                              <div className="p-2 text-sm text-muted-foreground">
-                                No matching inventory item — will be added as a custom item
-                              </div>
-                            ) : (
-                              matches.map((selectedItem) => (
-                                <button
-                                  type="button"
-                                  key={selectedItem._id || selectedItem.id}
-                                  className="flex w-full flex-col items-start rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
-                                  onClick={() => {
-                                    // Stock counted in sq ft / sq m is priced by size;
-                                    // anything else per unit, in the stock's unit.
-                                    const invUnit = selectedItem.unit || 'pieces';
-                                    const hsnCode = selectedItem.hsnCode || item.hsnCode;
-                                    updateItem(index, {
-                                      itemName: selectedItem.name,
-                                      unitPrice: String(sellingRate(selectedItem)),
-                                      description: item.description || selectedItem.description || '',
-                                      hsnCode,
-                                      unit: invUnit,
-                                      pricing: isAreaUnit(invUnit) ? invUnit : 'unit',
-                                      gstRate: item.gstRate || hsnRate(hsnCode)
-                                    });
-                                    setShowSuggestions(prev => ({ ...prev, [index]: false }));
-                                  }}
-                                >
-                                  <span className="font-medium">{selectedItem.name}</span>
-                                  <span className="text-xs text-muted-foreground">
-                                    In stock: {selectedItem.quantity || 0} {unitText(selectedItem.unit)} · ₹{sellingRate(selectedItem)}
-                                    {selectedItem.hsnCode ? ` · HSN ${selectedItem.hsnCode}` : ''}
-                                  </span>
-                                </button>
-                              ))
-                            )}
+                        listLabel="Inventory items"
+                        empty={
+                          <div className="p-2 text-sm text-muted-foreground">
+                            No matching inventory item — will be added as a custom item
                           </div>
-                        );
-                      })()}
+                        }
+                        renderItem={(selectedItem) => (
+                          <div className="flex flex-col items-start">
+                            <span className="font-medium">{selectedItem.name}</span>
+                            <span className="text-xs text-muted-foreground">
+                              In stock: {selectedItem.quantity || 0} {unitText(selectedItem.unit)} · ₹{sellingRate(selectedItem)}
+                              {selectedItem.hsnCode ? ` · HSN ${selectedItem.hsnCode}` : ''}
+                            </span>
+                          </div>
+                        )}
+                      >
+                        <Input
+                          id={`inv-item-${item.key}`}
+                          value={item.itemName}
+                          onChange={(e) => {
+                            updateItem(index, { itemName: e.target.value });
+                            setShowSuggestions(prev => ({ ...prev, [index]: true }));
+                          }}
+                          onFocus={() => setShowSuggestions(prev => ({ ...prev, [index]: true }))}
+                          placeholder="Type or pick an inventory item"
+                          autoComplete="off"
+                        />
+                      </SuggestionPopover>
                     </div>
                     <div className="space-y-1">
                       <Label htmlFor={`inv-desc-${item.key}`} className="text-xs">Note</Label>
@@ -745,10 +711,19 @@ export function AdvancedCreateInvoiceDialog({
     <QuickCreateJobDialog
       open={showCreateJob}
       onOpenChange={setShowCreateJob}
-      customers={customers}
       onJobCreated={handleJobCreated}
     />
     <InvoiceSavedDialog invoice={saved?.invoice || null} title={saved?.title} onClose={() => setSaved(null)} onInvoiceUpdated={() => onInvoiceCreated(saved?.invoice)} />
+    <ConfirmDialog
+      open={!!alreadyBilled}
+      onOpenChange={(o) => !o && setAlreadyBilled(null)}
+      title="This job ticket is already billed"
+      description={`${alreadyBilled?.invoiceNumber ? `It is billed on ${alreadyBilled.invoiceNumber}${alreadyBilled.totalAmount != null ? ` (₹${alreadyBilled.totalAmount.toLocaleString("en-IN")})` : ""}` : "It already has an invoice"}. Create another invoice for it only if the job is billed in parts.`}
+      confirmLabel="Create another invoice"
+      cancelLabel="Don't create"
+      destructive={false}
+      onConfirm={() => alreadyBilled && submitInvoice(alreadyBilled.status, true)}
+    />
     </>
   );
 }

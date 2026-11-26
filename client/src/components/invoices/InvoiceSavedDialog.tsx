@@ -1,12 +1,10 @@
 import { useState } from "react";
 import { Mail, MessageSquare } from "lucide-react";
-import { DocumentSavedDialog, type SendOption } from "@/components/documents/DocumentSavedDialog";
+import { DocumentSavedDialog, type DocumentDetail, type SendOption } from "@/components/documents/DocumentSavedDialog";
 import { ViewInvoiceDialog, type InvoiceSendChannel } from "@/components/invoices/ViewInvoiceDialog";
 import { useAuth } from "@/contexts/AuthContext";
-import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
 import { formatINR } from "@/lib/format";
-import { printOutcomeMessage } from "@/lib/printPdf";
 
 /** The saved invoice, as the create / update / convert APIs return it. */
 export interface SavedInvoice {
@@ -40,7 +38,6 @@ export function InvoiceSavedDialog({
   onInvoiceUpdated?: () => void;
 }) {
   const { hasPermission } = useAuth();
-  const { toast } = useToast();
   const [sendVia, setSendVia] = useState<InvoiceSendChannel | null>(null);
   const id = savedInvoiceId(invoice);
   if (!invoice || !id) return null;
@@ -53,24 +50,22 @@ export function InvoiceSavedDialog({
     ...(hasPermission("WhatsApp: Send Messages") ? [{ key: "whatsapp", label: "Send on WhatsApp", icon: MessageSquare, onSelect: () => setSendVia("whatsapp") }] : [])
   ];
 
+  const details: DocumentDetail[] = [
+    { label: "Invoice no.", value: invoice.status === "draft" ? `${number} (draft)` : number, mono: true },
+    ...(customer ? [{ label: "Customer", value: customer }] : []),
+    ...(invoice.totalAmount !== undefined ? [{ label: "Amount", value: formatINR(invoice.totalAmount), strong: true }] : [])
+  ];
+
   return (
     <>
       <DocumentSavedDialog
         open={!sendVia}
         onOpenChange={(open) => !open && onClose()}
         title={title || `${number} saved`}
-        description={[number, customer, invoice.totalAmount !== undefined ? formatINR(invoice.totalAmount) : null, invoice.status === "draft" ? "Draft" : null]
-          .filter(Boolean)
-          .join(" · ")}
-        onPrint={
-          canPdf
-            ? async () => {
-                const note = printOutcomeMessage(await apiClient.printInvoicePDF(id), number);
-                if (note) toast(note);
-              }
-            : undefined
-        }
-        onDownload={canPdf ? () => apiClient.downloadInvoicePDF(id) : undefined}
+        details={details}
+        documentKey={id}
+        documentName={number}
+        loadPdf={canPdf ? (signal) => apiClient.getInvoicePdfFile(id, signal) : undefined}
         sendOptions={sendOptions}
       />
       {/* The existing send flow: the invoice, opened on the chosen channel's form. */}

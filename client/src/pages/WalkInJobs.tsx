@@ -49,7 +49,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useDebounced } from "@/hooks/useDebounced";
 import apiClient from "@/lib/apiClient";
 import { InvoiceSavedDialog, type SavedInvoice } from "@/components/invoices/InvoiceSavedDialog";
-import { printOutcomeMessage } from "@/lib/printPdf";
+import { preparePrintingWhenIdle, printOutcomeMessage } from "@/lib/printPdf";
 import { counterJobsApi, type CounterJob, type CounterListParams, type CounterListResponse, type CounterStats, type CounterStatus, type Operator } from "@/lib/api/walkIn";
 import { formatINR, plural } from "@/lib/format";
 
@@ -66,6 +66,8 @@ const STATUS_TOAST: Record<CounterStatus, (j: CounterJob) => string> = {
 };
 
 export default function WalkInJobs() {
+  // Rows have Print: load printing in the background so the first print does not wait for it.
+  useEffect(preparePrintingWhenIdle, []);
   const { hasPermission, user } = useAuth();
   const { toast } = useToast();
   const canEdit = hasPermission("Walk-In Jobs: Create & Edit");

@@ -94,7 +94,7 @@ describe('an invoice raised from a job ticket', () => {
   });
 
   test("the job ticket's own design charge object gives the same invoice", async () => {
-    const res = await api().post('/api/invoices', { ...invoiceFromTicket(job), designCharge: job.designCharge, designChargeGstRate: undefined });
+    const res = await api().post('/api/invoices', { ...invoiceFromTicket(job), designCharge: job.designCharge, designChargeGstRate: undefined, allowAdditionalInvoice: true });
     expect(res.status).toBe(201);
     expect(res.body.data.invoice.totalAmount).toBe(TICKET_TOTAL);
   });
@@ -102,7 +102,7 @@ describe('an invoice raised from a job ticket', () => {
   test('GST is added once: GST-inclusive totals sent by a client are ignored', async () => {
     const body = invoiceFromTicket(job);
     body.items = body.items.map((i, n) => ({ ...i, itemTotal: ticketItems[n].itemTotal, totalAmount: ticketItems[n].itemTotal, gstAmount: 999 }));
-    const res = await api().post('/api/invoices', { ...body, totalAmount: 1, totalGstAmount: 1, taxableAmount: 1 });
+    const res = await api().post('/api/invoices', { ...body, totalAmount: 1, totalGstAmount: 1, taxableAmount: 1, allowAdditionalInvoice: true });
     expect(res.status).toBe(201);
     expect(res.body.data.invoice).toMatchObject({ taxableAmount: 1288, totalGstAmount: 216.84, totalAmount: TICKET_TOTAL });
   });
@@ -185,7 +185,7 @@ describe('GST rates and supply', () => {
   });
 
   test('a supply to another state is charged IGST', async () => {
-    const res = await api().post('/api/invoices', invoiceFromTicket(job, { isInterState: true }));
+    const res = await api().post('/api/invoices', invoiceFromTicket(job, { isInterState: true, allowAdditionalInvoice: true }));
     expect(res.status).toBe(201);
     expect(res.body.data.invoice).toMatchObject({ isInterState: true, totalIgstAmount: 216.84, totalCgstAmount: 0, totalSgstAmount: 0, totalAmount: TICKET_TOTAL });
     const d = PDFService.invoiceDocument((await Invoice.findById(res.body.data.invoice._id)).toObject(), company);
