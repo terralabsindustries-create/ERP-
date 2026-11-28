@@ -124,6 +124,133 @@ router.get('/', [query('active').optional().isBoolean()], validate, async (req, 
   current balance. Collections are this period's receipts; balances are what
   the account holds. Payments recorded without an account are shown apart.
 */
+/*
+  GET /api/payment-accounts/collections?from=&to=&accountId=<id|unassigned>&kind=cash|bank|wallet
+      &paymentMethod=&search=&page=&limit=[&format=csv]
+  The payments behind the collection figures above, one row per receipt: the
+  same ledger entries (completed, from a payment, dated by when they were
+  posted, India days), so the list's total equals the summary's "collected".
+*/
+const COLLECTION_METHODS = ['cash', 'cheque', 'bank_transfer', 'card', 'upi', 'wallet'];
+router.get('/collections', requirePermission('Accounts'), [
+  query('from').optional().custom(isDay).withMessage('Choose a valid start day'),
+  query('to').optional().custom(isDay).withMessage('Choose a valid end day'),
+  query('accountId').optional().custom((v) => v === 'unassigned' || mongoose.isValidObjectId(v)).withMessage('Choose a valid account'),
+  query('kind').optional().isIn(PaymentAccount.KINDS).withMessage('Choose cash, bank or wallet'),
+  query('paymentMethod').optional().isIn(COLLECTION_METHODS).withMessage('Choose a valid payment method'),
+  query('search').optional().isString().trim().isLength({ max: 100 }),
+  query('sort').optional().isIn(['date', '-date', 'amount', '-amount']),
+  query('page').optional().isInt({ min: 1 }).toInt(),
+  query('limit').optional().isInt({ min: 1, max: 200 }).toInt(),
+  query('format').optional().isIn(['csv'])
+], validate, async (req, res) => {
+  try {
+    const fromDay = req.query.from || req.query.to || istToday();
+    const toDay = req.query.to || fromDay;
+    if (toDay < fromDay) return res.status(400).json({ status: 'error', message: 'The end day is before the start day' });
+    const from = istStart(fromDay);
+    const to = new Date(istStart(toDay).getTime() + DAY_MS);
+    if (to - from > 370 * DAY_MS) return res.status(400).json({ status: 'error', message: 'Choose a period of at most a year' });
+
+    const accounts = await PaymentAccount.find(paymentAccountScope(req.user)).select('nickname kind isActive').lean();
+    const accountById = new Map(accounts.map((a) => [String(a._id), a]));
+    const where = [await accountScope(req.user), { status: 'completed', sourcePaymentId: { $exists: true } }];
+    const { accountId, kind } = req.query;
+    if (accountId === 'unassigned') where.push({ paymentAccountId: { $exists: false } });
+    else if (accountId) where.push({ paymentAccountId: new mongoose.Types.ObjectId(accountId) });
+    if (kind) where.push({ paymentAccountId: { $in: accounts.filter((a) => a.kind === kind).map((a) => a._id) } });
+
+    const after = [];
+    if (req.query.paymentMethod) after.push({ $match: { method: req.query.paymentMethod } });
+    if (req.query.search) {
+      const rx = new RegExp(req.query.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      after.push({ $match: { $or: [
+        { 'payment.paymentId': rx }, { 'payment.customerName': rx }, { 'payment.invoiceNumber': rx },
+        { 'payment.allocations.invoiceNumber': rx }, { 'payment.referenceNumber': rx }, { referenceNumber: rx }
+      ] } });
+    }
+    const [sortKey, sortDir] = (req.query.sort || '-date').startsWith('-') ? [req.query.sort?.slice(1) || 'date', -1] : [req.query.sort, 1];
+    const csv = req.query.format === 'csv';
+    const limit = csv ? 5000 : req.query.limit || 50;
+    const page = csv ? 1 : req.query.page || 1;
+
+    const [result] = await AccountTransaction.aggregate([
+      { $match: { $and: where } },
+      { $addFields: { date: { $ifNull: ['$postedAt', '$createdAt'] } } },
+      { $match: { date: { $gte: from, $lt: to } } },
+      {
+        $lookup: {
+          from: Payment.collection.name,
+          localField: 'sourcePaymentId',
+          foreignField: '_id',
+          as: 'payment',
+          pipeline: [{ $project: { paymentId: 1, customerName: 1, customerId: 1, invoiceNumber: 1, 'allocations.invoiceNumber': 1, paymentMethod: 1, referenceNumber: 1, collectedByName: 1, paymentDate: 1 } }]
+        }
+      },
+      { $unwind: { path: '$payment', preserveNullAndEmptyArrays: true } },
+      { $addFields: { method: { $ifNull: ['$payment.paymentMethod', '$paymentMethod'] } } },
+      ...after,
+      {
+        $facet: {
+          rows: [
+            { $sort: { [sortKey === 'amount' ? 'amount' : 'date']: sortDir, _id: sortDir } },
+            { $skip: (page - 1) * limit },
+            { $limit: limit },
+            { $project: { date: 1, amount: 1, method: 1, paymentAccountId: 1, referenceNumber: 1, payment: 1 } }
+          ],
+          totals: [{ $group: { _id: null, count: { $sum: 1 }, amount: { $sum: '$amount' } } }],
+          byMethod: [{ $group: { _id: '$method', count: { $sum: 1 }, amount: { $sum: '$amount' } } }, { $sort: { amount: -1 } }]
+        }
+      }
+    ]);
+
+    const rows = (result?.rows || []).map((r) => {
+      const account = r.paymentAccountId ? accountById.get(String(r.paymentAccountId)) : null;
+      const p = r.payment || {};
+      const invoices = [...new Set([...(p.allocations || []).map((a) => a.invoiceNumber), p.invoiceNumber].filter(Boolean))];
+      return {
+        _id: r._id,
+        date: r.date,
+        amount: round2(r.amount),
+        method: r.method || null,
+        account: account ? { _id: account._id, nickname: account.nickname, kind: account.kind, kindLabel: KIND_LABEL[account.kind] } : null,
+        payment: r.payment ? { _id: p._id, paymentId: p.paymentId, customerName: p.customerName || '', invoices, reference: p.referenceNumber || r.referenceNumber || '', collectedByName: p.collectedByName || '' } : null
+      };
+    });
+    const totals = { count: result?.totals[0]?.count || 0, amount: round2(result?.totals[0]?.amount || 0) };
+
+    if (csv) {
+      const cell = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+      const when = (d) => new Date(new Date(d).getTime() + IST_MS).toISOString().slice(0, 16).replace('T', ' ');
+      const lines = [
+        ['Date (IST)', 'Payment no.', 'Customer', 'Invoices', 'Method', 'Received into', 'Reference', 'Amount'],
+        ...rows.map((r) => [when(r.date), r.payment?.paymentId, r.payment?.customerName, r.payment?.invoices.join(' '), r.method, r.account ? r.account.nickname : 'Not in an account', r.payment?.reference, r.amount.toFixed(2)]),
+        [],
+        ['Total', '', '', '', '', '', `${totals.count} payments`, totals.amount.toFixed(2)]
+      ];
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="payment-collections_${fromDay}_to_${toDay}.csv"`);
+      return res.send(`﻿${lines.map((l) => l.map(cell).join(',')).join('\n')}`);
+    }
+
+    res.json({
+      status: 'success',
+      data: {
+        from: fromDay,
+        to: toDay,
+        rows,
+        totals,
+        byMethod: (result?.byMethod || []).map((m) => ({ method: m._id, count: m.count, amount: round2(m.amount) })),
+        accounts: accounts.map((a) => ({ _id: a._id, nickname: a.nickname, kind: a.kind, kindLabel: KIND_LABEL[a.kind], isActive: a.isActive })),
+        pagination: { page, limit, total: totals.count }
+      }
+    });
+  } catch (error) {
+    console.error('Payment collections list error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error while listing the collections' });
+  }
+});
+
 router.get('/summary', requirePermission('Accounts'), [
   query('from').optional().custom(isDay).withMessage('Choose a valid start day'),
   query('to').optional().custom(isDay).withMessage('Choose a valid end day'),

@@ -82,6 +82,14 @@ export default function Dashboard() {
   const seesWholeTeam = !!user && (user.role === "admin" || (user.canViewAllData === true && hasPermission("Staff & Tasks")));
   const navigate = useNavigate();
   const [lastUpdated, setLastUpdated] = useState(new Date());
+  // The collection panel's day and account, so "View all" opens the same receipts.
+  const [collectionPeriod, setCollectionPeriod] = useState<{ from: string; to: string; accountId: string } | null>(null);
+  const collectionLink = useMemo(() => {
+    if (!collectionPeriod) return "/payment-collections";
+    const p = new URLSearchParams({ from: collectionPeriod.from, to: collectionPeriod.to });
+    if (collectionPeriod.accountId !== "all") p.set("into", `acc:${collectionPeriod.accountId}`);
+    return `/payment-collections?${p}`;
+  }, [collectionPeriod]);
   const [jobs, setJobs] = useState<any[]>([]);
   const [jobsLoading, setJobsLoading] = useState(true);
   const [statsError, setStatsError] = useState(false);
@@ -331,8 +339,12 @@ export default function Dashboard() {
       {/* Where today's payments were received, and what each account holds (Accounts logins) */}
       {hasPermission("Accounts") && (
         <section aria-label="Payment collection" className="space-y-2">
-          <h2 className="font-display text-base font-semibold">Payment collection</h2>
-          <PaymentCollectionPanel variant="dashboard" />
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="font-display text-base font-semibold">Payment collection</h2>
+            {/* The list behind these figures, for the day and account picked below. */}
+            <PanelLink to={collectionLink}>View all payment collection</PanelLink>
+          </div>
+          <PaymentCollectionPanel variant="dashboard" onPeriodChange={setCollectionPeriod} />
         </section>
       )}
 

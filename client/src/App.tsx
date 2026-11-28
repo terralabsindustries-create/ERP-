@@ -43,6 +43,7 @@ const ProductRates = lazy(() => import("./pages/ProductRates"));
 const EmergencyOrders = lazy(() => import("./pages/EmergencyOrders"));
 const Costs = lazy(() => import("./pages/Costs"));
 const Payments = lazy(() => import("./pages/Payments"));
+const PaymentCollections = lazy(() => import("./pages/PaymentCollections"));
 const Portal = lazy(() => import("./pages/Portal"));
 const Subscription = lazy(() => import("@/pages/Subscription"));
 const Settings = lazy(() => import("./pages/Settings"));
@@ -166,6 +167,7 @@ const App = () => (
                         <Route path="/sac-codes" element={<PermissionRoute permission="SAC Codes"><SacCodes /></PermissionRoute>} />
                         <Route path="/costs" element={<PermissionRoute permission="Cost & Profit"><Costs /></PermissionRoute>} />
                         <Route path="/payments" element={<PermissionRoute permission="Payments"><Payments /></PermissionRoute>} />
+                        <Route path="/payment-collections" element={<PermissionRoute permission="Accounts"><PaymentCollections /></PermissionRoute>} />
                         {/* General Ledger merged into Accounts — redirect old links */}
                         <Route path="/general-ledger" element={<Navigate to="/accounts" replace />} />
                         <Route path="/accounts" element={<PermissionRoute permission="Accounts"><Accounts /></PermissionRoute>} />

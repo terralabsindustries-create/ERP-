@@ -1,4 +1,5 @@
 import {
+  Banknote,
   LayoutDashboard,
   SquareKanban,
   Calendar,
@@ -98,6 +99,7 @@ export const NAVIGATION: NavGroup[] = [
       { title: "Invoices", href: "/invoices", icon: FileText, permission: "Invoicing" },
       { title: "Recurring Invoices", href: "/recurring-invoices", icon: Repeat, permission: "Invoicing" },
       { title: "Payments", href: "/payments", icon: Wallet, permission: "Payments" },
+      { title: "Payment Collection", href: "/payment-collections", icon: Banknote, permission: "Accounts" },
       { title: "Payment Reminders", href: "/payment-reminders", icon: Bell, permission: "Payment Reminders" },
       { title: "Accounts", href: "/accounts", icon: Landmark, permission: "Accounts" },
       { title: "Tally Export", href: "/tally", icon: FileCode2, permission: "Accounts" },

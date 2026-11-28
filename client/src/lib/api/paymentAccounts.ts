@@ -85,6 +85,36 @@ export const KIND_LABEL: Record<PaymentAccountKind, string> = { cash: "Cash", ba
 /** Cash is received into a cash account; every other method into a bank or wallet account (same rule as the API). */
 export const fitsMethod = (kind: PaymentAccountKind, method: string) => (method === "cash" ? kind === "cash" : kind !== "cash");
 
+/** GET /api/payment-accounts/collections — the receipts behind the collection figures. */
+export interface CollectionListParams {
+  from: string;
+  to?: string;
+  accountId?: string; // an account id, or "unassigned"
+  kind?: PaymentAccountKind;
+  paymentMethod?: string;
+  search?: string;
+  sort?: "date" | "-date" | "amount" | "-amount";
+  page?: number;
+  limit?: number;
+}
+export interface CollectionRow {
+  _id: string;
+  date: string;
+  amount: number;
+  method: string | null;
+  account: { _id: string; nickname: string; kind: PaymentAccountKind; kindLabel: string } | null;
+  payment: { _id: string; paymentId: string; customerName: string; invoices: string[]; reference: string; collectedByName: string } | null;
+}
+export interface CollectionList {
+  from: string;
+  to: string;
+  rows: CollectionRow[];
+  totals: { count: number; amount: number };
+  byMethod: { method: string; count: number; amount: number }[];
+  accounts: { _id: string; nickname: string; kind: PaymentAccountKind; kindLabel: string; isActive: boolean }[];
+  pagination: { page: number; limit: number; total: number };
+}
+
 /** "Today" as the server counts days: the calendar day in India. */
 export const istToday = () => new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
 
@@ -100,6 +130,8 @@ export const paymentAccountsApi = {
     apiClient.post<{ recorded: number; difference: number }>(`/payment-accounts/${id}/adjust`, input),
   summary: (params: { from: string; to?: string; accountId?: string }) =>
     apiClient.get<CollectionSummary>("/payment-accounts/summary", params),
+  collections: (params: CollectionListParams) =>
+    apiClient.get<CollectionList>("/payment-accounts/collections", { ...params }),
   ledger: (id: string, params: { from?: string; to?: string; page?: number; limit?: number }) =>
     apiClient.get<{ entries: LedgerEntry[]; pagination: { page: number; limit: number; total: number; pages: number } }>(`/payment-accounts/${id}/ledger`, params)
 };

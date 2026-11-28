@@ -20,7 +20,11 @@ const compact = (n: number) => formatINR(n, { compact: Math.abs(n) >= 1e5 });
  * `variant="dashboard"` shows the headline and a short per-account list;
  * `variant="report"` is the full daily closing report.
  */
-export function PaymentCollectionPanel({ variant = "report" }: { variant?: "dashboard" | "report" }) {
+export function PaymentCollectionPanel({ variant = "report", onPeriodChange }: {
+  variant?: "dashboard" | "report";
+  /** Told the period and account shown, e.g. for a "View all" link to the same receipts. */
+  onPeriodChange?: (p: { from: string; to: string; accountId: string }) => void;
+}) {
   const [from, setFrom] = useState(istToday());
   const [to, setTo] = useState(istToday());
   const [accountId, setAccountId] = useState("all");
@@ -47,6 +51,9 @@ export function PaymentCollectionPanel({ variant = "report" }: { variant?: "dash
   useEffect(() => {
     load();
   }, [load]);
+  useEffect(() => {
+    onPeriodChange?.({ from, to: variant === "dashboard" ? from : to, accountId });
+  }, [from, to, accountId, variant, onPeriodChange]);
 
   const period = variant === "dashboard" || from === to ? (from === istToday() ? "today" : `on ${from}`) : `${from} to ${to}`;
   const t = data?.totals;
