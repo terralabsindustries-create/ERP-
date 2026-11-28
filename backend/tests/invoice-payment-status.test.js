@@ -27,6 +27,7 @@ const as = (token) => ({
   get: (url) => request(app).get(url).set(auth(token)),
   post: (url, body) => request(app).post(url).set(auth(token)).send(body),
   put: (url, body) => request(app).put(url).set(auth(token)).send(body),
+  patch: (url, body) => request(app).patch(url).set(auth(token)).send(body),
   delete: (url) => request(app).delete(url).set(auth(token))
 });
 
@@ -168,16 +169,21 @@ describe('reversals', () => {
     expect(await state(inv)).toEqual({ paidAmount: 0, balanceAmount: 600, paymentStatus: 'pending', status: 'sent' });
   });
 
-  test('raising a settled invoice\'s total makes it part paid again; lowering it to what was paid settles it', async () => {
+  test('a debit note on a settled invoice makes it part paid again; a credit note down to what was paid settles it', async () => {
     const res = await admin.post('/api/invoices', { customerId: String(cust._id), status: 'sent', items: [{ itemName: 'Stickers', quantity: 1, unitPrice: 500 }] });
     const inv = res.body.data.invoice;
     await pay(inv, 500);
     expect(await state(inv)).toMatchObject({ paymentStatus: 'paid', status: 'paid' });
 
-    expect((await admin.put(`/api/invoices/${inv._id}`, { items: [{ itemName: 'Stickers', quantity: 2, unitPrice: 500 }] })).status).toBe(200);
+    // An issued invoice's amounts are corrected with notes, not by editing it.
+    expect((await admin.put(`/api/invoices/${inv._id}`, { items: [{ itemName: 'Stickers', quantity: 2, unitPrice: 500 }] })).status).toBe(409);
+    const ref = String(inv.items[0]._id);
+    const debit = await admin.post('/api/credit-notes', { noteType: 'debit', invoiceId: inv._id, reason: 'price_revision', items: [{ invoiceLineRef: ref, quantity: 1, taxableValue: 500 }] });
+    expect((await admin.patch(`/api/credit-notes/${debit.body.data.note._id}/issue`, {})).status).toBe(200);
     expect(await state(inv)).toEqual({ paidAmount: 500, balanceAmount: 500, paymentStatus: 'partial', status: 'sent' });
 
-    expect((await admin.put(`/api/invoices/${inv._id}`, { items: [{ itemName: 'Stickers', quantity: 1, unitPrice: 500 }] })).status).toBe(200);
+    const credit = await admin.post('/api/credit-notes', { noteType: 'credit', invoiceId: inv._id, reason: 'price_revision', items: [{ invoiceLineRef: ref, taxableValue: 500 }] });
+    expect((await admin.patch(`/api/credit-notes/${credit.body.data.note._id}/issue`, {})).status).toBe(200);
     expect(await state(inv)).toEqual({ paidAmount: 500, balanceAmount: 0, paymentStatus: 'paid', status: 'paid' });
   });
 });

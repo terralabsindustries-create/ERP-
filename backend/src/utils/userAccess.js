@@ -5,14 +5,16 @@
  *  - Anyone else may only grant permissions they hold themselves, and may not
  *    manage a person who holds access they don't (so a manager cannot quietly
  *    edit the accountant who sees more than they do).
- *  - "Can view all staff data" can only be handed on by someone who has it, and
- *    only to managers and accountants; staff always see only their own records.
+ *  - "Can view all data" is a per-login switch: on, the login sees every
+ *    teammate's records (job tickets, invoices…); off, only its own. Only the
+ *    admin, or someone who already sees everything, can turn it on.
  */
 const { ALL_PERMISSIONS, pruneOrphanedActions } = require('../config/permissions');
 const { userCan } = require('../middleware/requirePermission');
 const { canViewAllStaffData } = require('./dataScopeHelper');
 
-const VIEW_ALL_ROLES = ['manager', 'accountant'];
+// Any login except the admin (who always sees everything) can be switched to see all data.
+const VIEW_ALL_ROLES = ['manager', 'accountant', 'operator', 'designer', 'staff'];
 
 /** Dashboard always on, unknown names dropped, actions without their module dropped. */
 function normalisePermissions(permissions = []) {

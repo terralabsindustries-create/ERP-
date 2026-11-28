@@ -2,6 +2,8 @@ const express = require('express');
 const mongoose = require('mongoose');
 const { orgScope } = require('../utils/accessScope');
 
+const { idempotent } = require('../middleware/idempotency');
+
 const router = express.Router();
 const Inventory = require('../models/Inventory');
 const ActivityLog = require('../models/ActivityLog');
@@ -416,7 +418,11 @@ router.post('/', requirePermission('Inventory: Create & Edit'), async (req, res)
     if (!inventoryData.sku) {
       const timestamp = Date.now().toString().slice(-6);
       const randomStr = Math.random().toString(36).substring(2, 5).toUpperCase();
-      inventoryData.sku = `INV-${timestamp}-${randomStr}`;
+      // The business's item-code prefix (Settings → Document numbering; STK- by
+      // default, so item codes no longer look like invoice numbers). Codes
+      // already given are never changed.
+      const numbering = await require('../models/DocumentNumbering').findOne(req.user.dataScope ? { dataScope: req.user.dataScope } : { userId: req.user._id }).lean().catch(() => null);
+      inventoryData.sku = `${numbering?.stockItemPrefix || 'STK-'}${timestamp}-${randomStr}`;
     }
 
     const item = new Inventory(inventoryData);
@@ -593,7 +599,7 @@ router.delete('/:id', requirePermission('Inventory: Delete'), async (req, res) =
 });
 
 // POST /api/inventory/:id/adjust - Adjust inventory quantity
-router.post('/:id/adjust', requirePermission('Inventory: Adjust Stock'), async (req, res) => {
+router.post('/:id/adjust', requirePermission('Inventory: Adjust Stock'), idempotent, async (req, res) => {
   /*
     Body, one of:
       { change: +25, type: 'purchase', reason, reference, notes }   stock in / out (negative = out)

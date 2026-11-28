@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { gstinError, normalizeGstin } from "@/lib/gstin";
 import apiClient from "@/lib/apiClient";
 
 interface CreateVendorDialogProps {
@@ -84,6 +85,12 @@ export function CreateVendorDialog({ open, onOpenChange, onVendorCreated, vendor
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const gstProblem = gstinError(formData.gstNumber);
+    if (gstProblem) {
+      toast({ title: "Invalid GST number", description: gstProblem, variant: "destructive" });
+      return;
+    }
+
 
     if (!formData.name) {
       toast({
@@ -297,9 +304,14 @@ export function CreateVendorDialog({ open, onOpenChange, onVendorCreated, vendor
               <Input
                 id="gstNumber"
                 value={formData.gstNumber}
-                onChange={(e) => setFormData(prev => ({ ...prev, gstNumber: e.target.value }))}
-                placeholder="Enter GST number"
+                onChange={(e) => setFormData(prev => ({ ...prev, gstNumber: e.target.value.toUpperCase() }))}
+                placeholder="e.g. 22AAAAA0000A1Z5"
+                maxLength={15}
+                aria-invalid={!!gstinError(formData.gstNumber)}
               />
+              {gstinError(formData.gstNumber) && (
+                <p className="text-xs text-destructive" role="alert">{gstinError(formData.gstNumber)}</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="panNumber">PAN Number</Label>

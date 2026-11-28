@@ -153,13 +153,17 @@ class InventoryService {
    * reports each one loudly: it is a stock count someone must correct.
    */
   static async returnStock(taken, user) {
+    const failed = [];
     for (const { item, quantity } of taken || []) {
       try {
-        await this.changeStock({ _id: item._id, ...itemScope(user) }, quantity);
+        const restored = await this.changeStock({ _id: item._id, ...itemScope(user) }, quantity);
+        if (!restored) throw new Error('item not found');
       } catch (error) {
         console.error(`STOCK NOT RESTORED: ${quantity} ${item.unit} of "${item.name}" (${item._id}) — correct it by hand.`, error.message);
+        failed.push(`${quantity} ${item.unit} of "${item.name}" (${item._id}): ${error.message}`);
       }
     }
+    return failed;
   }
 
   /** The "sale" stock movements recording what an invoice took. */
@@ -207,10 +211,11 @@ class InventoryService {
     });
     if (alreadyReturned) return { success: true, message: 'Stock was already restored for this invoice' };
 
+    const notRestored = [];
     for (const sale of sales) {
       // Added on in one write, so a sale made at the same moment is not lost.
       const change = await this.changeStock({ _id: sale.inventoryItem, ...itemScope(user) }, sale.quantity);
-      if (!change) continue;
+      if (!change) { notRestored.push(`${sale.quantity} ${sale.unit} of ${sale.itemName}`); continue; }
       const { item: inventoryItem, previousQuantity, newQuantity } = change;
       await InventoryMovement.create({
         inventoryItem: sale.inventoryItem,
@@ -232,6 +237,7 @@ class InventoryService {
         dataScope: inventoryItem.dataScope || user.dataScope
       });
     }
+    if (notRestored.length) return { success: false, message: `Stock not restored (item missing): ${notRestored.join('; ')}`, notRestored };
     return { success: true, message: 'Inventory restored successfully' };
   }
 

@@ -65,6 +65,8 @@ export default function PurchaseBills() {
   const [params, setParams] = useSearchParams();
   const vendor = params.get("vendor") || "all";
   const [bills, setBills] = useState<Bill[]>([]);
+  // A failed load shows as an error with Retry, never as an empty list.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<Stats | null>(null);
   const [vendors, setVendors] = useState<{ _id: string; name: string }[]>([]);
@@ -101,6 +103,7 @@ export default function PurchaseBills() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      setLoadError(null);
       const p: Record<string, string> = { page: String(page), limit: String(PAGE_SIZE), sortBy: "billDate", sortOrder: "desc" };
       if (q) p.search = q;
       if (view !== "all") p.paymentStatus = view;
@@ -109,7 +112,7 @@ export default function PurchaseBills() {
       setBills(res?.bills || []);
       setTotal(res?.pagination?.totalBills ?? (res?.bills || []).length);
     } catch (error) {
-      toast({ title: "Purchase bills could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -318,6 +321,8 @@ export default function PurchaseBills() {
           footer={!loading && total > 0 && <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} noun="bills" />}
         >
           <DataTable
+            error={loadError}
+            onRetry={() => load()}
             columns={columns}
             rows={bills}
             rowKey={(b) => b._id}

@@ -16,8 +16,8 @@ import { CustomerSearch, customerIdOf, useCustomerRecord, type CustomerOption } 
 import { QuickCreateJobDialog } from "@/components/jobs/QuickCreateJobDialog";
 import { BillingTotals } from "@/components/billing/BillingTotals";
 import { LinePricingFields } from "@/components/billing/LinePricingFields";
-import { draftTotals, gstRateProblem, lineDraftFromJobItem, lineInput, lineProblem, newLineDraft, type LineDraft } from "@/components/billing/lineDraft";
-import { useHsnGstRates } from "@/components/billing/useHsnGstRates";
+import { DEFAULT_GST_RATE, draftTotals, gstRateProblem, lineDraftFromJobItem, lineInput, lineProblem, newLineDraft, type LineDraft } from "@/components/billing/lineDraft";
+import { useHsnGstRates, pickedGstRate } from "@/components/billing/useHsnGstRates";
 import { StockAvailability } from "@/components/billing/StockAvailability";
 import { sellingRate, stockItemNamed, stockNeeded, unitText, type StockItem } from "@/components/billing/stock";
 import { isAreaUnit } from "@/lib/billing";
@@ -72,7 +72,7 @@ export function AdvancedCreateInvoiceDialog({
     items: [] as LineDraft[],
     // Typed text, so the fields can be cleared.
     designCharge: "",
-    designChargeGstRate: "",
+    designChargeGstRate: DEFAULT_GST_RATE,
     discountAmount: "",
     isInterState: false,
     notes: "",
@@ -125,7 +125,20 @@ export function AdvancedCreateInvoiceDialog({
       // still opens empty for manual entry. Prices come across before tax with
       // each item's GST rate, and the design charge with its own, so the
       // invoice adds the GST once and comes to the job ticket's total.
-      const items = (preselectedJob.items || []).map((item: any) => lineDraftFromJobItem(key(), item));
+      let items = (preselectedJob.items || []).map((item: any) => lineDraftFromJobItem(key(), item));
+      // A job ticket with only an estimated cost (no priced items) still bills:
+      // one line from the job and its estimate. Its GST rate is left for the
+      // person to enter — it is never assumed to be 0.
+      const estimate = Number(preselectedJob.estimatedCost || preselectedJob.estimated_cost || 0);
+      if (!items.length && estimate > 0) {
+        const qty = Math.max(1, Number(preselectedJob.printSpecs?.quantity) || 1);
+        items = [newLineDraft(key(), {
+          itemName: preselectedJob.title || "Print job",
+          description: [preselectedJob.printSpecs?.printSize, preselectedJob.printSpecs?.paperType].filter(Boolean).join(" · "),
+          quantity: String(qty),
+          unitPrice: String(Math.round((estimate / qty) * 10000) / 10000),
+        })];
+      }
 
       const newFormData = {
         customerId: preselectedJob.customerId?._id || preselectedJob.customerId || "",
@@ -272,8 +285,8 @@ export function AdvancedCreateInvoiceDialog({
     if (saving.current) return;
     const problem = !formData.customerId
       ? "Select a customer."
-      : formData.items.length === 0
-        ? "Add at least one item."
+      : formData.items.length === 0 && !(Number(formData.designCharge) > 0)
+        ? "Add an item or a design charge above 0."
         : formData.items.map((l, i) => lineProblem(l, i + 1)).find(Boolean) ||
           shortOfStock() ||
           (Number(formData.designCharge) < 0 ? "The design charge can't be negative." : "") ||
@@ -545,7 +558,7 @@ export function AdvancedCreateInvoiceDialog({
                             hsnCode,
                             unit: invUnit,
                             pricing: isAreaUnit(invUnit) ? invUnit : 'unit',
-                            gstRate: item.gstRate || hsnRate(hsnCode)
+                            gstRate: pickedGstRate(hsnRate(hsnCode), (selectedItem as { gstRate?: number }).gstRate, item.gstRate)
                           });
                         }}
                         listLabel="Inventory items"
@@ -593,7 +606,7 @@ export function AdvancedCreateInvoiceDialog({
                         value={item.hsnCode}
                         onChange={(e) => {
                           const hsnCode = e.target.value.replace(/\D/g, '').slice(0, 8);
-                          updateItem(index, { hsnCode, ...(item.gstRate ? {} : { gstRate: hsnRate(hsnCode) }) });
+                          updateItem(index, { hsnCode, ...((item.gstRate === "" || item.gstRate === DEFAULT_GST_RATE) && hsnRate(hsnCode) !== "" ? { gstRate: hsnRate(hsnCode) } : {}) });
                         }}
                         inputMode="numeric"
                         placeholder="Optional"
@@ -619,7 +632,7 @@ export function AdvancedCreateInvoiceDialog({
 
               {formData.items.length === 0 && (
                 <div className="text-center py-8 text-muted-foreground">
-                  No items added yet. Click "Add Item" to get started.
+                  No inventory items added. A design charge can be invoiced on its own.
                 </div>
               )}
             </CardContent>

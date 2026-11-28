@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { ErrorState } from "@/components/common/LoadState";
 import { useSearchParams } from "react-router-dom";
 import { Loader2, Plus, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -57,6 +58,10 @@ export default function UserManagement() {
   const canSeeOverview = hasPermission("Staff & Tasks") && (me?.role === "admin" || me?.canViewAllData === true);
 
   const [users, setUsers] = useState<ManagedUser[]>([]);
+
+  // A failed load shows as an error with Retry, never as an empty list.
+
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [roles, setRoles] = useState<AccessRoleRecord[]>([]);
   const [teams, setTeams] = useState<TeamRecord[]>([]);
   const [seats, setSeats] = useState<Seats | null>(null);
@@ -71,6 +76,7 @@ export default function UserManagement() {
 
   const load = useCallback(async () => {
     try {
+      setLoadError(null);
       const [u, r, t, s] = await Promise.all([
         apiClient.getUsers({ limit: 100 }) as Promise<{ users?: ManagedUser[] }>,
         apiClient.getAccessRoles() as Promise<{ roles: AccessRoleRecord[] }>,
@@ -82,7 +88,7 @@ export default function UserManagement() {
       setTeams(t.teams || []);
       setSeats(s?.stats?.staffSeats || null);
     } catch (error) {
-      toast({ title: "User management could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -245,6 +251,9 @@ export default function UserManagement() {
           ))}
         </TabsList>
 
+        {loadError && !users.length && (
+          <ErrorState className="mt-5" error={loadError} what="users, roles and teams" onRetry={() => load()} />
+        )}
         <TabsContent value="users" className="mt-5">
           <UsersTab
             users={users}

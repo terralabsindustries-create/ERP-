@@ -12,7 +12,8 @@ import { SendQuotationEmailDialog, SendQuotationWhatsAppDialog } from "@/compone
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import apiClient from "@/lib/apiClient";
-import { preparePrintingWhenIdle, printOutcomeMessage } from "@/lib/printPdf";
+import { preparePrintingWhenIdle, printOutcomeMessage, printPdf, saveFile } from "@/lib/printPdf";
+import { bulkQuotationPdf } from "@/lib/bulkPdf";
 import { InvoiceSavedDialog, savedInvoiceId, type SavedInvoice } from "@/components/invoices/InvoiceSavedDialog";
 import { daysUntil, fmtDate, formatINR, plural } from "@/lib/format";
 
@@ -63,6 +64,8 @@ export default function Quotations() {
   const { toast } = useToast();
   const navigate = useNavigate();
   const [quotations, setQuotations] = useState<Quotation[]>([]);
+  // A failed load shows as an error with Retry, never as an empty list.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [view, setView] = useState<View>("open");
@@ -73,6 +76,9 @@ export default function Quotations() {
   const [deleting, setDeleting] = useState<Quotation | null>(null);
   const [editing, setEditing] = useState<QuotationRecord | null>(null);
   const [converted, setConverted] = useState<{ invoice: SavedInvoice; from: string } | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  useEffect(() => setSelected(new Set()), [view, search]);
 
   const canEdit = hasPermission("Quotations: Create & Edit");
   const canDelete = hasPermission("Quotations: Delete");
@@ -83,10 +89,11 @@ export default function Quotations() {
 
   const load = useCallback(async () => {
     try {
+      setLoadError(null);
       const res = (await apiClient.getQuotations({ limit: 500 })) as { quotations?: Quotation[] };
       setQuotations(res?.quotations || []);
     } catch (error) {
-      toast({ title: "Quotations could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -100,6 +107,7 @@ export default function Quotations() {
     const s = search.trim().toLowerCase();
     return quotations.filter((q) => inView(q, view) && (!s || q.quotationNumber.toLowerCase().includes(s) || customerOf(q).toLowerCase().includes(s)));
   }, [quotations, search, view]);
+  const selectedRows = rows.filter((quotation) => selected.has(quotation._id));
 
   const count = (v: View) => quotations.filter((q) => inView(q, v)).length;
   const sum = (list: Quotation[]) => list.reduce((s, q) => s + (q.total_amount || 0), 0);
@@ -137,6 +145,31 @@ export default function Quotations() {
       if (note) toast(note);
     } catch (error) {
       toast({ title: "Could not print", description: error instanceof Error ? error.message : "Check the company details in Settings.", variant: "destructive" });
+    }
+  };
+
+  const printSelected = async () => {
+    if (!selectedRows.length || bulkBusy) return;
+    setBulkBusy(true);
+    try {
+      const note = printOutcomeMessage(await printPdf(() => bulkQuotationPdf(selectedRows)), `${selectedRows.length} quotations`);
+      if (note) toast(note);
+    } catch (error) {
+      toast({ title: "Could not print selected quotations", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const downloadSelected = async () => {
+    if (!selectedRows.length || bulkBusy) return;
+    setBulkBusy(true);
+    try {
+      saveFile(await bulkQuotationPdf(selectedRows));
+    } catch (error) {
+      toast({ title: "Could not download selected quotations", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+    } finally {
+      setBulkBusy(false);
     }
   };
 
@@ -332,7 +365,20 @@ export default function Quotations() {
             )
           }
         >
+          {selectedRows.length > 0 && (
+            <div className="m-3 flex flex-wrap items-center gap-2 rounded-md border bg-muted/40 px-3 py-1.5 text-xs" role="region" aria-label="Bulk quotation actions">
+              <span className="font-medium">{selectedRows.length} selected</span>
+              <Button size="sm" variant="outline" className="h-7" disabled={bulkBusy} onClick={printSelected}><Printer className="mr-1 h-3.5 w-3.5" />Print selected</Button>
+              <Button size="sm" variant="outline" className="h-7" disabled={bulkBusy} onClick={downloadSelected}><Download className="mr-1 h-3.5 w-3.5" />Download selected</Button>
+              <Button size="sm" variant="ghost" className="h-7" disabled={bulkBusy} onClick={() => setSelected(new Set())}>Clear</Button>
+            </div>
+          )}
           <DataTable
+            error={loadError}
+            onRetry={() => load()}
+            selectable
+            selected={selected}
+            onSelectedChange={setSelected}
             columns={columns}
             rows={rows}
             rowKey={(q) => q._id}

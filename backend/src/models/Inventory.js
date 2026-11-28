@@ -104,6 +104,17 @@ const inventorySchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  // Every supplier this item has been bought from (filled when purchase order
+  // deliveries are received). `supplier` above stays the free-text supplier a
+  // person typed; this list is the purchase history, one entry per supplier.
+  suppliers: [{
+    _id: false,
+    vendorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Vendor' },
+    vendorName: { type: String, trim: true },
+    lastPurchasedAt: Date,
+    lastUnitCost: Number,
+    totalReceived: { type: Number, default: 0 }
+  }],
   location: {
     type: String,
     trim: true,

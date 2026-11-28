@@ -12,7 +12,7 @@ export const TASK_STATUS: Record<TaskStatus, { label: string; variant: "secondar
 
 export const TASK_PRIORITY: Record<string, { label: string; className: string }> = {
   low: { label: "Low", className: "border-border bg-muted text-muted-foreground" },
-  medium: { label: "Normal", className: "border-info/25 bg-info-soft text-info-strong" },
+  medium: { label: "Medium", className: "border-info/25 bg-info-soft text-info-strong" },
   high: { label: "High", className: "border-warning/30 bg-warning-soft text-warning-strong" },
   urgent: { label: "Urgent", className: "border-destructive/25 bg-destructive-soft text-destructive-strong" }
 };

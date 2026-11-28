@@ -220,9 +220,9 @@ export function DeliveryEditor({
       const contactName = last?.contactInfo?.name;
       let contactPhone = last?.contactInfo?.phone;
       if (!address) {
-        // GET /customers/:id fails on the server today, so read the customer from the list.
-        customersRef.current = customersRef.current || apiClient.listAll<CustomerRecord>("/customers", "customers", { status: "all" });
-        const rec = (await customersRef.current).find((x) => x._id === c._id);
+        // Just this customer's record (not the whole customer list).
+        const one = (await apiClient.get<{ customer?: CustomerRecord }>(`/customers/${c._id}`).catch(() => null)) as { customer?: CustomerRecord } | CustomerRecord | null;
+        const rec = one && "customer" in one ? one.customer : (one as CustomerRecord | null);
         address = parseAddress(rec?.address);
         contactPhone = rec?.phone || contactPhone;
       }

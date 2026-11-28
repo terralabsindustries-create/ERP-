@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { ErrorState } from "@/components/common/LoadState";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { format, formatDistanceToNow, startOfDay } from "date-fns";
 import { ArrowLeft, CalendarClock, MessageSquare, Send, Ticket, User, ClipboardList, History } from "lucide-react";
@@ -28,7 +29,8 @@ export default function TaskDetail() {
   const { toast } = useToast();
   const { hasPermission } = useAuth();
   const [task, setTask] = useState<Task | null>(null);
-  const [state, setState] = useState<"loading" | "ready" | "missing">("loading");
+  const [state, setState] = useState<"loading" | "ready" | "missing" | "error">("loading");
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [comment, setComment] = useState("");
   const [posting, setPosting] = useState(false);
   const [nextStatus, setNextStatus] = useState<TaskStatus | "">("");
@@ -41,8 +43,11 @@ export default function TaskDetail() {
       setTask(t);
       setNextStatus("");
       setState("ready");
-    } catch {
-      setState("missing");
+    } catch (error) {
+      // Only "not found / not yours" is "missing"; a failed or slow request is an error with Retry.
+      const kind = (error as { kind?: string })?.kind;
+      if (kind === "not_found" || kind === "forbidden") setState("missing");
+      else { setLoadError(error); setState("error"); }
     }
   }, [taskId]);
 
@@ -85,6 +90,14 @@ export default function TaskDetail() {
       <div className="page-frame max-w-5xl">
         <div className="h-8 w-64 animate-pulse rounded bg-muted" />
         <div className="h-40 animate-pulse rounded-xl bg-muted" />
+      </div>
+    );
+  }
+
+  if (state === "error") {
+    return (
+      <div className="page-frame max-w-5xl">
+        <ErrorState error={loadError} what="this task" onRetry={() => { setState("loading"); load(); }} />
       </div>
     );
   }

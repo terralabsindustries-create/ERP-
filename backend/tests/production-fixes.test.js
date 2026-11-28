@@ -220,7 +220,8 @@ describe('discounts', () => {
 
 describe('business settings', () => {
   beforeAll(async () => {
-    await Settings.create({ userId: a.admin._id, companyName: 'PA Printers Pvt Ltd', gstNumber: '32ABCDE1234F1Z5', whatsappIntegration: { enabled: true, wabaId: 'W1', phoneNumberId: 'P1', accessToken: 'SECRET-TOKEN' } });
+    // An earlier test may already have made the default settings (they are created on first use).
+    await Settings.findOneAndUpdate({ userId: a.admin._id }, { $set: { companyName: 'PA Printers Pvt Ltd', gstNumber: '32ABCDE1234F1Z5', whatsappIntegration: { enabled: true, wabaId: 'W1', phoneNumberId: 'P1', accessToken: 'SECRET-TOKEN' } } }, { upsert: true });
   });
 
   test("everyone in the business reads the owner's settings, without secrets", async () => {

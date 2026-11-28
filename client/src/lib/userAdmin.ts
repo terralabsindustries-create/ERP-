@@ -58,8 +58,8 @@ export const BASE_ROLES: Record<BaseRole, { label: string; description: string }
   accountant: { label: "Accountant", description: "Can be allowed to see everyone's billing records." }
 };
 
-/** Roles that may be allowed to see all staff data (staff never can). */
-export const VIEW_ALL_ROLES: BaseRole[] = ["manager", "accountant"];
+/** Roles whose logins can be switched to see all data (every account type except the admin, who always does). */
+export const VIEW_ALL_ROLES: BaseRole[] = ["manager", "accountant", "staff"];
 
 /**
  * How each permission module appears to people: the name used in the sidebar

@@ -108,6 +108,12 @@ export default function Staff() {
   const canSeeTeam = isAdmin || user?.role === "manager" || hasPermission("User Management");
 
   const [section, setSection] = useState<Section>("tasks");
+
+  // A failed load shows as an error with Retry, never as an empty list.
+
+  const [teamError, setTeamError] = useState<unknown>(null);
+  // A failed load shows as an error with Retry, never as an empty list.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskTotal, setTaskTotal] = useState(0);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -135,6 +141,7 @@ export default function Staff() {
   const loadTasks = useCallback(async () => {
     setLoadingTasks(true);
     try {
+      setLoadError(null);
       const [list, s] = (await Promise.all([apiClient.getTasks({ limit: TASK_LIMIT, sortBy: "dueDate", sortOrder: "asc" }), apiClient.getTaskStats()])) as [
         { data?: Task[]; pagination?: { total?: number } } | Task[],
         Stats
@@ -144,7 +151,7 @@ export default function Staff() {
       setTaskTotal(Array.isArray(list) ? rows.length : list?.pagination?.total ?? rows.length);
       setStats(s || null);
     } catch (error) {
-      toast({ title: "Tasks could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoadingTasks(false);
     }
@@ -154,6 +161,7 @@ export default function Staff() {
     if (!canSeeTeam) return setLoadingTeam(false);
     setLoadingTeam(true);
     try {
+      setTeamError(null);
       const [res, overview] = await Promise.all([
         apiClient.getUsers({ limit: 100, sortBy: "fullName", sortOrder: "asc" }) as Promise<{ users?: ManagedUser[] }>,
         (apiClient.getScheduleOverview() as Promise<{ data?: Shift[] } | Shift[]>).catch(() => [] as Shift[])
@@ -161,7 +169,7 @@ export default function Staff() {
       setPeople(res?.users || []);
       setShifts(Array.isArray(overview) ? overview : overview?.data || []);
     } catch (error) {
-      toast({ title: "The team could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setTeamError(error);
     } finally {
       setLoadingTeam(false);
     }
@@ -576,6 +584,8 @@ export default function Staff() {
             }
           >
             <DataTable
+              error={loadError}
+              onRetry={() => loadTasks()}
               columns={taskColumns}
               rows={taskRows}
               rowKey={(t) => t._id}
@@ -643,6 +653,8 @@ export default function Staff() {
             footer={!loadingTeam && teamRows.length > 0 && <span>{plural(teamRows.length, "person", "people")}</span>}
           >
             <DataTable
+              error={teamError}
+              onRetry={() => loadTeam()}
               columns={teamColumns}
               rows={teamRows}
               rowKey={(p) => p._id}

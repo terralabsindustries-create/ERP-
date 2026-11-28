@@ -102,7 +102,7 @@ export function LinePricingFields({ line, onChange, idPrefix }: { line: LineDraf
           <Label htmlFor={id("gst")} className="text-xs">
             GST %
           </Label>
-          <Input id={id("gst")} type="number" inputMode="decimal" min="0" max="100" step="any" value={line.gstRate} placeholder="18" onChange={(e) => onChange({ gstRate: e.target.value })} />
+          <Input id={id("gst")} type="number" inputMode="decimal" min="0" max="100" step="any" value={line.gstRate} placeholder="18" aria-required="true" onChange={(e) => onChange({ gstRate: e.target.value })} />
         </div>
         <div className="space-y-1 text-right">
           <span className="block text-xs text-muted-foreground">Amount (excl. GST)</span>

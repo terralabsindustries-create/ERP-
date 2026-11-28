@@ -47,12 +47,12 @@ export function ConvertToJobDialog({ order: orderProp, onClose, onConverted }: {
     setCustomer(null);
     setFinding(true);
     const linkedId = customerIdOf(order);
+    // The linked customer, else one with the same phone — looked up on the
+    // server, not by downloading every customer.
+    const key = phoneKey(order.customerPhone);
     rushOrdersApi
-      .customers()
-      .then((all) => {
-        const key = phoneKey(order.customerPhone);
-        setCustomer(all.find((c) => c._id === linkedId) || (key.length === 10 ? all.find((c) => phoneKey(c.phone) === key) : undefined) || null);
-      })
+      .findCustomer(linkedId, key.length === 10 ? key : undefined)
+      .then((found) => setCustomer(found || null))
       .catch(() => setCustomer(null))
       .finally(() => setFinding(false));
   }, [open, order]);

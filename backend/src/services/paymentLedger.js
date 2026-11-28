@@ -113,7 +113,8 @@ async function movePaid(invoiceId, delta, { session = null } = {}) {
     if (delta > 0 && UNPAYABLE.includes(invoice.status)) {
       throw new LedgerError(`${invoice.invoiceNumber} is ${invoice.status}; payments can only be applied to issued invoices`, 400, 'INVOICE_UNAVAILABLE');
     }
-    const total = round2(invoice.totalAmount);
+    // What is owed: the total adjusted by issued credit and debit notes.
+    const total = Invoice.receivableOf(invoice);
     const current = round2(invoice.paidAmount || 0);
     const next = round2(current + delta);
     if (delta > 0 && next > total + HALF_PAISA) {
@@ -143,40 +144,7 @@ async function movePaid(invoiceId, delta, { session = null } = {}) {
  * directly and, if it fails, calls the undo steps it registered (newest
  * first). `work` receives { session, onUndo }.
  */
-async function inTransaction(work) {
-  if (await transactions.supportsTransactions()) {
-    const session = await mongoose.startSession();
-    try {
-      let result;
-      // withTransaction re-runs `work` on a transient error (a write conflict
-      // with another payment), so it must start from scratch every time.
-      await session.withTransaction(async () => {
-        result = await work({ session, onUndo: () => {} });
-      });
-      return result;
-    } catch (error) {
-      if (!transactions.isTransactionUnsupported(error)) throw error;
-      // The server said it had transactions but refused one; nothing was written.
-      transactions.markTransactionsUnsupported();
-    } finally {
-      await session.endSession();
-    }
-  }
-
-  const undo = [];
-  try {
-    return await work({ session: null, onUndo: (step) => undo.push(step) });
-  } catch (error) {
-    for (const step of undo.reverse()) {
-      try {
-        await step();
-      } catch (undoError) {
-        console.error('PAYMENT NOT FULLY UNDONE — check the invoice balances it touched:', undoError.message);
-      }
-    }
-    throw error;
-  }
-}
+const inTransaction = (work) => transactions.inTransaction(work, { label: 'Payment change' });
 
 /**
  * Writes one change to a payment and moves the paid amount of every invoice
@@ -450,9 +418,10 @@ async function correctManualPaid(invoiceFilter, manualPaidAmount) {
       const recorded = hasManual ? round2((invoice.paidAmount || 0) - invoice.manualPaidAmount) : await recordedPaidFor(invoice._id, { session });
       const previousManual = hasManual ? round2(invoice.manualPaidAmount) : manualPaidOf(invoice, recorded);
       const paid = round2(recorded + manual);
-      if (paid > round2(invoice.totalAmount) + HALF_PAISA) {
+      const receivable = Invoice.receivableOf(invoice);
+      if (paid > receivable + HALF_PAISA) {
         throw new LedgerError(
-          `Payments already cover ₹${recorded.toLocaleString('en-IN')} of the ₹${round2(invoice.totalAmount).toLocaleString('en-IN')} total, so at most ₹${Math.max(0, round2(invoice.totalAmount - recorded)).toLocaleString('en-IN')} can be recorded outside them.`,
+          `Payments already cover ₹${recorded.toLocaleString('en-IN')} of the ₹${receivable.toLocaleString('en-IN')} total, so at most ₹${Math.max(0, round2(receivable - recorded)).toLocaleString('en-IN')} can be recorded outside them.`,
           400,
           'AMOUNT_EXCEEDS_TOTAL'
         );

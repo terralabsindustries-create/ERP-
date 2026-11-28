@@ -143,6 +143,9 @@ const jobSchema = new mongoose.Schema({
   // Print specifications
   printSpecs: {
     paperType: { type: String },
+    // Sheets of that paper the job uses, when the paper is a stock item; the
+    // job's paper line (items) carries the same count, rate and stock unit.
+    sheets: { type: Number, min: 0 },
     colorType: { type: String, enum: ['color', 'black_white'], default: 'color' },
     printSize: { type: String },
     quantity: { type: Number, default: 1 },
@@ -150,6 +153,39 @@ const jobSchema = new mongoose.Schema({
     lamination: { type: String },
     bindingType: { type: String }
   },
+
+  // ---- Sales order (routes/salesOrders.js). A sales order IS a job ticket:
+  // the same record moves through approval and production, so there is one
+  // order, one job and one invoice, never copies of each other. Jobs made any
+  // other way have none of these fields and behave exactly as before.
+  isSalesOrder: { type: Boolean, default: false },
+  orderNumber: { type: String, trim: true },
+  orderDate: { type: Date },
+  projectName: { type: String, trim: true, maxlength: 150 },
+  salesType: { type: String, trim: true, maxlength: 40 },
+  partyType: { type: String },
+  // Whether the customer takes a copy of the order (default) or not.
+  copyOption: { type: String, enum: ['copy', 'no_copy'], default: 'copy' },
+  quotationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Quotation' },
+  // Set while the order is live; unique, so one quotation has one live order.
+  activeQuotationKey: { type: String },
+  clientRequestId: { type: String }, // a retried create returns the same order
+  customerSnapshot: {
+    name: String, mobile: String, state: String, gstin: String, address: String
+  },
+  orderLines: { type: [mongoose.Schema.Types.Mixed], default: undefined },
+  otherCharges: { type: [mongoose.Schema.Types.Mixed], default: undefined },
+  orderTotals: { type: mongoose.Schema.Types.Mixed },
+  approval: {
+    status: { type: String, enum: ['pending', 'approved', 'cancelled'] },
+    by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    byName: String,
+    at: Date,
+    note: String
+  },
+  production: { type: mongoose.Schema.Types.Mixed },
+  salesInvoiceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Invoice' },
+  salesInvoiceClaimAt: { type: Date },
   // Flow tracking
   flowStage: {
     type: String,
@@ -213,7 +249,14 @@ jobSchema.index({ customerId: 1 });
 jobSchema.index({ userId: 1 });
 // dataScope alone is indexed on the field itself (index: true).
 jobSchema.index({ dataScope: 1, status: 1 });
+jobSchema.index({ dataScope: 1, createdAt: -1 });
+jobSchema.index({ dataScope: 1, status: 1, dueDate: 1 });
+jobSchema.index({ dataScope: 1, customerId: 1, createdAt: -1 });
 jobSchema.index({ dueDate: 1 });
+jobSchema.index({ dataScope: 1, orderNumber: 1 }, { unique: true, partialFilterExpression: { orderNumber: { $type: 'string' } } });
+jobSchema.index({ dataScope: 1, activeQuotationKey: 1 }, { unique: true, partialFilterExpression: { activeQuotationKey: { $type: 'string' } } });
+jobSchema.index({ dataScope: 1, clientRequestId: 1 }, { unique: true, partialFilterExpression: { clientRequestId: { $type: 'string' } } });
+jobSchema.index({ dataScope: 1, isSalesOrder: 1, 'approval.status': 1, orderDate: -1 });
 jobSchema.index({ createdAt: -1 });
 
 // Populate virtual relationships
@@ -226,6 +269,13 @@ jobSchema.virtual('customer', {
 
 jobSchema.virtual('invoices', {
   ref: 'Invoice',
+  localField: '_id',
+  foreignField: 'jobId'
+});
+
+// Deliveries (dispatch / challans) made for this job; the Job Tickets list shows the latest.
+jobSchema.virtual('deliveries', {
+  ref: 'Delivery',
   localField: '_id',
   foreignField: 'jobId'
 });

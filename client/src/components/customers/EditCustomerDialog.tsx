@@ -31,6 +31,8 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Edit, Trash2 } from "lucide-react";
+import { GST_STATES, stateFromGstin } from "@/lib/gstStates";
+import { gstinError, normalizeGstin } from "@/lib/gstin";
 import apiClient from "@/lib/apiClient";
 import { CUSTOMER_TYPES } from "@/lib/customerTypes";
 import { useToast } from "@/hooks/use-toast";
@@ -43,6 +45,7 @@ interface Customer {
   address?: string;
   customerType: string;
   gstNumber?: string;
+  state?: string;
   status: string;
   tags?: string[];
 }
@@ -66,6 +69,7 @@ export function EditCustomerDialog({ customer, onCustomerUpdated, onCustomerDele
     address: customer?.address || "",
     customerType: customer?.customerType || "Individual",
     gstNumber: customer?.gstNumber || "",
+    state: customer?.state || "",
     status: customer?.status || "active",
     tags: customer?.tags || []
   });
@@ -84,6 +88,7 @@ export function EditCustomerDialog({ customer, onCustomerUpdated, onCustomerDele
         address: customer.address || "",
         customerType: customer.customerType || "Individual",
         gstNumber: customer.gstNumber || "",
+        state: customer.state || "",
         status: customer.status || "active",
         tags: customer.tags || []
       });
@@ -125,12 +130,11 @@ export function EditCustomerDialog({ customer, onCustomerUpdated, onCustomerDele
     }
 
     // Validate based on customer type
-    if (formData.customerType === "Business" && !formData.gstNumber) {
-      toast({
-        title: "Missing Information",
-        description: "GST number is required for business customers",
-        variant: "destructive",
-      });
+    // GST registration is optional (unregistered businesses are valid), but
+    // anything entered must be a real GSTIN.
+    const gstProblem = gstinError(formData.gstNumber);
+    if (gstProblem) {
+      toast({ title: "Invalid GST number", description: gstProblem, variant: "destructive" });
       return;
     }
 
@@ -162,6 +166,20 @@ export function EditCustomerDialog({ customer, onCustomerUpdated, onCustomerDele
     }
   };
 
+  const handleReactivate = async () => {
+    try {
+      setDeleteLoading(true);
+      await apiClient.reactivateCustomer(customer.id);
+      toast({ title: "Customer reactivated", description: `${customer.name} is active again` });
+      setOpen(false);
+      onCustomerDeleted?.();
+    } catch (error) {
+      toast({ title: "Could not reactivate customer", description: (error as { message?: string })?.message || "Please try again", variant: "destructive" });
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
   const handleDelete = async () => {
     setShowDeleteDialog(true);
   };
@@ -175,8 +193,8 @@ export function EditCustomerDialog({ customer, onCustomerUpdated, onCustomerDele
       console.log('📋 Delete customer response:', response);
 
       toast({
-        title: "Customer Deleted",
-        description: `${customer.name} has been deleted`,
+        title: "Customer deactivated",
+        description: `${customer.name} was deactivated. Their invoices and history are kept; you can reactivate them any time.`,
       });
 
       setShowDeleteDialog(false);
@@ -189,8 +207,8 @@ export function EditCustomerDialog({ customer, onCustomerUpdated, onCustomerDele
     } catch (error) {
       console.error('Error deleting customer:', error);
       toast({
-        title: "Error",
-        description: "Failed to delete customer",
+        title: "Could not deactivate customer",
+        description: (error as { message?: string })?.message || "Failed to deactivate customer",
         variant: "destructive",
       });
     } finally {
@@ -279,17 +297,35 @@ export function EditCustomerDialog({ customer, onCustomerUpdated, onCustomerDele
               </div>
             </div>
 
-            {formData.customerType === "Business" && (
+            {(
               <div className="space-y-2">
-                <Label htmlFor="gstNumber">GST Number *</Label>
+                <Label htmlFor="gstNumber">GST Number</Label>
                 <Input
                   id="gstNumber"
                   value={formData.gstNumber}
-                  onChange={(e) => handleInputChange("gstNumber", e.target.value)}
-                  placeholder="Enter GST number"
+                  onChange={(e) => { const g = e.target.value.toUpperCase(); handleInputChange("gstNumber", g); if (!formData.state && stateFromGstin(g)) handleInputChange("state", stateFromGstin(g)); }}
+                  placeholder="e.g. 22AAAAA0000A1Z5 (leave blank if unregistered)"
+                  maxLength={15}
+                  aria-invalid={!!gstinError(formData.gstNumber)}
                 />
+                {gstinError(formData.gstNumber) && (
+                  <p className="text-xs text-destructive" role="alert">{gstinError(formData.gstNumber)}</p>
+                )}
               </div>
             )}
+
+            <div className="space-y-2">
+              <Label htmlFor="state">State</Label>
+              <select
+                id="state"
+                value={formData.state}
+                onChange={(e) => handleInputChange("state", e.target.value)}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <option value="">Select state</option>
+                {GST_STATES.map((st) => <option key={st.code} value={st.name}>{st.name}</option>)}
+              </select>
+            </div>
 
             <div className="space-y-2">
               <Label>Tags</Label>
@@ -316,10 +352,16 @@ export function EditCustomerDialog({ customer, onCustomerUpdated, onCustomerDele
             )}
 
             <DialogFooter className="flex justify-between">
-              <Button type="button" variant="destructive" onClick={handleDelete}>
-                <Trash2 className="h-4 w-4" />
-                Delete
-              </Button>
+              {customer.status === "inactive" ? (
+                <Button type="button" variant="outline" onClick={handleReactivate} disabled={deleteLoading}>
+                  Reactivate
+                </Button>
+              ) : (
+                <Button type="button" variant="destructive" onClick={handleDelete}>
+                  <Trash2 className="h-4 w-4" />
+                  Deactivate
+                </Button>
+              )}
               <div className="flex space-x-2">
                 <Button type="button" variant="outline" onClick={() => setOpen(false)}>
                   Cancel
@@ -337,9 +379,9 @@ export function EditCustomerDialog({ customer, onCustomerUpdated, onCustomerDele
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Confirm Delete</AlertDialogTitle>
+            <AlertDialogTitle>Deactivate customer?</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete "{customer.name}"? This action cannot be undone.
+              "{customer.name}" will be deactivated, not deleted. Their invoices, jobs, quotations and payments are kept and you can reactivate them at any time. To remove a customer permanently, they must have no financial history.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -351,7 +393,7 @@ export function EditCustomerDialog({ customer, onCustomerUpdated, onCustomerDele
               disabled={deleteLoading}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {deleteLoading ? "Deleting..." : "Delete Customer"}
+              {deleteLoading ? "Deactivating..." : "Deactivate Customer"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

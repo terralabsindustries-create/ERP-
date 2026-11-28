@@ -5,6 +5,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
+    "dev:local": "MONGODB_URI=mongodb://127.0.0.1:27017/terra_dev nodemon src/server.js",
+    "dev:seed": "node scripts/dev-local-seed.js",
     "test": "jest",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix"

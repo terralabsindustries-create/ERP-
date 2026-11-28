@@ -10,7 +10,7 @@ const AccessRole = require('../src/models/AccessRole');
 const { connectTestDb, disconnectTestDb } = require('./helpers/db');
 const { createOrg, auth } = require('./helpers/fixtures');
 
-const MANAGER_PERMS = ['Dashboard', 'Jobs', 'Staff & Tasks', 'Customers', 'Invoicing', 'Payments', 'Reports', 'User Management'];
+const MANAGER_PERMS = ['Dashboard', 'Jobs', 'Staff & Tasks', 'Customers', 'Invoicing', 'Payments', 'Reports', 'User Management', 'User Management: View', 'User Management: Create Login', 'User Management: Edit Permissions'];
 
 let org;
 let other;
@@ -72,10 +72,10 @@ describe('roles', () => {
     expect(res.status).toBe(409);
   });
 
-  test('staff roles can never see all staff data', async () => {
-    const res = await as('admin').post('/api/access-roles', { name: 'Odd one', baseRole: 'staff', permissions: [], canViewAllData: true });
+  test('any non-admin role can be set to see all data (the switch is per role and per login)', async () => {
+    const res = await as('admin').post('/api/access-roles', { name: 'Senior staff', baseRole: 'staff', permissions: [], canViewAllData: true });
     expect(res.status).toBe(201);
-    expect(res.body.data.role.canViewAllData).toBe(false);
+    expect(res.body.data.role.canViewAllData).toBe(true);
   });
 });
 

@@ -90,7 +90,7 @@ describe('a short invoice', () => {
     expect(out.pages).toEqual([{ width: A4.width, height: A4.height }]);
     for (const part of [
       'INVOICE', 'LOTUS PRINTS & GRAPHICS', 'GSTIN: 32ABCDE1234F1Z5', 'BILL TO', 'Malabar Events & Weddings', 'GSTIN: 32AAACM9876K1Z2',
-      'Phone: +91 99460 11223', 'Invoice No.', 'INV-2026-11-0041', 'Invoice Date', '05/11/2026', 'Due Date', '05/12/2026',
+      'Phone: +91 99460 11223', 'Invoice No.', 'INV-2026-11-0041', 'Invoice Date', '5 Nov 2026', 'Due Date', '5 Dec 2026',
       'Item & Description', 'Size (L × W)', 'Area', 'Qty', 'Rate', 'Amount', 'Flex banner 1', 'Visiting cards 2',
       'AMOUNT IN WORDS', 'BANK DETAILS', '50200012345678', 'HDFC0001234', 'TERMS & CONDITIONS', 'SCAN TO PAY',
       'UPI ID', 'Total', 'For Lotus Prints & Graphics', 'Authorised Signatory'
@@ -244,7 +244,7 @@ test('a quotation is drawn by the same layout, with its own number and validity'
   };
   const out = render(PDFService.quotationDocument(quotation, company));
   expect(out.pages).toHaveLength(1);
-  for (const part of ['QUOTATION', 'Quotation No.', 'QT-2026-0007', 'Valid Until', '20/11/2026', 'CUSTOMER', 'BILLING ADDRESS', 'SHIPPING ADDRESS', 'Warehouse Road', 'Size (L × W)', 'INR 3,398.40']) {
+  for (const part of ['QUOTATION', 'Quotation No.', 'QT-2026-0007', 'Valid Until', '20 Nov 2026', 'CUSTOMER', 'BILLING ADDRESS', 'SHIPPING ADDRESS', 'Warehouse Road', 'Size (L × W)', 'INR 3,398.40']) {
     expect(out.find(part).length).toBeGreaterThan(0);
   }
 });

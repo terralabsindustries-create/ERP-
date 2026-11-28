@@ -13,8 +13,8 @@ import { CreateCustomerDialog } from "@/components/customers/CreateCustomerDialo
 import { CustomerSearch, customerIdOf, useCustomerRecord, type CustomerOption } from "@/components/customers/CustomerSearch";
 import { BillingTotals } from "@/components/billing/BillingTotals";
 import { LinePricingFields } from "@/components/billing/LinePricingFields";
-import { draftTotals, gstRateProblem, lineDraftFrom, lineDraftFromJobItem, lineInput, lineProblem, newLineDraft, type LineDraft } from "@/components/billing/lineDraft";
-import { useHsnGstRates } from "@/components/billing/useHsnGstRates";
+import { DEFAULT_GST_RATE, draftTotals, gstRateProblem, lineDraftFrom, lineDraftFromJobItem, lineInput, lineProblem, newLineDraft, type LineDraft } from "@/components/billing/lineDraft";
+import { useHsnGstRates, pickedGstRate } from "@/components/billing/useHsnGstRates";
 import { isAreaUnit } from "@/lib/billing";
 import { sellingRate } from "@/components/billing/stock";
 import { localDate } from "@/lib/format";
@@ -133,7 +133,7 @@ export const CreateQuotationDialog = ({
     terms_conditions: "",
     notes: "",
     design_charge: "",
-    design_charge_tax_rate: "",
+    design_charge_tax_rate: DEFAULT_GST_RATE,
     discount_amount: "",
     is_interstate: false,
   };
@@ -167,7 +167,7 @@ export const CreateQuotationDialog = ({
       terms_conditions: quotation.terms_conditions || "",
       notes: quotation.notes || "",
       design_charge: quotation.design_charge ? String(quotation.design_charge) : "",
-      design_charge_tax_rate: quotation.design_charge ? String(quotation.design_charge_tax_rate ?? 0) : "",
+      design_charge_tax_rate: quotation.design_charge ? String(quotation.design_charge_tax_rate ?? 0) : DEFAULT_GST_RATE,
       discount_amount: quotation.discount_amount ? String(quotation.discount_amount) : "",
       is_interstate: quotation.is_interstate === true
     });
@@ -199,7 +199,7 @@ export const CreateQuotationDialog = ({
       customer_id: typeof initialJob.customerId === "string" ? initialJob.customerId : initialJob.customerId?._id || "",
       notes: initialJob.notes || initialJob.description || "",
       design_charge: initialJob.designCharge?.amount ? String(initialJob.designCharge.amount) : "",
-      design_charge_tax_rate: initialJob.designCharge?.amount ? String(initialJob.designCharge.gstRate ?? 0) : "",
+      design_charge_tax_rate: initialJob.designCharge?.amount ? String(initialJob.designCharge.gstRate ?? 0) : DEFAULT_GST_RATE,
       discount_amount: initialJob.pricingDetails?.discountAmount ? String(initialJob.pricingDetails.discountAmount) : "",
     });
     setItems(initialJob.items?.length
@@ -242,7 +242,7 @@ export const CreateQuotationDialog = ({
       unitPrice: String(sellingRate(inv)),
       unit,
       pricing: isAreaUnit(unit) ? unit : 'unit',
-      gstRate: items[index].gstRate || hsnRate(hsnCode),
+      gstRate: pickedGstRate(hsnRate(hsnCode), (inv as { gstRate?: number }).gstRate, items[index].gstRate),
     });
   };
 
@@ -546,7 +546,7 @@ export const CreateQuotationDialog = ({
                         value={item.hsnCode}
                         onChange={(e) => {
                           const hsnCode = e.target.value.replace(/\D/g, '').slice(0, 8);
-                          updateItem(index, { hsnCode, ...(item.gstRate ? {} : { gstRate: hsnRate(hsnCode) }) });
+                          updateItem(index, { hsnCode, ...((item.gstRate === "" || item.gstRate === DEFAULT_GST_RATE) && hsnRate(hsnCode) !== "" ? { gstRate: hsnRate(hsnCode) } : {}) });
                         }}
                         inputMode="numeric"
                         placeholder="Optional"

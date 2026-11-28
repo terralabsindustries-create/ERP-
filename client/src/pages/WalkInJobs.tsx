@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/common/EmptyState";
+import { ErrorState, StaleDataBanner } from "@/components/common/LoadState";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { PageShell } from "@/components/layout/PageShell";
 import { ConfirmDialog, DataCard, DataTable, EntityCell, FilterSelect, MetricBar, Pagination, SearchField, Stack, StatusPill, Toolbar, ViewTabs, type Column, type RowAction } from "@/components/data";
@@ -106,6 +107,9 @@ export default function WalkInJobs() {
     }
   }, [toast]);
 
+  // A failed load is an error to show, never an empty queue.
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -116,8 +120,10 @@ export default function WalkInJobs() {
         const sort: Pick<CounterListParams, "sortBy" | "sortOrder"> = view === "overdue" || view === "ready" ? { sortBy: "promisedAt", sortOrder: "asc" } : { sortBy: "createdAt", sortOrder: "desc" };
         setList(await counterJobsApi.list({ ...filters, ...sort, view, page, limit: PAGE_SIZE }));
       }
+      setLoadError(null);
+      setLoadedAt(Date.now());
     } catch (error) {
-      toast({ title: "Counter jobs could not be loaded", description: errorText(error), variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -392,9 +398,14 @@ export default function WalkInJobs() {
             </div>
           }
         >
+          {loadError && (view === "board" ? boardJobs.length > 0 : rows.length > 0) && (
+            <StaleDataBanner className="m-3" error={loadError} onRetry={load} retrying={loading} updatedAt={loadedAt} />
+          )}
           {view === "board" ? (
             !loading && boardJobs.length === 0 ? (
-              filtered ? (
+              loadError ? (
+                <ErrorState error={loadError} what="the counter queue" onRetry={load} />
+              ) : filtered ? (
                 <EmptyState compact icon={Store} title="No jobs in the queue match" description="Try another search or filter." />
               ) : (
                 <EmptyState icon={Store} title="The counter queue is clear" description="Jobs taken at the counter show here until they're collected." action={newJob} />
@@ -427,7 +438,9 @@ export default function WalkInJobs() {
                 </div>
               )}
               empty={
-                filtered || view !== "all" ? (
+                loadError ? (
+                  <ErrorState error={loadError} what="counter jobs" onRetry={load} />
+                ) : filtered || view !== "all" ? (
                   <EmptyState compact icon={Store} title="No jobs in this view" description="Try another view, search or filter." />
                 ) : (
                   <EmptyState icon={Store} title="No counter jobs yet" description="Take the first walk-in job — it joins the queue as waiting." action={newJob} />

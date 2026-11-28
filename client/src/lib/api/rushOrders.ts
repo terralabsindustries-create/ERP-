@@ -104,6 +104,16 @@ export const rushOrdersApi = {
 
   /** Every active customer, for the picker and to find one by phone. */
   customers: () => apiClient.listAll<CustomerOption>("/customers", "customers"),
+  /** One customer by id, else by a 10-digit phone (server search), without listing every customer. */
+  findCustomer: async (id?: string | null, phone10?: string): Promise<CustomerOption | undefined> => {
+    if (id) {
+      const one = (await apiClient.get<{ customer?: CustomerOption }>(`/customers/${id}`).catch(() => null)) as { customer?: CustomerOption } | null;
+      if (one?.customer) return one.customer;
+    }
+    if (!phone10) return undefined;
+    const res = await apiClient.get<{ customers?: CustomerOption[] }>("/customers", { status: "all", search: phone10, limit: 5 });
+    return (res?.customers || []).find((c) => (c.phone || "").replace(/\D/g, "").slice(-10) === phone10);
+  },
   createCustomer: async (c: { name: string; phone: string; email?: string }) =>
     (await apiClient.post<{ customer: CustomerOption }>("/customers", { ...c, customerType: "Individual" })).customer,
   createJob: async (job: NewJobInput) => (await apiClient.post<{ job: { _id: string; title: string } }>("/jobs", job)).job

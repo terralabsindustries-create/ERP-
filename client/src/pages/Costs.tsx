@@ -90,6 +90,12 @@ export default function Costs() {
   const canExport = hasPermission("Cost & Profit: Export");
 
   const [view, setView] = useState<View>("jobs");
+
+  // A failed load shows as an error with Retry, never as an empty list.
+
+  const [costsError, setCostsError] = useState<unknown>(null);
+  // A failed load shows as an error with Retry, never as an empty list.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [period, setPeriod] = useState<Period>("month");
   const [stats, setStats] = useState<Stats | null>(null);
   const [jobs, setJobs] = useState<JobProfit[]>([]);
@@ -124,10 +130,11 @@ export default function Costs() {
   const loadJobs = useCallback(async () => {
     setLoading(true);
     try {
+      setLoadError(null);
       const res = (await apiClient.get("/costs/jobs", { from: range.from, to: range.to, search: q })) as { jobs?: JobProfit[] };
       setJobs(res?.jobs || []);
     } catch (error) {
-      toast({ title: "Job profit could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -136,6 +143,7 @@ export default function Costs() {
   const loadCosts = useCallback(async () => {
     setLoading(true);
     try {
+      setCostsError(null);
       const res = (await apiClient.get("/costs", {
         from: range.from,
         to: range.to,
@@ -149,7 +157,7 @@ export default function Costs() {
       setCostTotal(res?.pagination?.total || 0);
       setCostSum(res?.totalAmount || 0);
     } catch (error) {
-      toast({ title: "Costs could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setCostsError(error);
     } finally {
       setLoading(false);
     }
@@ -406,6 +414,8 @@ export default function Costs() {
         >
           {view === "jobs" ? (
             <DataTable
+              error={loadError}
+              onRetry={() => loadJobs()}
               columns={jobColumns}
               rows={jobs}
               rowKey={(j) => j.jobId}
@@ -460,6 +470,8 @@ export default function Costs() {
             />
           ) : (
             <DataTable
+              error={costsError}
+              onRetry={() => loadCosts()}
               columns={costColumns}
               rows={costs}
               rowKey={(c) => c._id}

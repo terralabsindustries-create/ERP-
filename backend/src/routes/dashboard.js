@@ -15,6 +15,7 @@ const { jobScope } = require('../utils/jobAccess');
 const { staffScopeQuery, canViewAllStaffData } = require('../utils/dataScopeHelper');
 const { accountScope } = require('../utils/accountScope');
 
+const { READY_FOR_DISPATCH } = require('../utils/jobMetrics');
 const router = express.Router();
 
 /*
@@ -41,10 +42,8 @@ router.get('/stats', protect, async (req, res) => {
     const today = new Date(Date.parse(`${istDay}T00:00:00Z`) - istOffset);
     const tomorrow = new Date(today.getTime() + 864e5);
     const monthStart = new Date(Date.parse(`${istDay.slice(0, 7)}-01T00:00:00Z`) - istOffset);
-    const settings = await businessSettings(user);
-
     const stats = {
-      monthlyTarget: settings.monthlyRevenueTarget,
+      monthlyTarget: null,
       todaysJobs: null,
       urgentJobs: null,
       openJobs: null,
@@ -58,9 +57,11 @@ router.get('/stats', protect, async (req, res) => {
       cashBalance: null,
       bankBalance: null,
       lowStockItems: null,
-      pendingDeliveries: null
+      pendingDeliveries: null,
+      readyForDispatch: null
     };
-    const work = [];
+    // Every figure is independent: all of them are read at once.
+    const work = [businessSettings(user).then((settings) => (stats.monthlyTarget = settings.monthlyRevenueTarget))];
 
     if (userCan(user, 'Jobs')) {
       // A designer's counts cover their own job tickets (utils/jobAccess.js).
@@ -68,7 +69,10 @@ router.get('/stats', protect, async (req, res) => {
       work.push(
         Job.countDocuments({ ...scope, createdAt: { $gte: today, $lt: tomorrow } }).then((n) => (stats.todaysJobs = n)),
         Job.countDocuments({ ...scope, ...OPEN_JOB, priority: 'urgent' }).then((n) => (stats.urgentJobs = n)),
-        Job.countDocuments({ ...scope, ...OPEN_JOB }).then((n) => (stats.openJobs = n))
+        Job.countDocuments({ ...scope, ...OPEN_JOB }).then((n) => (stats.openJobs = n)),
+        // "Awaiting dispatch" is the board's Ready to Dispatch stage (utils/jobMetrics.js),
+        // so the dashboard and the production board always show the same number.
+        Job.countDocuments({ ...scope, status: { $in: READY_FOR_DISPATCH } }).then((n) => (stats.readyForDispatch = n))
       );
     }
 
@@ -138,6 +142,7 @@ router.get('/stats', protect, async (req, res) => {
         bankBalance: 'Current bank balance, including earlier receipts and payouts',
         lowStockItems: 'Active stock items at or below their minimum level',
         pendingDeliveries: 'Deliveries scheduled or in transit',
+        readyForDispatch: 'Job tickets in the Ready to Dispatch stage (finished, not yet delivered)',
         monthlyTarget: 'Target you set on the dashboard'
       }
     });

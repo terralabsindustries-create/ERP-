@@ -71,31 +71,58 @@ async function createInTransaction(data, lines, user) {
 }
 
 async function createStepByStep(data, lines, user) {
+  const { compensation } = transactions;
+  const entry = await compensation.openJournal('Invoice creation');
   // Puts back whatever it took if it fails part-way.
-  const taken = await InventoryService.takeStockForInvoice(lines, user);
+  let taken;
+  try {
+    taken = await InventoryService.takeStockForInvoice(lines, user);
+  } catch (error) {
+    await compensation.closeJournal(entry);
+    throw error;
+  }
   let invoice = null;
   try {
     invoice = await Invoice.createNumbered(data, { attempts: NUMBER_ATTEMPTS });
     const movements = InventoryService.saleMovements(taken, invoice, user);
     if (movements.length) await InventoryMovement.insertMany(movements);
+    await compensation.closeJournal(entry);
     return invoice;
   } catch (error) {
-    await undo(invoice, taken, user);
+    const failures = await undo(invoice, taken, user);
+    if (!failures.length) {
+      await compensation.closeJournal(entry);
+      throw error;
+    }
+    const record = await compensation.recordCompensationFailure({ entry, label: 'Invoice creation', error, undoErrors: failures, total: 3 });
+    error.compensationFailed = true;
+    error.failureId = record ? String(record._id) : undefined;
     throw error;
   }
 }
 
-/** Removes a half-made invoice: its movements, the invoice, then the stock it took. */
+/** Removes a half-made invoice: its movements, the invoice, then the stock it took. Returns the steps that failed. */
 async function undo(invoice, taken, user) {
+  const failures = [];
+  const attempt = async (step, message, fn) => {
+    try {
+      await fn();
+    } catch (error) {
+      console.error(message, error.message);
+      failures.push({ step, message: `${message} ${error.message}`.slice(0, 500) });
+    }
+  };
   if (invoice) {
-    await InventoryMovement.deleteMany({ referenceType: 'invoice', referenceId: invoice._id }).catch((error) =>
-      console.error(`Could not remove the stock movements of unfinished invoice ${invoice.invoiceNumber}:`, error.message)
-    );
-    await Invoice.deleteOne({ _id: invoice._id }).catch((error) =>
-      console.error(`INVOICE NOT REMOVED: unfinished invoice ${invoice.invoiceNumber} (${invoice._id}) — delete it by hand.`, error.message)
-    );
+    await attempt(1, `Could not remove the stock movements of unfinished invoice ${invoice.invoiceNumber}:`, () =>
+      InventoryMovement.deleteMany({ referenceType: 'invoice', referenceId: invoice._id }));
+    await attempt(2, `INVOICE NOT REMOVED: unfinished invoice ${invoice.invoiceNumber} (${invoice._id}) — delete it by hand.`, () =>
+      Invoice.deleteOne({ _id: invoice._id }));
   }
-  await InventoryService.returnStock(taken, user);
+  await attempt(3, 'Stock taken for the invoice could not be put back:', async () => {
+    const notRestored = await InventoryService.returnStock(taken, user);
+    if (notRestored.length) throw new Error(notRestored.join('; '));
+  });
+  return failures;
 }
 
 module.exports = { createInvoiceWithStock };

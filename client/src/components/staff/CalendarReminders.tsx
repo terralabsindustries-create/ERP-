@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { fmtDate } from "@/lib/format";
 import { Link } from "react-router-dom";
 import { differenceInCalendarDays } from "date-fns";
 import { useAuth } from "@/contexts/AuthContext";
@@ -127,17 +128,12 @@ export function CalendarReminders({ onTaskUpdate }: CalendarRemindersProps) {
   };
 
   const formatDueDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric'
-    });
+    return fmtDate(dateString);
   };
 
   const formatDueTime = (dateString: string) => {
     const date = new Date(dateString);
-    return date.toLocaleTimeString('en-US', {
+    return date.toLocaleTimeString('en-IN', {
       hour: '2-digit',
       minute: '2-digit'
     });

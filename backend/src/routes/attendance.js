@@ -132,7 +132,7 @@ router.post('/', async (req, res) => {
     const record = await Attendance.findOneAndUpdate(
       scopeFilter(req, { employeeId, date: day }),
       {
-        $set: { status: status || 'present', checkIn, checkOut, workHours, overtimeHours, notes },
+        $set: { status: status || 'present', checkIn, checkOut, workHours, overtimeHours, notes, source: 'manual' },
         $setOnInsert: { employeeId, date: day, ...ownership(req) }
       },
       { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
@@ -166,7 +166,8 @@ router.post('/bulk', async (req, res) => {
       updateOne: {
         filter: { ...scopeFilter(req), employeeId: r.employeeId, date: day },
         update: {
-          $set: { status: r.status || 'present', notes: r.notes },
+          // The sign-in time stays; the status is now HR's.
+          $set: { status: r.status || 'present', notes: r.notes, source: 'manual' },
           $setOnInsert: { employeeId: r.employeeId, date: day, ...own }
         },
         upsert: true

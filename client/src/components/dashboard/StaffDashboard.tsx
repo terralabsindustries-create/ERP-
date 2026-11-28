@@ -16,8 +16,12 @@ import {
   AlertCircle,
   Loader2,
   User,
-  Wallet
+  Wallet,
+  FilePlus2,
+  BadgeCheck,
+  Hourglass
 } from "lucide-react";
+import { StatCard } from "@/components/common/StatTile";
 import {
   Select,
   SelectContent,
@@ -28,7 +32,7 @@ import {
 import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
 import { CreateQuotationDialog } from "@/components/quotations/CreateQuotationDialog";
 import { CalendarReminders } from "@/components/staff/CalendarReminders";
-import { formatCurrency } from "@/lib/utils";
+import { formatINR } from "@/lib/printWorkflow";
 import { PageShell } from "@/components/layout/PageShell";
 import { JobStatusBadge } from "@/components/jobs/JobStatusBadge";
 import { Link } from "react-router-dom";
@@ -64,6 +68,8 @@ interface MyJob {
   customerId?: { name?: string };
 }
 
+const periodText = { all: "All time", weekly: "Last 7 days", monthly: "Last 30 days", yearly: "Last year" } as const;
+
 export function StaffDashboard() {
   const { user, hasPermission } = useAuth();
   const canCreateJob = hasPermission("Jobs: Create & Edit");
@@ -71,6 +77,8 @@ export function StaffDashboard() {
   const { toast } = useToast();
   const [showCreateJob, setShowCreateJob] = useState(false);
   const [totalDesignCharge, setTotalDesignCharge] = useState(0);
+  // Job tickets this login created in the period: created, proof approved, pending approval.
+  const [jobCounts, setJobCounts] = useState<{ created: number; approved: number; pending: number; cancelled: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [customers, setCustomers] = useState<unknown[]>([]);
   const [selectedPeriod, setSelectedPeriod] = useState<'weekly' | 'monthly' | 'yearly' | 'all'>('all');
@@ -93,8 +101,13 @@ export function StaffDashboard() {
   const fetchStaffStats = useCallback(async () => {
     try {
       setLoading(true);
-      const response = (await apiClient.get('/jobs/staff/stats', { period: selectedPeriod })) as { totalDesignCharge?: number };
+      const response = (await apiClient.get('/jobs/staff/stats', { period: selectedPeriod })) as {
+        totalDesignCharge?: number;
+        jobs?: { created: number; approved: number; pending: number; cancelled: number };
+      };
       setTotalDesignCharge(response?.totalDesignCharge || 0);
+      // An older server sends no counts: show nothing rather than zeros.
+      setJobCounts(response?.jobs || null);
     } catch (error: unknown) {
       toast({
         title: "Earnings could not be loaded",
@@ -102,6 +115,7 @@ export function StaffDashboard() {
         variant: "destructive",
       });
       setTotalDesignCharge(0);
+      setJobCounts(null);
     } finally {
       setLoading(false);
     }
@@ -352,10 +366,10 @@ export function StaffDashboard() {
         >
           <div className="relative p-4 sm:p-5">
             <div className="num text-3xl font-semibold tracking-tight">
-              {loading ? <span className="inline-block h-8 w-28 animate-pulse rounded bg-muted" /> : formatCurrency(totalDesignCharge)}
+              {loading ? <span className="inline-block h-8 w-28 animate-pulse rounded bg-muted" /> : formatINR(totalDesignCharge)}
             </div>
             <p className="mt-1.5 text-xs text-muted-foreground">
-              Design charges on job tickets you created
+              Design charges without GST on job tickets you created
               {selectedPeriod === 'weekly' && ' in the last 7 days'}
               {selectedPeriod === 'monthly' && ' in the last 30 days'}
               {selectedPeriod === 'yearly' && ' in the last year'}
@@ -466,6 +480,20 @@ export function StaffDashboard() {
           )}
         </Panel>
       </section>
+
+      {/* Job tickets this login created, for the period chosen on Earnings */}
+      {jobCounts && (
+        <section aria-label="Your job tickets" className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <StatCard
+            label="Jobs created"
+            value={jobCounts.created}
+            icon={FilePlus2}
+            hint={`${periodText[selectedPeriod]}${jobCounts.cancelled ? ` · ${jobCounts.cancelled} cancelled not counted` : ""}`}
+          />
+          <StatCard label="Approved" value={jobCounts.approved} icon={BadgeCheck} tone="success" hint="Proof approved or further along" />
+          <StatCard label="Pending approval" value={jobCounts.pending} icon={Hourglass} tone={jobCounts.pending > 0 ? "warning" : "default"} hint="Not yet at Proof Approved" />
+        </section>
+      )}
 
       {/* Calendar & Reminders Section */}
       <CalendarReminders onTaskUpdate={fetchAssignedTasks} />

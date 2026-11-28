@@ -10,7 +10,7 @@ export const STATUS_META: Record<RushStatus, { label: string; tone: PillTone }> 
   cancelled: { label: "Cancelled", tone: "neutral" }
 };
 
-export const PRIORITY_LABEL: Record<RushPriority, string> = { low: "Low", medium: "Normal", high: "High", urgent: "Urgent" };
+export const PRIORITY_LABEL: Record<RushPriority, string> = { low: "Low", medium: "Medium", high: "High", urgent: "Urgent" };
 
 export const isOpen = (o: RushOrder) => o.status === "pending" || o.status === "in_progress";
 

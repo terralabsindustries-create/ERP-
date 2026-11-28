@@ -101,9 +101,9 @@ export function UserSheet({ open, onOpenChange, user, roles, teams, onSaved }: U
           accessRoleId: null,
           role: customRole,
           permissions: customPerms,
-          ...(canGrantViewAll && { canViewAllData: VIEW_ALL_ROLES.includes(customRole) && customViewAll })
+          ...(canGrantViewAll && { canViewAllData: customViewAll })
         }
-      : { accessRoleId: roleChoice };
+      : { accessRoleId: roleChoice, ...(canGrantViewAll && { canViewAllData: customViewAll }) };
 
     setSaving(true);
     try {
@@ -123,7 +123,7 @@ export function UserSheet({ open, onOpenChange, user, roles, teams, onSaved }: U
           teamIds,
           // Leave the role alone when it didn't change, so a role edit made
           // meanwhile by someone else isn't overwritten with a stale copy.
-          ...(unchangedRole && !isCustom ? {} : access)
+          ...(unchangedRole && !isCustom ? (canGrantViewAll ? { canViewAllData: customViewAll } : {}) : access)
         })) as { invitationEmail?: { sent: boolean; to: string; message?: string } } | undefined;
         // Correcting a pending invitee's address mails them a fresh link.
         const sentTo = result?.invitationEmail;
@@ -211,7 +211,15 @@ export function UserSheet({ open, onOpenChange, user, roles, teams, onSaved }: U
       <EditorSection title="Access" description="Pick a role, a saved set of permissions. Editing that role later updates everyone on it.">
         <div className="space-y-1.5">
           <Label htmlFor="um-role">Role</Label>
-          <Select value={roleChoice} onValueChange={setRoleChoice}>
+          <Select
+            value={roleChoice}
+            onValueChange={(v) => {
+              setRoleChoice(v);
+              // A role sets the starting visibility; the switch below can still override it for this login.
+              const r = roles.find((x) => x._id === v);
+              if (r) setCustomViewAll(r.canViewAllData);
+            }}
+          >
             <SelectTrigger id="um-role" className={cn(!roleChoice && "text-muted-foreground")}>
               <SelectValue placeholder="Choose a role" />
             </SelectTrigger>
@@ -298,19 +306,23 @@ export function UserSheet({ open, onOpenChange, user, roles, teams, onSaved }: U
                 </Select>
                 <p className="text-xs text-muted-foreground">{BASE_ROLES[customRole].description}</p>
               </div>
-              {VIEW_ALL_ROLES.includes(customRole) && canGrantViewAll && (
-                <div className="flex items-start justify-between gap-3 rounded-lg border px-3 py-2.5 sm:mt-6">
-                  <label htmlFor="um-viewall" className="cursor-pointer">
-                    <span className="block text-sm font-medium">Can view all staff data</span>
-                    <span className="block text-xs text-muted-foreground">Records created by everyone, not only their own.</span>
-                  </label>
-                  <Switch id="um-viewall" checked={customViewAll} onCheckedChange={setCustomViewAll} />
-                </div>
-              )}
             </div>
             <PermissionMatrix value={customPerms} onChange={setCustomPerms} canGrant={hasPermission} />
           </div>
         )}
+      </EditorSection>
+
+      <EditorSection title="Data visibility" description="Choose whose records this login can see: job tickets, invoices and the rest of the business's work.">
+        <div className="flex items-start justify-between gap-3 rounded-lg border px-3 py-2.5">
+          <label htmlFor="um-viewall" className="cursor-pointer">
+            <span className="block text-sm font-medium">Can view all data</span>
+            <span className="block text-xs text-muted-foreground">
+              {customViewAll ? "On: sees everyone's records, not only their own." : "Off: sees only the records they created themselves. Other people's job tickets and invoices stay hidden from them."}
+            </span>
+          </label>
+          <Switch id="um-viewall" checked={customViewAll} onCheckedChange={setCustomViewAll} disabled={!canGrantViewAll} />
+        </div>
+        {!canGrantViewAll && <p className="text-xs text-muted-foreground">Only the admin, or someone who already sees all data, can change this.</p>}
       </EditorSection>
 
       <EditorSection title="Teams" description="Optional. Teams group people who work together; they don't change access.">

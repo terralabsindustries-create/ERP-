@@ -76,11 +76,10 @@ export function PaymentCollectionPanel({ variant = "report" }: { variant?: "dash
   );
 
   const metrics = [
-    { label: `Collected ${period}`, value: compact(t?.collected || 0), hint: data?.unassigned.received ? `${money(data.unassigned.received)} not in an account` : `${data?.accounts.reduce((n, a) => n + a.receivedCount, 0) || 0} payments` },
     { label: "Cash", value: compact(data?.byKind.cash.received || 0), hint: `Balance ${compact(data?.byKind.cash.currentBalance || 0)}` },
     { label: "Paytm / UPI wallets", value: compact(data?.byKind.wallet.received || 0), hint: `Balance ${compact(data?.byKind.wallet.currentBalance || 0)}` },
     { label: "Bank accounts", value: compact(data?.byKind.bank.received || 0), hint: `Balance ${compact(data?.byKind.bank.currentBalance || 0)}` },
-    { label: "Total balance now", value: compact(t?.currentBalance || 0), hint: "Across all accounts", tone: (t?.currentBalance || 0) < 0 ? ("danger" as const) : ("default" as const) }
+    { label: `Collected ${period}`, value: compact(t?.collected || 0), hint: data?.unassigned.received ? `${money(data.unassigned.received)} not in an account` : `${data?.accounts.reduce((n, a) => n + a.receivedCount, 0) || 0} payments` }
   ];
 
   const columns: Column<ClosingRow>[] = [

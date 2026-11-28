@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import apiClient, { ApiResponse } from '@/lib/apiClient';
 import { useToast } from '@/hooks/use-toast';
 
@@ -37,6 +37,9 @@ interface AuthContextType {
   refreshUser: () => Promise<User | undefined>;
   /** Drop the local session without calling the server (the login no longer exists). */
   forgetSession: () => void;
+  /** Set when the saved session could not be checked (server slow or offline) — not signed out. */
+  sessionCheckError: Error | null;
+  retrySessionCheck: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -47,26 +50,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
 
-  useEffect(() => {
-    // Check for existing token and user
-    const checkAuthStatus = async () => {
-      try {
-        const token = localStorage.getItem('token');
-        if (token) {
-          const userData = await apiClient.getCurrentUser();
-          setUser(userData);
-          setSession({ user: userData });
-        }
-      } catch (error) {
-        // Token is invalid, clear it
+  const [sessionCheckError, setSessionCheckError] = useState<Error | null>(null);
+  const checkAuthStatus = useCallback(async () => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setSessionCheckError(null);
+    try {
+      const userData = await apiClient.getCurrentUser();
+      setUser(userData);
+      setSession({ user: userData });
+    } catch (error: any) {
+      // Only a rejected token ends the session. A timeout, a dropped
+      // connection or a server error says nothing about the login, so the
+      // token is kept and the person can retry instead of being signed out.
+      if (error?.kind === 'auth' || error?.status === 401) {
         apiClient.clearToken();
-      } finally {
-        setLoading(false);
+      } else {
+        setSessionCheckError(error instanceof Error ? error : new Error('Could not check your session'));
       }
-    };
-
-    checkAuthStatus();
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    checkAuthStatus();
+  }, [checkAuthStatus]);
 
   // apiClient fires this when the server answers 401 to a signed-in request
   // (expired token, deactivated or deleted login): drop the session so the
@@ -174,7 +187,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    * Mirrors backend/src/middleware/requirePermission.js exactly — keep the two
    * in step or the UI will offer buttons the API rejects.
    */
-  const hasPermission = (permission: string): boolean => {
+  const hasPermission = useCallback((permission: string): boolean => {
     // Admin has full access to everything
     if (user?.role === 'admin') {
       return true;
@@ -193,11 +206,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!hasAnyActionForModule) return true;
 
     return granted.includes(permission);
-  };
+  }, [user]);
 
   // Re-fetch the current user (e.g. right after signup) so the app treats
   // them as signed in.
-  const refreshUser = async () => {
+  // Stable identities: consumers' effects that list these as dependencies
+  // (the plan checkout, pages) must not re-run, and re-fetch, on every render.
+  const refreshUser = useCallback(async () => {
     try {
       const userData = await apiClient.getCurrentUser();
       setUser(userData);
@@ -206,26 +221,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error('Failed to refresh user:', error);
     }
-  };
+  }, []);
 
-  const forgetSession = () => {
+  const forgetSession = useCallback(() => {
     signedInRef.current = false;
     apiClient.clearToken();
     setUser(null);
     setSession(null);
-  };
+  }, []);
 
-  const value = {
+  const signInRef = useRef(signIn);
+  const signUpRef = useRef(signUp);
+  const signOutRef = useRef(signOut);
+  signInRef.current = signIn;
+  signUpRef.current = signUp;
+  signOutRef.current = signOut;
+  const stableSignIn = useCallback((email: string, password: string) => signInRef.current(email, password), []);
+  const stableSignUp = useCallback((email: string, password: string, fullName?: string) => signUpRef.current(email, password, fullName), []);
+  const stableSignOut = useCallback(() => signOutRef.current(), []);
+
+  const value = useMemo(() => ({
     user,
     session,
     loading,
-    signIn,
-    signUp,
-    signOut,
+    signIn: stableSignIn,
+    signUp: stableSignUp,
+    signOut: stableSignOut,
     hasPermission,
     refreshUser,
     forgetSession,
-  };
+    sessionCheckError,
+    retrySessionCheck: checkAuthStatus,
+  }), [user, session, loading, stableSignIn, stableSignUp, stableSignOut, hasPermission, refreshUser, forgetSession, sessionCheckError, checkAuthStatus]);
 
   return (
     <AuthContext.Provider value={value}>

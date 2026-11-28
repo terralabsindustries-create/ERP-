@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDebounced } from "@/hooks/useDebounced";
 import { format } from "date-fns";
 import { BadgePercent, Loader2, Pencil, Plus, Power, Trash2, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -85,12 +86,15 @@ export default function Discounts() {
   const canDelete = hasPermission("Discounts: Delete");
 
   const [view, setView] = useState<View>("rules");
+  // A failed load shows as an error with Retry, never as an empty list.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [rules, setRules] = useState<Rule[]>([]);
   const [rates, setRates] = useState<Rate[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [customers, setCustomers] = useState<CustomerOption[]>([]);
   const [customerQuery, setCustomerQuery] = useState("");
+  const customerQueryDebounced = useDebounced(customerQuery.trim(), 300);
 
   const [ruleEditor, setRuleEditor] = useState<{ open: boolean; rule: Rule | null }>({ open: false, rule: null });
   const [ruleForm, setRuleForm] = useState(EMPTY_RULE);
@@ -102,11 +106,12 @@ export default function Discounts() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      setLoadError(null);
       const [r, p] = (await Promise.all([apiClient.get("/discounts/rules"), apiClient.get("/discounts/customer-pricing")])) as [{ discountRules?: Rule[] }, { customerPricing?: Rate[] }];
       setRules(r?.discountRules || []);
       setRates(p?.customerPricing || []);
     } catch (error) {
-      toast({ title: "Discounts could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -116,12 +121,16 @@ export default function Discounts() {
     load();
   }, [load]);
 
-  const loadCustomers = async () => {
-    if (customers.length) return;
+  // Customers for the "Chosen customers" picker come from a server search
+  // (first 50 matches), not a download of every customer.
+  const customerSearchSeq = useRef(0);
+  const loadCustomers = async (q = customerQueryDebounced) => {
+    const seq = ++customerSearchSeq.current;
     try {
-      setCustomers(await apiClient.listAll<CustomerOption>("/customers", "customers", { status: "all" }));
+      const res = await apiClient.get<{ customers: CustomerOption[] }>("/customers", { status: "all", limit: 50, search: q || undefined, sortBy: q ? undefined : "name", sortOrder: "asc" });
+      if (seq === customerSearchSeq.current) setCustomers(res?.customers || []);
     } catch {
-      setCustomers([]);
+      if (seq === customerSearchSeq.current) setCustomers([]);
     }
   };
 
@@ -268,7 +277,9 @@ export default function Discounts() {
     { id: "state", header: "Status", cell: (r) => <StatusPill tone={STATE[stateOf(r)].tone}>{STATE[stateOf(r)].label}</StatusPill>, className: "w-[120px]" }
   ];
 
-  const pickable = customers.filter((c) => !customerQuery || c.name.toLowerCase().includes(customerQuery.toLowerCase()) || (c.phone || "").includes(customerQuery));
+  const pickable = customers;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (customerQueryDebounced || customers.length) loadCustomers(customerQueryDebounced); }, [customerQueryDebounced]);
   const ratedCustomers = new Set(rates.map((r) => r.customerId?._id));
 
   return (
@@ -316,6 +327,8 @@ export default function Discounts() {
         <DataCard toolbar={<Toolbar search={<SearchField value={search} onChange={setSearch} placeholder={view === "rules" ? "Search discounts" : "Search customers"} />} />}>
           {view === "rules" ? (
             <DataTable
+              error={loadError}
+              onRetry={() => load()}
               columns={ruleColumns}
               rows={ruleRows}
               rowKey={(r) => r._id}
@@ -358,6 +371,8 @@ export default function Discounts() {
             />
           ) : (
             <DataTable
+              error={loadError}
+              onRetry={() => load()}
               columns={rateColumns}
               rows={rateRows}
               rowKey={(r) => r._id}
@@ -489,7 +504,7 @@ export default function Discounts() {
               <Input value={customerQuery} onChange={(e) => setCustomerQuery(e.target.value)} placeholder="Search customers" aria-label="Search customers" />
               <div className="max-h-56 overflow-y-auto rounded-md border">
                 {pickable.length === 0 ? (
-                  <p className="p-3 text-sm text-muted-foreground">{customers.length ? "No customers match" : "Loading customers…"}</p>
+                  <p className="p-3 text-sm text-muted-foreground">{customerQuery ? "No customers match" : "Loading customers…"}</p>
                 ) : (
                   pickable.slice(0, 200).map((c) => {
                     const checked = ruleForm.customerIds.includes(c._id);

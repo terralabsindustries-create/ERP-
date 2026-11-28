@@ -551,3 +551,5 @@ router.get('/:id/pdf', protect, async (req, res) => {
 });
 
 module.exports = router;
+// Shared with purchase order documents (routes/purchaseOrders.js).
+module.exports.getCompanyInfo = getCompanyInfo;

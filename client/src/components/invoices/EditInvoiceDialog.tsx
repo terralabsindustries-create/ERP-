@@ -181,8 +181,8 @@ export function EditInvoiceDialog({ open, onOpenChange, invoice, onInvoiceUpdate
     e.preventDefault();
     if (!invoice) return;
 
-    const problem = formData.items.length === 0
-      ? "Add at least one item."
+    const problem = formData.items.length === 0 && !(Number(formData.designCharge) > 0)
+      ? "Add an item or a design charge above 0."
       : formData.items.map((l, i) => lineProblem(noGst ? { ...l, gstRate: "0" } : l, i + 1)).find(Boolean) ||
         (!noGst && Number(formData.designCharge) > 0 ? gstRateProblem(formData.designChargeGstRate, "The design charge") : "") ||
         (totals.discount > totals.gross ? "The discount is more than the invoice." : "");

@@ -2,6 +2,9 @@ const fs = require('fs');
 const path = require('path');
 const PDFDocument = require('pdfkit');
 const { createTransporter } = require('../utils/mailer');
+// Document dates read "14 Nov 2026", in India time (the business's calendar),
+// matching the app. Stored dates are unchanged.
+const docDate = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
 const { AREA_UNITS, round2, round4, sizeLabel, areaLabel, splitGstAll, gstByRate } = require('../utils/billing');
 
 // Carbon's print colours: the light tokens of client/src/index.css (--print-*).
@@ -94,6 +97,79 @@ class PDFService {
     } catch (error) {
       doc.destroy();
       throw new Error('Failed to generate purchase bill PDF: ' + error.message);
+    }
+  }
+
+  /**
+   * A GST credit or debit note on the invoice layout: the note's lines with
+   * the GST adjusted, the original invoice it refers to, and the reason.
+   * A draft says so on the page: it is not a tax document until issued.
+   */
+  static creditNoteDocument(note, companyInfo) {
+    const credit = note.noteType === 'credit';
+    const pseudo = {
+      customerName: note.customerName,
+      customerGstNumber: note.customerGstNumber,
+      customerAddress: note.customerAddress,
+      customerId: {},
+      items: (note.items || []).map((l) => ({
+        itemName: l.itemName,
+        description: l.description,
+        hsnCode: l.hsnCode || l.sacCode,
+        gstRate: l.gstRate,
+        quantity: l.quantity || 0,
+        unit: l.unit,
+        unitPrice: l.quantity > 0 ? round2(l.taxableValue / l.quantity) : l.taxableValue,
+        totalAmount: l.taxableValue,
+        taxableValue: l.taxableValue,
+        cgstAmount: l.cgstAmount,
+        sgstAmount: l.sgstAmount,
+        igstAmount: l.igstAmount
+      })),
+      subtotal: note.taxableAmount,
+      taxableAmount: note.taxableAmount,
+      totalAmount: note.totalAmount,
+      paidAmount: 0,
+      termsAndConditions: [note.reasonText, note.notes].filter(Boolean).join('\n') || ' '
+    };
+    const d = this.invoiceDocument(pseudo, companyInfo);
+    const fmt = (v) => (v ? new Date(v).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }) : '');
+    const reasonLabel = String(note.reason || '').replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+    return {
+      ...d,
+      type: credit ? 'CREDIT NOTE' : 'DEBIT NOTE',
+      numberLabel: credit ? 'Credit Note No.' : 'Debit Note No.',
+      number: note.noteNumber,
+      meta: [
+        { label: 'Note Date', value: fmt(note.noteDate) },
+        { label: 'Against Invoice', value: `${note.invoiceNumber}${note.invoiceDate ? ' dt. ' + fmt(note.invoiceDate) : ''}` },
+        { label: 'Reason', value: reasonLabel }
+      ],
+      badge: note.status === 'cancelled' ? { text: 'CANCELLED', color: '#B42318' } : null,
+      footerNote: note.status === 'draft'
+        ? 'DRAFT — not a valid tax document until issued.'
+        : `Issued under section 34 of the CGST Act, 2017 against invoice ${note.invoiceNumber}.`,
+      qrCode: '',
+      paymentLink: '',
+      upiId: ''
+    };
+  }
+
+  static async generateCreditNotePDF(note, companyInfo) {
+    const doc = new PDFDocument({ size: 'A4', margin: 40, bufferPages: true });
+    const chunks = [];
+    doc.on('data', (chunk) => chunks.push(chunk));
+    const result = new Promise((resolve, reject) => {
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+    });
+    try {
+      this.renderSynxDocument(doc, this.creditNoteDocument(note, companyInfo));
+      doc.end();
+      return await result;
+    } catch (error) {
+      doc.destroy();
+      throw new Error('Failed to generate note PDF: ' + error.message);
     }
   }
 
@@ -570,8 +646,8 @@ class PDFService {
       numberLabel: 'Invoice No.',
       number: invoice.invoiceNumber || '',
       meta: [
-        { label: 'Invoice Date', value: new Date(invoice.invoiceDate || Date.now()).toLocaleDateString('en-GB') },
-        ...(invoice.dueDate ? [{ label: 'Due Date', value: new Date(invoice.dueDate).toLocaleDateString('en-GB') }] : [])
+        { label: 'Invoice Date', value: docDate(invoice.invoiceDate || Date.now()) },
+        ...(invoice.dueDate ? [{ label: 'Due Date', value: docDate(invoice.dueDate) }] : [])
       ],
       badge: total > 0 && paid >= total ? { text: 'FULLY PAID', color: PRINT.success } : null,
       company: companyInfo,
@@ -615,8 +691,8 @@ class PDFService {
       number: bill.billNumber || '',
       meta: [
         ...(bill.vendorInvoiceNumber ? [{ label: 'Vendor Invoice', value: bill.vendorInvoiceNumber }] : []),
-        { label: 'Bill Date', value: new Date(bill.billDate || Date.now()).toLocaleDateString('en-GB') },
-        ...(bill.dueDate ? [{ label: 'Due Date', value: new Date(bill.dueDate).toLocaleDateString('en-GB') }] : [])
+        { label: 'Bill Date', value: docDate(bill.billDate || Date.now()) },
+        ...(bill.dueDate ? [{ label: 'Due Date', value: docDate(bill.dueDate) }] : [])
       ],
       badge: total > 0 && paid >= total ? { text: 'FULLY PAID', color: PRINT.success } : null,
       company: companyInfo,
@@ -640,6 +716,139 @@ class PDFService {
       paymentLink: '',
       upiId: ''
     };
+  }
+
+  /** A purchase order on the shared document layout: supplier, lines, quantities and totals. */
+  static purchaseOrderDocument(po, companyInfo, vendor = {}) {
+    const currency = companyInfo.currency || 'INR';
+    const money = (n) => currency + ' ' + this.fmtNum(n);
+    const total = Number(po.totalAmount) || 0;
+    const summary = [{ label: 'Subtotal', value: money(po.subtotal != null ? po.subtotal : total) }];
+    if (Number(po.discountAmount) > 0) summary.push({ label: 'Discount', value: money(-po.discountAmount) });
+    if (Number(po.taxAmount) > 0) summary.push({ label: 'Tax', value: money(po.taxAmount) });
+    summary.push({ label: 'Total', value: money(total), bold: true });
+    const cancelled = po.status === 'cancelled';
+    return {
+      type: 'PURCHASE ORDER',
+      numberLabel: 'PO No.',
+      number: po.poNumber || '',
+      meta: [
+        { label: 'Order Date', value: docDate(po.sentAt || po.createdAt || Date.now()) },
+        ...(po.expectedDelivery ? [{ label: 'Expected Delivery', value: docDate(po.expectedDelivery) }] : []),
+        ...(po.terms ? [{ label: 'Terms', value: po.terms }] : [])
+      ],
+      badge: cancelled ? { text: 'CANCELLED', color: '#B42318' } : po.status === 'draft' ? { text: 'DRAFT', color: '#667085' } : null,
+      company: companyInfo,
+      customer: { name: po.vendorName || vendor.name || 'N/A', lines: [vendor.gstNumber && `GSTIN: ${vendor.gstNumber}`, vendor.phone, vendor.email].filter(Boolean) },
+      billingLines: this.splitAddress(typeof vendor.address === 'string' ? vendor.address : [vendor.address?.street, vendor.address?.city, vendor.address?.state, vendor.address?.zipCode].filter(Boolean).join(', ')),
+      shippingLines: [],
+      items: (po.items || []).map((item) => this.itemRow({
+        name: item.itemName,
+        hsn: item.hsnCode,
+        gstRate: item.gstRate,
+        quantity: item.quantity,
+        rate: item.unitCost,
+        amount: item.totalCost != null ? item.totalCost : round2((item.unitCost || 0) * (item.quantity || 0))
+      })),
+      bankLines: [],
+      summary,
+      amountWords: this.currencyWords(currency) + ' ' + this.numberToWords(Math.floor(total)) + ' Only',
+      terms: po.notes || '',
+      footerNote: null,
+      qrCode: '',
+      paymentLink: '',
+      upiId: ''
+    };
+  }
+
+  static async generatePurchaseOrderPDF(po, companyInfo, vendor) {
+    const doc = new PDFDocument({ size: 'A4', margin: 40, bufferPages: true });
+    const chunks = [];
+    doc.on('data', (chunk) => chunks.push(chunk));
+    const result = new Promise((resolve, reject) => {
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+    });
+    try {
+      this.renderSynxDocument(doc, this.purchaseOrderDocument(po, companyInfo, vendor));
+      doc.end();
+      return await result;
+    } catch (error) {
+      doc.destroy();
+      throw new Error('Failed to generate purchase order PDF: ' + error.message);
+    }
+  }
+
+  /**
+   * A payment receipt on the shared document layout: who paid, how, how much,
+   * which invoices it went to and what each still owes. `invoices` maps an
+   * invoice id to { invoiceNumber, totalAmount, balanceAmount } as it is now.
+   * A payment that is not completed says so on the page: it is not a valid receipt.
+   */
+  static paymentReceiptDocument(payment, invoices, customer, companyInfo, allocations) {
+    const currency = companyInfo.currency || 'INR';
+    const money = (n) => currency + ' ' + this.fmtNum(n);
+    const amount = Number(payment.amount) || 0;
+    const applied = round2((allocations || []).reduce((s, a) => s + (Number(a.amount) || 0), 0));
+    const onAccount = round2(Math.max(0, amount - applied));
+    const methodLabel = String(payment.paymentMethod || '').replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+    const valid = payment.status === 'completed';
+    const outstanding = round2((allocations || []).reduce((s, a) => s + (Number(invoices[String(a.invoiceId)]?.balanceAmount) || 0), 0));
+    const summary = [{ label: 'Amount Received', value: money(amount), bold: true }];
+    if (applied > 0) summary.push({ label: 'Applied to Invoices', value: money(applied) });
+    if (onAccount > 0) summary.push({ label: 'Held on Account', value: money(onAccount) });
+    if ((allocations || []).length) summary.push({ label: 'Balance Still Due on These Invoices', value: money(outstanding), strong: outstanding > 0 });
+    const badge = valid ? null : { text: String(payment.status || '').toUpperCase(), color: '#B42318' };
+    return {
+      type: 'PAYMENT RECEIPT',
+      numberLabel: 'Receipt No.',
+      number: payment.paymentId || '',
+      meta: [
+        { label: 'Receipt Date', value: docDate(payment.paymentDate || payment.createdAt || Date.now()) },
+        { label: 'Payment Method', value: methodLabel || '-' },
+        ...(payment.referenceNumber ? [{ label: 'Reference', value: payment.referenceNumber }] : []),
+        ...(payment.transactionId ? [{ label: 'Transaction ID', value: payment.transactionId }] : [])
+      ],
+      badge,
+      company: companyInfo,
+      customer: { name: payment.customerName || customer.name || 'N/A', lines: [customer.gstNumber && `GSTIN: ${customer.gstNumber}`, customer.phone, customer.email].filter(Boolean) },
+      billingLines: this.splitAddress(typeof customer.address === 'string' ? customer.address : ''),
+      shippingLines: [],
+      items: (allocations || []).length
+        ? allocations.map((a) => this.itemRow({
+          name: `Payment against invoice ${invoices[String(a.invoiceId)]?.invoiceNumber || a.invoiceNumber || ''}`.trim(),
+          quantity: 1,
+          rate: a.amount,
+          amount: a.amount
+        }))
+        : [this.itemRow({ name: 'Payment received on account', quantity: 1, rate: amount, amount })],
+      bankLines: [],
+      summary,
+      amountWords: this.currencyWords(currency) + ' ' + this.numberToWords(Math.floor(amount)) + ' Only',
+      terms: payment.notes || '',
+      footerNote: valid ? 'Received with thanks. This receipt acknowledges payment only; it is not a tax invoice.' : `This payment is ${payment.status}: this receipt is not valid proof of payment.`,
+      qrCode: '',
+      paymentLink: '',
+      upiId: ''
+    };
+  }
+
+  static async generatePaymentReceiptPDF(payment, invoices, customer, companyInfo, allocations) {
+    const doc = new PDFDocument({ size: 'A4', margin: 40, bufferPages: true });
+    const chunks = [];
+    doc.on('data', (chunk) => chunks.push(chunk));
+    const result = new Promise((resolve, reject) => {
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+    });
+    try {
+      this.renderSynxDocument(doc, this.paymentReceiptDocument(payment, invoices, customer, companyInfo, allocations));
+      doc.end();
+      return await result;
+    } catch (error) {
+      doc.destroy();
+      throw new Error('Failed to generate receipt PDF: ' + error.message);
+    }
   }
 
   /** Everything the quotation PDF shows, before any drawing. */
@@ -696,8 +905,8 @@ class PDFService {
       numberLabel: 'Quotation No.',
       number: quotation.quotationNumber || '',
       meta: [
-        { label: 'Date', value: new Date(quotation.createdAt || Date.now()).toLocaleDateString('en-GB') },
-        ...(quotation.valid_until ? [{ label: 'Valid Until', value: new Date(quotation.valid_until).toLocaleDateString('en-GB') }] : [])
+        { label: 'Date', value: docDate(quotation.createdAt || Date.now()) },
+        ...(quotation.valid_until ? [{ label: 'Valid Until', value: docDate(quotation.valid_until) }] : [])
       ],
       badge: null,
       company: companyInfo,
@@ -812,7 +1021,7 @@ class PDFService {
     // ---------- HEADER: logo and business (left), the document (right) ----------
     const headR = 160;
     const headL = W - headR - 16;
-    write(d.type, right - headR, y - 3, d.type === 'PURCHASE BILL' ? 16 : S.title, { bold: true, face: 'display', color: C.brand, width: headR, align: 'right' });
+    write(d.type, right - headR, y - 3, d.type.length > 8 ? 16 : S.title, { bold: true, face: 'display', color: C.brand, width: headR, align: 'right' });
     let ry = y + 32;
     if (d.type === 'QUOTATION') {
       [{ label: d.numberLabel || 'Number', value: d.number, id: true }, ...(d.meta || [])].forEach((row) => {

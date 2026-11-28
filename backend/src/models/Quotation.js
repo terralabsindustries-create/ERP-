@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 
 const quotationItemSchema = new mongoose.Schema({
   item_name: { type: String, required: true, trim: true },
+  pricing_snapshot: { type: mongoose.Schema.Types.Mixed },
   description: { type: String, trim: true, default: '' },
   // Filled from the stock item when one is picked; carried onto the invoice.
   hsn_code: { type: String, trim: true, uppercase: true, default: '' },
@@ -95,6 +96,23 @@ const quotationSchema = new mongoose.Schema({
   },
   convertedInvoiceNumber: { type: String, trim: true },
   convertedAt: { type: Date },
+  // The status the quotation had before it was converted, so it goes back to
+  // exactly that when its invoice is deleted (draft) or cancelled.
+  // Short-lived claim taken while an invoice is being raised, so two simultaneous
+  // conversions cannot both proceed. Always cleared when the attempt ends.
+  conversionLockAt: { type: Date },
+  statusBeforeConversion: { type: String, enum: ['draft', 'sent', 'approved'] },
+  // Audit trail of every invoice this quotation has been converted to. Kept
+  // even when an invoice is later deleted/cancelled. Invoice numbers are never
+  // reused: a re-conversion always receives a fresh number.
+  conversionHistory: [{
+    _id: false,
+    invoiceId: { type: mongoose.Schema.Types.ObjectId },
+    invoiceNumber: { type: String },
+    convertedAt: { type: Date },
+    releasedAt: { type: Date },
+    releasedReason: { type: String, enum: ['invoice_deleted', 'invoice_cancelled'] }
+  }],
 
   payment_link: { type: String, trim: true },
   terms_conditions: { type: String, trim: true },

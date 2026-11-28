@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { ErrorState } from "@/components/common/LoadState";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +20,8 @@ import apiClient from "@/lib/apiClient";
 import { compactSettingsImage } from "@/lib/compactSettingsImage";
 import { useToast } from "@/hooks/use-toast";
 import { DeleteAccountCard } from "@/components/settings/DeleteAccountCard";
+import { DocumentNumberingCard } from "@/components/settings/DocumentNumberingCard";
+import { useAuth } from "@/contexts/AuthContext";
 
 const Settings = () => {
   const [settings, setSettings] = useState<any>(null);
@@ -30,13 +33,19 @@ const Settings = () => {
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [logoPreview, setLogoPreview] = useState<string>("");
   const { toast } = useToast();
+  const { hasPermission } = useAuth();
 
   useEffect(() => {
     fetchSettings();
   }, []);
 
+  // If the settings could not be read, the form is not shown: saving the
+  // empty defaults would overwrite the business's real company details.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const fetchSettings = async () => {
+    setLoading(true);
     try {
+      setLoadError(null);
       const response = await apiClient.getSettings();
       console.log('⚙️ Raw Settings response:', JSON.stringify(response, null, 2));
 
@@ -78,11 +87,7 @@ const Settings = () => {
       setLogoPreview(fetchedSettings.companyLogo || '');
     } catch (error) {
       console.error('❌ Error fetching settings:', error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch settings",
-        variant: "destructive",
-      });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -230,6 +235,10 @@ const Settings = () => {
 
   if (loading) {
     return <div className="flex items-center justify-center h-48">Loading settings...</div>;
+  }
+
+  if (loadError) {
+    return <ErrorState error={loadError} what="your settings" onRetry={fetchSettings} />;
   }
 
   return (
@@ -599,6 +608,8 @@ const Settings = () => {
               </div>
             </CardContent>
           </Card>
+
+          <DocumentNumberingCard canEdit={hasPermission("Settings: Edit")} />
 
           <DeleteAccountCard />
         </TabsContent>

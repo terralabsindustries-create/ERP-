@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const { body, query } = require('express-validator');
 const { validate } = require('../middleware/validate');
 const Job = require('../models/Job');
@@ -35,6 +36,34 @@ function jobItems(items) {
   });
 }
 
+/**
+ * The billed parts of a job that a request would change, as names for a
+ * message. Fields left out of the request, or sent unchanged, are not changes.
+ */
+function billedFieldsChanged(job, body) {
+  const changed = [];
+  const num = (v) => Math.round((Number(v) || 0) * 10000) / 10000;
+  if (body.customerId !== undefined && String(body.customerId) !== String(job.customerId)) changed.push('The customer');
+  if (body.estimatedCost !== undefined && num(body.estimatedCost) !== num(job.estimatedCost)) changed.push('The estimated cost');
+  if (body.items !== undefined) {
+    const key = (i) => [String(i.itemName || '').trim(), num(i.quantity), num(i.unitPrice), num(i.gstRate), num(i.length), num(i.width), String(i.inventoryId || '')].join('|');
+    const a = (Array.isArray(body.items) ? body.items : []).map(key).sort().join(';');
+    const b = (job.items || []).map(key).sort().join(';');
+    if (a !== b) changed.push('The items');
+  }
+  if (body.designCharge !== undefined) {
+    const was = job.designCharge || {};
+    const now = body.designCharge || {};
+    if (num(now.amount) !== num(was.amount) || (num(now.amount) > 0 && num(now.gstRate ?? 18) !== num(was.gstRate ?? 18))) changed.push('The design charge');
+  }
+  if (body.printSpecs !== undefined && body.printSpecs) {
+    const was = job.printSpecs || {};
+    if (body.printSpecs.paperType !== undefined && String(body.printSpecs.paperType || '') !== String(was.paperType || '')) changed.push('The paper');
+    if (body.printSpecs.sheets !== undefined && num(body.printSpecs.sheets) !== num(was.sheets)) changed.push('The sheet count');
+  }
+  return changed;
+}
+
 const router = express.Router();
 
 // Validation rules
@@ -66,7 +95,8 @@ const jobValidation = [
     return true;
   }),
   body('estimatedCost').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('The estimated cost cannot be negative'),
-  body('printSpecs.quantity').optional({ values: 'falsy' }).isFloat({ gt: 0 }).withMessage('The print quantity must be above 0')
+  body('printSpecs.quantity').optional({ values: 'falsy' }).isFloat({ gt: 0 }).withMessage('The print quantity must be above 0'),
+  body('printSpecs.sheets').optional({ values: 'falsy' }).isFloat({ gt: 0 }).withMessage('The number of sheets must be above 0')
 ];
 
 // @route   GET /api/jobs
@@ -78,6 +108,16 @@ router.get('/', protect, [
     'completed', 'delivered', 'cancelled'
   ]),
   query('priority').optional({ values: 'falsy' }).isIn(['all', 'low', 'medium', 'high', 'urgent']),
+  query('stage').optional({ values: 'falsy' }).isIn(['all', 'open', 'pre_production', 'in_production', 'ready', 'closed']),
+  query('customerId').optional({ values: 'falsy' }).isMongoId(),
+  query('dateField').optional({ values: 'falsy' }).isIn(['createdAt', 'dueDate']),
+  query('from').optional({ values: 'falsy' }).isISO8601(),
+  query('to').optional({ values: 'falsy' }).isISO8601(),
+  query('overdue').optional({ values: 'falsy' }).isIn(['true', 'false']),
+  query('sortBy').optional({ values: 'falsy' }).isIn(['createdAt', 'updatedAt', 'dueDate', 'title', 'priority', 'status']),
+  query('sortOrder').optional({ values: 'falsy' }).isIn(['asc', 'desc']),
+  query('page').optional({ values: 'falsy' }).isInt({ min: 1 }),
+  query('limit').optional({ values: 'falsy' }).isInt({ min: 1, max: 500 }),
   query('search').optional({ values: 'falsy' }).trim(),
 ], validate, async (req, res) => {
   try {
@@ -107,13 +147,42 @@ router.get('/', protect, [
     if (customerId) {
       query.customerId = customerId;
     }
-    
-    if (search) {
-      query.$or = [
-        { title: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } }
-      ];
+
+    // Production stage groups (utils/jobMetrics.js), a date range on the
+    // creation or delivery date, and overdue work — all on the server, so the
+    // filters cover every job, not one page.
+    const metrics = require('../utils/jobMetrics');
+    const and = [];
+    const STAGE_FILTERS = {
+      open: { status: { $nin: metrics.CLOSED } },
+      pre_production: { status: { $in: metrics.PRE_PRODUCTION } },
+      in_production: { status: { $in: metrics.IN_PRODUCTION } },
+      ready: { status: { $in: metrics.READY_FOR_DISPATCH } },
+      closed: { status: { $in: metrics.CLOSED } }
+    };
+    if (req.query.stage && req.query.stage !== 'all') and.push(STAGE_FILTERS[req.query.stage]);
+    if (req.query.from || req.query.to) {
+      const field = req.query.dateField === 'dueDate' ? 'dueDate' : 'createdAt';
+      const range = {};
+      if (req.query.from) range.$gte = new Date(req.query.from);
+      if (req.query.to) range.$lt = new Date(new Date(req.query.to).getTime() + (/^\d{4}-\d{2}-\d{2}$/.test(req.query.to) ? 864e5 : 0));
+      and.push({ [field]: range });
     }
+    if (req.query.overdue === 'true') and.push({ ...metrics.UNFINISHED, dueDate: { $lt: metrics.startOfDay() } });
+
+    if (search) {
+      // Matched literally (not as a regex), and a customer's name finds their jobs.
+      const rx = { $regex: String(search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+      const customerIds = await Customer.find({ ...(req.user.dataScope ? { dataScope: req.user.dataScope } : { userId: req.user._id }), $or: [{ name: rx }, { company: rx }] }).distinct('_id');
+      and.push({ $or: [
+        { title: rx },
+        { description: rx },
+        { 'items.itemName': rx },
+        ...(mongoose.isValidObjectId(search) ? [{ _id: search }] : []),
+        ...(customerIds.length ? [{ customerId: { $in: customerIds } }] : [])
+      ] });
+    }
+    if (and.length) query.$and = and;
     
     // Calculate pagination
     const skip = (page - 1) * limit;
@@ -122,26 +191,35 @@ router.get('/', protect, [
     const sort = {};
     sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
     
-    // Execute query
-    const jobs = await Job.find(query)
-      .populate('customerId', 'name email phone company')
-      .populate('assignedTo.handlerId', 'fullName')
-      .populate('createdBy', 'fullName')
-      .populate({
-        path: 'invoices',
-        // The Job Tickets screen shows the job's invoice: its number, amount and
-        // how much of it is paid.
-        select: '_id invoiceNumber items totalAmount status paymentStatus paidAmount balanceAmount dueDate noGst createdAt',
-        // Cancelled invoices don't count, and No GST ones only for logins allowed to see them.
-        match: { status: { $ne: 'cancelled' }, ...(userCan(req.user, 'Invoicing (View No GST)') ? {} : { noGst: { $ne: true } }) },
-        options: { sort: { createdAt: -1 } }
-      })
-      .sort(sort)
-      .skip(skip)
-      .limit(parseInt(limit));
-    
-    // Get total count
-    const totalJobs = await Job.countDocuments(query);
+    // The page and its count are independent: one round trip, not two. The
+    // invoice summary carries what the list shows (number, totals, payment
+    // state); line items come with the invoice itself when it is opened.
+    const pageSize = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 500);
+    const [jobs, totalJobs] = await Promise.all([
+      Job.find(query)
+        .populate('customerId', 'name email phone company')
+        .populate('assignedTo.handlerId', 'fullName')
+        .populate('createdBy', 'fullName')
+        .populate({
+          path: 'invoices',
+          select: '_id invoiceNumber totalAmount status paymentStatus paidAmount balanceAmount dueDate noGst createdAt',
+          // Cancelled invoices don't count, and No GST ones only for logins allowed to see them.
+          match: { status: { $ne: 'cancelled' }, ...(userCan(req.user, 'Invoicing (View No GST)') ? {} : { noGst: { $ne: true } }) },
+          options: { sort: { createdAt: -1 } }
+        })
+        // Delivery state beside the payment state, for logins that can see deliveries.
+        .populate(userCan(req.user, 'Delivery') ? {
+          path: 'deliveries',
+          select: '_id jobId deliveryId status deliveryDate dispatchedAt deliveryProof.deliveredAt',
+          // The jobs are already limited to the caller's business; older deliveries may lack dataScope.
+          match: { status: { $ne: 'cancelled' } },
+          options: { sort: { createdAt: -1 } }
+        } : [])
+        .sort({ ...sort, _id: sort[sortBy] || -1 })
+        .skip(skip)
+        .limit(pageSize),
+      Job.countDocuments(query)
+    ]);
     
     res.status(200).json({
       status: 'success',
@@ -149,7 +227,7 @@ router.get('/', protect, [
         jobs,
         pagination: {
           current: parseInt(page),
-          total: Math.ceil(totalJobs / limit),
+          total: Math.ceil(totalJobs / pageSize),
           count: jobs.length,
           totalJobs
         }
@@ -196,31 +274,60 @@ router.get('/staff/stats', protect, async (req, res) => {
     }
     // If period is 'all', no date filter is applied
 
-    // Calculate total design charge for all jobs created by this staff member
-    const result = await Job.aggregate([
-      {
-        $match: {
-          userId: new mongoose.Types.ObjectId(req.user._id),
-          'designCharge.amount': { $exists: true, $gt: 0 },
-          ...dateFilter
+    // Design charges on the job tickets this staff member created, WITHOUT GST
+    // (the GST is the business's tax, not the designer's earning). Cancelled
+    // jobs earn nothing. The GST and the GST-inclusive figure come alongside.
+    const me = new mongoose.Types.ObjectId(req.user._id);
+    // Job counts for the same period: created (not cancelled), proof approved
+    // (reached "Proof Approved" — design_approved — or any later stage) and
+    // pending approval (still before it). Cancelled ones are counted apart.
+    const APPROVED = ['design_approved', 'production_ready', 'ready_for_print', 'quality_check', 'completed', 'delivered'];
+    const [result, jobCounts] = await Promise.all([
+      Job.aggregate([
+        {
+          $match: {
+            userId: me,
+            'designCharge.amount': { $exists: true, $gt: 0 },
+            status: { $ne: 'cancelled' },
+            ...dateFilter
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            amount: { $sum: '$designCharge.amount' },
+            withGst: { $sum: { $ifNull: ['$designCharge.totalAmount', '$designCharge.amount'] } }
+          }
         }
-      },
-      {
-        $group: {
-          _id: null,
-          totalDesignCharge: { $sum: '$designCharge.totalAmount' }
+      ]),
+      Job.aggregate([
+        { $match: { userId: me, ...dateFilter } },
+        {
+          $group: {
+            _id: null,
+            all: { $sum: 1 },
+            cancelled: { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
+            approved: { $sum: { $cond: [{ $in: ['$status', APPROVED] }, 1, 0] } }
+          }
         }
-      }
+      ])
     ]);
+    const c = jobCounts[0] || { all: 0, cancelled: 0, approved: 0 };
+    const jobs = { created: c.all - c.cancelled, approved: c.approved, pending: c.all - c.cancelled - c.approved, cancelled: c.cancelled };
 
-    const totalDesignCharge = result[0]?.totalDesignCharge || 0;
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+    const totalDesignCharge = round2(result[0]?.amount || 0);
+    const designChargeWithGst = round2(result[0]?.withGst || 0);
 
     console.log(`Total design charge calculated for staff (${period}):`, totalDesignCharge);
 
     res.status(200).json({
       status: 'success',
       data: {
-        totalDesignCharge
+        totalDesignCharge, // before GST
+        designChargeGst: round2(designChargeWithGst - totalDesignCharge),
+        designChargeWithGst,
+        jobs
       }
     });
 
@@ -265,6 +372,78 @@ router.get('/mine', protect, async (req, res) => {
 // @route   GET /api/jobs/:id
 // @desc    Get single job
 // @access  Private
+// @route   GET /api/jobs/stats/summary
+// @desc    Job Tickets page header over every visible job (not one page):
+//          total, in progress, completed, and what their invoices billed.
+router.get('/stats/summary', protect, async (req, res) => {
+  try {
+    const scope = jobScope(req.user);
+    const Invoice = require('../models/Invoice');
+    const [counts] = await Job.aggregate([
+      { $match: scope },
+      { $group: {
+        _id: null,
+        total: { $sum: 1 },
+        active: { $sum: { $cond: [{ $in: ['$status', ['completed', 'delivered', 'cancelled']] }, 0, 1] } },
+        completed: { $sum: { $cond: [{ $in: ['$status', ['completed', 'delivered']] }, 1, 0] } }
+      } }
+    ]);
+    let billed = null;
+    if (userCan(req.user, 'Invoicing') || userCan(req.user, 'Jobs')) {
+      const jobIds = await Job.find(scope).distinct('_id');
+      const [b] = await Invoice.aggregate([
+        { $match: { jobId: { $in: jobIds }, status: { $ne: 'cancelled' }, ...(userCan(req.user, 'Invoicing (View No GST)') ? {} : { noGst: { $ne: true } }) } },
+        { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+      ]);
+      billed = Math.round((b?.total || 0) * 100) / 100;
+    }
+    res.json({ status: 'success', data: { total: counts?.total || 0, active: counts?.active || 0, completed: counts?.completed || 0, billed } });
+  } catch (error) {
+    console.error('Job summary error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error while loading job figures' });
+  }
+});
+
+// @route   GET /api/jobs/board
+// @desc    The production board and dashboard pipeline in one light request:
+//          counts per stage (utils/jobMetrics.js — the one definition both
+//          screens use), every open job as a card, and the latest deliveries.
+// @access  Private (Jobs and the other job readers, see app.js)
+const BOARD_FIELDS = 'title status priority dueDate customerId customerName printSpecs.paperType printSpecs.quantity printSpecs.printSize assignedTo.handlerName createdAt updatedAt';
+const BOARD_LIMIT = 2000;
+router.get('/board', protect, async (req, res) => {
+  try {
+    const scope = jobScope(req.user);
+    const { pipelineSummary, CLOSED } = require('../utils/jobMetrics');
+    const [summary, open, delivered] = await Promise.all([
+      pipelineSummary(Job, scope),
+      Job.find({ ...scope, status: { $nin: CLOSED } })
+        .select(BOARD_FIELDS)
+        .populate('customerId', 'name company')
+        .sort({ dueDate: 1, _id: 1 })
+        .limit(BOARD_LIMIT + 1)
+        .lean(),
+      Job.find({ ...scope, status: 'delivered' })
+        .select(BOARD_FIELDS)
+        .populate('customerId', 'name company')
+        .sort({ updatedAt: -1 })
+        .limit(15)
+        .lean()
+    ]);
+    res.json({
+      status: 'success',
+      data: {
+        ...summary,
+        jobs: [...open.slice(0, BOARD_LIMIT), ...delivered],
+        truncated: open.length > BOARD_LIMIT
+      }
+    });
+  } catch (error) {
+    console.error('Job board error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error while loading the production board' });
+  }
+});
+
 router.get('/:id', protect, async (req, res) => {
   try {
     const findQuery = { _id: req.params.id, ...jobScope(req.user) };
@@ -396,8 +575,32 @@ router.put('/:id', protect, requirePermission('Jobs: Create & Edit'), jobValidat
       });
     }
 
+    // Edit restrictions. A cancelled job is closed. Once the job is billed
+    // (a live invoice exists) or finished, what is billed — customer, items,
+    // design charge, estimate, paper and sheets — can no longer change here:
+    // the invoice and the stock taken for it would stop matching. Priority,
+    // delivery date, title and instructions stay editable.
+    if (job.status === 'cancelled') {
+      return res.status(409).json({ status: 'error', code: 'JOB_CANCELLED', message: 'This job is cancelled and can no longer be edited.' });
+    }
+    const Invoice = require('../models/Invoice');
+    const liveInvoice = await Invoice.findOne({ jobId: job._id, status: { $ne: 'cancelled' } }).select('invoiceNumber').lean();
+    const finished = ['completed', 'delivered'].includes(job.status);
+    if (liveInvoice || finished) {
+      const changed = billedFieldsChanged(job, req.body);
+      if (changed.length) {
+        const why = liveInvoice ? `it is billed on invoice ${liveInvoice.invoiceNumber}` : `it is ${job.status}`;
+        return res.status(409).json({
+          status: 'error',
+          code: liveInvoice ? 'JOB_INVOICED' : 'JOB_FINISHED',
+          message: `${changed.join(', ')} cannot be changed because ${why}. ${liveInvoice ? 'Cancel the invoice first, or raise a credit/debit note.' : 'Reopen the job first.'}`,
+          fields: changed
+        });
+      }
+    }
+
     // Check customer if customerId is being updated
-    if (req.body.customerId && req.body.customerId !== job._id.toString()) {
+    if (req.body.customerId && String(req.body.customerId) !== String(job.customerId)) {
       const customerQuery = req.user.dataScope
         ? { _id: req.body.customerId, dataScope: req.user.dataScope, status: 'active' }
         : { _id: req.body.customerId, userId: req.user._id, status: 'active' };

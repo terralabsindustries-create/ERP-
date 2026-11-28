@@ -26,6 +26,8 @@ export interface LineDraft {
   gstRate: string;
 }
 
+export const DEFAULT_GST_RATE = "18";
+
 const text = (n: unknown) => (n === undefined || n === null || n === "" || Number(n) === 0 ? "" : String(n));
 
 export const newLineDraft = (key: number, patch: Partial<LineDraft> = {}): LineDraft => ({
@@ -39,7 +41,10 @@ export const newLineDraft = (key: number, patch: Partial<LineDraft> = {}): LineD
   unitPrice: "",
   length: "",
   width: "",
-  gstRate: "",
+  // Starts at the standard 18% so the field is filled in, not blank; it is
+  // replaced by the item's or HSN code's own rate when one is picked, and the
+  // user can change it (0 for no GST).
+  gstRate: DEFAULT_GST_RATE,
   ...patch
 });
 

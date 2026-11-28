@@ -5,6 +5,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { gstinError, normalizeGstin } from "@/lib/gstin";
+import { GST_STATES, stateFromGstin } from "@/lib/gstStates";
 import apiClient from "@/lib/apiClient";
 import { CustomerTypePicker } from "./CustomerTypePicker";
 
@@ -24,6 +26,7 @@ export function CreateCustomerDialog({ open, onOpenChange, onCustomerCreated }: 
     address: "",
     customerType: "Walk-in",
     gstNumber: "",
+    state: "",
     notes: ""
   });
   const [loading, setLoading] = useState(false);
@@ -31,6 +34,12 @@ export function CreateCustomerDialog({ open, onOpenChange, onCustomerCreated }: 
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const gstProblem = gstinError(formData.gstNumber);
+    if (gstProblem) {
+      toast({ title: "Invalid GST number", description: gstProblem, variant: "destructive" });
+      return;
+    }
+
 
     if (!formData.name) {
       toast({
@@ -43,7 +52,7 @@ export function CreateCustomerDialog({ open, onOpenChange, onCustomerCreated }: 
 
     setLoading(true);
     try {
-      const response: any = await apiClient.createCustomer(formData);
+      const response: any = await apiClient.createCustomer({ ...formData, gstNumber: normalizeGstin(formData.gstNumber) });
 
       toast({
         title: "Customer Created",
@@ -62,6 +71,7 @@ export function CreateCustomerDialog({ open, onOpenChange, onCustomerCreated }: 
         address: "",
         customerType: "Walk-in",
         gstNumber: "",
+    state: "",
         notes: ""
       });
     } catch (error) {
@@ -152,9 +162,27 @@ export function CreateCustomerDialog({ open, onOpenChange, onCustomerCreated }: 
             <Input
               id="gstNumber"
               value={formData.gstNumber}
-              onChange={(e) => setFormData(prev => ({ ...prev, gstNumber: e.target.value }))}
-              placeholder="Enter GST number (if applicable)"
+              onChange={(e) => setFormData(prev => { const gstNumber = e.target.value.toUpperCase(); return { ...prev, gstNumber, state: prev.state || stateFromGstin(gstNumber) }; })}
+              placeholder="e.g. 22AAAAA0000A1Z5 (leave blank if unregistered)"
+              maxLength={15}
+              aria-invalid={!!gstinError(formData.gstNumber)}
             />
+            {gstinError(formData.gstNumber) && (
+              <p className="text-xs text-destructive" role="alert">{gstinError(formData.gstNumber)}</p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="state">State</Label>
+            <select
+              id="state"
+              value={formData.state}
+              onChange={(e) => setFormData(prev => ({ ...prev, state: e.target.value }))}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value="">Select state (sets CGST+SGST or IGST)</option>
+              {GST_STATES.map((st) => <option key={st.code} value={st.name}>{st.name}</option>)}
+            </select>
           </div>
 
           <div className="space-y-2">

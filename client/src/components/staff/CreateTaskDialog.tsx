@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { fmtDate } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -308,7 +309,7 @@ export function CreateTaskDialog({ open, onOpenChange, onTaskCreated, preselecte
                                     </Badge>
                                     {job.dueDate && (
                                       <div className="text-xs text-muted-foreground mt-1">
-                                        Due: {new Date(job.dueDate).toLocaleDateString()}
+                                        Due: {fmtDate(job.dueDate)}
                                       </div>
                                     )}
                                   </div>

@@ -494,11 +494,11 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice: listedInvoice, 
                 <div className="space-y-2">
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Invoice Date:</span>
-                    <span className="font-semibold">{new Date(invoice.invoiceDate).toLocaleDateString()}</span>
+                    <span className="font-semibold">{fmtDate(invoice.invoiceDate)}</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Due Date:</span>
-                    <span className="font-semibold">{new Date(invoice.dueDate).toLocaleDateString()}</span>
+                    <span className="font-semibold">{fmtDate(invoice.dueDate)}</span>
                   </div>
                   {(invoice.jobId?.title || invoice.jobTitle) && (
                     <div className="flex justify-between gap-3 text-sm">
@@ -510,7 +510,7 @@ export function ViewInvoiceDialog({ open, onOpenChange, invoice: listedInvoice, 
                 <div className="space-y-2">
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Created:</span>
-                    <span className="font-semibold">{new Date(invoice.createdAt).toLocaleDateString()}</span>
+                    <span className="font-semibold">{fmtDate(invoice.createdAt)}</span>
                   </div>
                 </div>
               </CardContent>

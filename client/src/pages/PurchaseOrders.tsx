@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { format } from "date-fns";
-import { Ban, ClipboardList, FilePlus2, Loader2, PackageCheck, Pencil, Plus, Send, Trash2, X } from "lucide-react";
+import { Ban, ClipboardList, Download, Eye, FilePlus2, Loader2, Mail, PackageCheck, Pencil, Plus, Printer, Send, Trash2, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -50,6 +50,7 @@ interface PO {
   completedAt?: string;
   /** The purchase bill generated from this order, once there is one. */
   purchaseBillNumber?: string;
+  receipts?: { _id: string; receivedAt: string; receivedByName?: string; reference?: string; reversedAt?: string; lines: { itemName: string; quantity: number }[] }[];
 }
 
 /** Placed (approved) and not cancelled: such an order can have its bill generated. */
@@ -118,6 +119,8 @@ export default function PurchaseOrders() {
   const canBill = hasPermission("Purchase Bills: Create & Edit");
 
   const [rows, setRows] = useState<PO[]>([]);
+  // A failed load shows as an error with Retry, never as an empty list.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -142,6 +145,7 @@ export default function PurchaseOrders() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      setLoadError(null);
       const [list, s] = (await Promise.all([
         apiClient.get("/purchase-orders", { status: view, search: q, vendorId: vendor !== "all" ? vendor : undefined, page, limit: PAGE }),
         apiClient.get("/purchase-orders/stats/summary")
@@ -150,7 +154,7 @@ export default function PurchaseOrders() {
       setTotal(list?.pagination?.total || 0);
       setStats(s?.stats || null);
     } catch (error) {
-      toast({ title: "Purchase orders could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -302,6 +306,63 @@ export default function PurchaseOrders() {
     }
   };
 
+  // Documents: preview opens the PDF in a new tab, print opens the print dialog, download saves it.
+  const [emailing, setEmailing] = useState<PO | null>(null);
+  const [emailTo, setEmailTo] = useState("");
+  const [emailNote, setEmailNote] = useState("");
+  const [emailBusy, setEmailBusy] = useState(false);
+  const [returning, setReturning] = useState<PO | null>(null);
+  const [returnReceipt, setReturnReceipt] = useState("");
+  const [returnReason, setReturnReason] = useState("");
+  const [returnBusy, setReturnBusy] = useState(false);
+  const failed = (title: string) => (error: unknown) => toast({ title, description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+  const previewPdf = async (po: PO) => {
+    // Open the tab inside the click so a pop-up blocker allows it, then point it at the PDF.
+    const tab = window.open("", "_blank");
+    try {
+      const file = await apiClient.getPurchaseOrderPdfFile(po._id, po.poNumber);
+      const url = URL.createObjectURL(file.blob);
+      if (tab) tab.location.href = url; else window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (error) {
+      tab?.close();
+      failed("Could not open the purchase order")(error);
+    }
+  };
+  const sendEmail = async () => {
+    if (!emailing) return;
+    setEmailBusy(true);
+    try {
+      await apiClient.sendPurchaseOrderEmail(emailing._id, emailTo.trim(), emailNote.trim());
+      toast({ title: `${emailing.poNumber} sent`, description: emailTo.trim() || "To the supplier's email on file" });
+      setEmailing(null);
+    } catch (error) {
+      failed("Not sent")(error);
+    } finally {
+      setEmailBusy(false);
+    }
+  };
+  const openReturn = (po: PO) => {
+    const live = (po.receipts || []).filter((r) => !r.reversedAt);
+    setReturning(po);
+    setReturnReceipt(live.length ? live[live.length - 1]._id : "");
+    setReturnReason("");
+  };
+  const submitReturn = async () => {
+    if (!returning || !returnReceipt || !returnReason.trim()) return;
+    setReturnBusy(true);
+    try {
+      await apiClient.returnPurchaseOrderDelivery(returning._id, returnReceipt, returnReason.trim());
+      toast({ title: "Delivery returned", description: "Stock and the order were adjusted. The delivery stays on record as returned." });
+      setReturning(null);
+      load();
+    } catch (error) {
+      failed("Not returned")(error);
+    } finally {
+      setReturnBusy(false);
+    }
+  };
+
   const confirmAction = async () => {
     if (!confirm) return;
     if (confirm.action === "cancel") {
@@ -413,12 +474,19 @@ export default function PurchaseOrders() {
           footer={!loading && total > 0 && <Pagination page={page} pageSize={PAGE} total={total} onPageChange={setPage} noun="orders" />}
         >
           <DataTable
+            error={loadError}
+            onRetry={() => load()}
             columns={columns}
             rows={rows}
             rowKey={(po) => po._id}
             loading={loading}
             onRowClick={canEdit ? (po) => (["draft", "sent", "acknowledged"].includes(po.status) && !po.purchaseBillNumber && !po.items.some((l) => l.receivedQuantity > 0) ? openEditor(po) : ["partial"].includes(po.status) ? openReceive(po) : undefined) : undefined}
             actions={(po) => [
+              { label: "Preview PDF", icon: Eye, onClick: () => previewPdf(po) },
+              { label: "Print", icon: Printer, onClick: () => { apiClient.printPurchaseOrderPDF(po._id, po.poNumber).catch(failed("Could not print")); } },
+              { label: "Download PDF", icon: Download, onClick: () => { apiClient.downloadPurchaseOrderPDF(po._id, po.poNumber).catch(failed("Could not download")); } },
+              { label: "Email supplier", icon: Mail, onClick: () => { setEmailing(po); setEmailTo(""); setEmailNote(""); }, hidden: !canEdit || po.status === "cancelled" },
+              { label: "Return delivery", icon: Undo2, onClick: () => openReturn(po), hidden: !canEdit || !(po.receipts || []).some((r) => !r.reversedAt) },
               { label: "Generate bill", icon: FilePlus2, onClick: () => generateBill(po), hidden: !canBill || !billable(po) },
               { label: "Receive goods", icon: PackageCheck, onClick: () => openReceive(po), hidden: !canEdit || !["sent", "acknowledged", "partial"].includes(po.status) },
               { label: "Mark ordered", icon: Send, onClick: () => setStatus(po, "sent").catch(() => undefined), hidden: !canEdit || po.status !== "draft" },
@@ -589,6 +657,50 @@ export default function PurchaseOrders() {
           </div>
         </EditorSection>
       </EditorSheet>
+
+      <Dialog open={!!emailing} onOpenChange={(o) => !o && !emailBusy && setEmailing(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Email {emailing?.poNumber}</DialogTitle>
+            <DialogDescription>The PDF is attached. Leave the address blank to use the supplier's email on file.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5"><Label htmlFor="po-email-to">Send to</Label><Input id="po-email-to" type="email" value={emailTo} onChange={(e) => setEmailTo(e.target.value)} placeholder="supplier@example.com" /></div>
+            <div className="space-y-1.5"><Label htmlFor="po-email-note">Message (optional)</Label><Textarea id="po-email-note" value={emailNote} onChange={(e) => setEmailNote(e.target.value)} rows={3} /></div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEmailing(null)} disabled={emailBusy}>Cancel</Button>
+            <Button onClick={sendEmail} disabled={emailBusy}>{emailBusy && <Loader2 className="animate-spin" />}Send</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!returning} onOpenChange={(o) => !o && !returnBusy && setReturning(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Return a delivery — {returning?.poNumber}</DialogTitle>
+            <DialogDescription>Takes the goods back out of stock and off the order. The delivery stays on record as returned. It is refused if the stock has already been used.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label>Delivery</Label>
+              <Select value={returnReceipt} onValueChange={setReturnReceipt}>
+                <SelectTrigger><SelectValue placeholder="Choose a delivery" /></SelectTrigger>
+                <SelectContent>
+                  {(returning?.receipts || []).filter((r) => !r.reversedAt).map((r) => (
+                    <SelectItem key={r._id} value={r._id}>{fmtDate(r.receivedAt)} · {r.lines.map((l) => `${l.itemName} × ${l.quantity}`).join(", ")}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5"><Label htmlFor="po-return-reason">Reason *</Label><Textarea id="po-return-reason" value={returnReason} onChange={(e) => setReturnReason(e.target.value)} rows={2} maxLength={300} /></div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReturning(null)} disabled={returnBusy}>Cancel</Button>
+            <Button variant="destructive" onClick={submitReturn} disabled={returnBusy || !returnReceipt || !returnReason.trim()}>{returnBusy && <Loader2 className="animate-spin" />}Return delivery</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!receiving} onOpenChange={(o) => !o && !receiveBusy && setReceiving(null)}>
         <DialogContent className="max-w-lg">

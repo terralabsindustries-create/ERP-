@@ -18,8 +18,10 @@ export const PERMISSION_TREE: PermissionGroup[] = [
 
   { module: "Customers", actions: ["View", "Create & Edit", "Delete", "Export"] },
   { module: "Jobs", actions: ["View", "Create & Edit", "Delete", "Change Status"] },
+  { module: "Sales Orders", actions: ["View", "Create & Edit", "Approve", "Cancel", "Delete", "Apply Discount", "Override Rate", "Change Stage"] },
+  { module: "Product Rates", actions: ["View", "Create & Edit", "Delete"] },
   { module: "Quotations", actions: ["View", "Create & Edit", "Delete", "Send Email", "Change Status", "Convert to Invoice"] },
-  { module: "Invoicing", actions: ["View", "Create & Edit", "Delete", "Send Email", "Record Payment", "Correct Balance", "Download PDF"] },
+  { module: "Invoicing", actions: ["View", "Create & Edit", "Delete", "Send Email", "Record Payment", "Correct Balance", "Download PDF", "Credit & Debit Notes"] },
   { module: "Invoicing (View No GST)", actions: [] },
 
   { module: "Calendar", actions: ["View", "Create & Edit", "Delete"] },
@@ -44,6 +46,7 @@ export const PERMISSION_TREE: PermissionGroup[] = [
   { module: "Reports", actions: ["View", "Export"] },
 
   { module: "Designer Timer", actions: ["View", "Track Time"] },
+  { module: "Pricing Master", actions: ["View", "Create & Edit", "Delete", "Customer Rates", "Override Price"] },
   { module: "Discounts", actions: ["View", "Create & Edit", "Delete"] },
   { module: "Job Proofing", actions: ["View", "Approve", "Reject"] },
   { module: "WhatsApp", actions: ["View", "Send Messages"] },

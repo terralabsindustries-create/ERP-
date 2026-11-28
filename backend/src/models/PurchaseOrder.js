@@ -39,6 +39,12 @@ const purchaseOrderSchema = new mongoose.Schema({
     reference: String,
     // The request key of the delivery, so a retried request is not received twice.
     idempotencyKey: String,
+    // A delivery is never deleted: a purchase return marks it reversed and
+    // keeps who, when and why (POST /:id/receipts/:receiptId/reverse).
+    reversedAt: Date,
+    reversedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    reversedByName: String,
+    reverseReason: String,
     lines: [{ inventoryId: mongoose.Schema.Types.ObjectId, itemName: String, quantity: Number }]
   }],
   expectedDelivery: {

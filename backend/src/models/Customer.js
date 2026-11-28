@@ -34,6 +34,11 @@ const customerSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  // State (for GST: decides CGST+SGST or IGST). Stored as the official name.
+  state: {
+    type: String,
+    trim: true
+  },
   gstVerified: {
     type: Boolean,
     default: false
@@ -89,6 +94,15 @@ const customerSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  // Sum of Job.estimatedCost for non-cancelled jobs. A production estimate, not revenue.
+  estimatedJobValue: {
+    type: Number,
+    default: 0
+  },
+  cancelledInvoiceTotal: {
+    type: Number,
+    default: 0
+  },
   revenueSegment: {
     type: String,
     enum: ['low', 'medium', 'high', 'premium'],
@@ -137,37 +151,33 @@ customerSchema.index({ phone: 1 });
 customerSchema.index({ name: 'text', company: 'text' });
 customerSchema.index({ userId: 1, status: 1 });
 customerSchema.index({ dataScope: 1, status: 1 });
+// Scoped list sorts (newest, by name) and search; see scripts/perf/explain.js.
+customerSchema.index({ dataScope: 1, createdAt: -1 });
+customerSchema.index({ dataScope: 1, name: 1 });
+// Case-insensitive name order for the paged Customers list (queries use the same collation).
+customerSchema.index({ dataScope: 1, name: 1 }, { name: 'customer_name_ci', collation: { locale: 'en', strength: 2 } });
 
 // Methods
+// Metrics come from services/customerFinancials.js (one definition for the
+// record, list, reports and dashboard). totalRevenue is invoiced revenue (GST
+// included, net of credit/debit notes, never drafts or cancelled invoices),
+// NOT Job.estimatedCost; that is estimatedJobValue. totalSpent is payments
+// actually received.
 customerSchema.methods.updateStats = async function() {
-  const Job = mongoose.model('Job');
-  const Payment = mongoose.model('Payment');
-  
-  // Calculate total orders and revenue
-  const jobs = await Job.find({ customerId: this._id });
-  // Money actually received: not pending, failed, cancelled or refunded payments.
-  const payments = await Payment.find({ customerId: this._id, status: 'completed' }).sort({ paymentDate: 1 });
-  
-  this.totalOrders = jobs.length;
-  this.totalRevenue = jobs.reduce((sum, job) => sum + (job.estimatedCost || 0), 0);
-  this.totalSpent = payments.reduce((sum, payment) => sum + (payment.amount || 0), 0);
-  this.lastOrderDate = jobs.length > 0 ? jobs[jobs.length - 1].createdAt : null;
-  this.lastPaymentAmount = payments.length > 0 ? payments[payments.length - 1].amount : 0;
-  this.lastPaymentDate = payments.length > 0 ? payments[payments.length - 1].paymentDate : null;
-  
-  // Outstanding: what issued invoices still show as due (their balances already
-  // count payments applied to them and amounts recorded on the invoice), less
-  // money received on account and not yet applied.
-  const Invoice = mongoose.model('Invoice');
-  const { unallocatedOf } = require('../services/paymentLedger');
-  const owed = await Invoice.aggregate([
-    { $match: { customerId: this._id, status: { $nin: ['draft', 'cancelled'] } } },
-    { $group: { _id: null, total: { $sum: { $ifNull: ['$balanceAmount', 0] } } } }
-  ]);
-  const onAccount = payments.reduce((sum, payment) => sum + unallocatedOf(payment), 0);
+  const { financialsOne } = require('../services/customerFinancials');
+  const scope = this.dataScope ? { dataScope: this.dataScope } : { userId: this.userId };
+  const f = await financialsOne(this._id, scope);
 
-  this.outstandingBalance = Math.round(((owed[0]?.total || 0) - onAccount) * 100) / 100;
-  
+  this.totalOrders = f.totalOrders;
+  this.estimatedJobValue = f.estimatedJobValue;
+  this.totalRevenue = f.invoicedRevenue;
+  this.totalSpent = f.paymentsReceived;
+  this.cancelledInvoiceTotal = f.cancelledInvoiced;
+  this.lastOrderDate = f.lastOrderDate;
+  this.lastPaymentAmount = f.lastPaymentAmount;
+  this.lastPaymentDate = f.lastPaymentDate;
+  this.outstandingBalance = f.outstanding;
+
   return this.save();
 };
 

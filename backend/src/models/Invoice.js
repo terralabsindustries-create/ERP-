@@ -2,6 +2,8 @@ const mongoose = require('mongoose');
 require('./NumberSequence');
 
 const invoiceItemSchema = new mongoose.Schema({
+  // How the rate was decided (services/pricingService.js); never changes after the line is stored.
+  pricingSnapshot: { type: mongoose.Schema.Types.Mixed },
   itemName: {
     type: String,
     required: [true, 'Item name is required'],
@@ -156,6 +158,12 @@ const invoiceSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  // For standalone invoices without a job or counter job. Linked work takes
+  // its delivery state from the job and dispatch records instead.
+  fulfillmentStatus: { type: String, enum: ['untracked', 'not_delivered', 'delivered'], default: 'untracked' },
+  fulfilledAt: Date,
+  fulfilledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  fulfilledByName: String,
   invoiceDate: {
     type: Date,
     required: [true, 'Invoice date is required'],
@@ -238,6 +246,32 @@ const invoiceSchema = new mongoose.Schema({
     enum: ['draft', 'sent', 'paid', 'overdue', 'cancelled', 'refunded'],
     default: 'draft'
   },
+  /*
+    Financial document lifecycle. A draft carries a DRAFT-##### identifier, not
+    an official number: the official invoice number (INV-YYYYMM-####) is given
+    when the invoice is issued (services/invoiceIssue.js), so abandoned drafts
+    leave no gaps in the issued series. Issued invoices keep their number for
+    ever; their amounts are corrected with a credit or debit note, or the
+    invoice is cancelled (number kept, never reused).
+  */
+  issuedAt: { type: Date },
+  /** The DRAFT-##### identifier the invoice had before it was issued. */
+  draftNumber: { type: String, trim: true },
+  /** Set while an issue is in progress (claim), cleared when it finishes. */
+  issuingAt: { type: Date },
+  // Cancellation keeps the invoice and its number; who, when and why are recorded.
+  // (Before these fields existed the route set them but they were never stored.)
+  cancelledAt: { type: Date },
+  cancellationReason: { type: String, trim: true, maxlength: 500 },
+  cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  /*
+    Issued credit and debit notes against this invoice (services/creditNotes.js).
+    creditNoteApplied is the part of credit notes taken off what is still owed;
+    credit beyond the outstanding balance stays on the note as the customer's
+    credit (refund or later use) so the invoice never shows less than was paid.
+  */
+  creditNoteApplied: { type: Number, default: 0 },
+  debitNoteTotal: { type: Number, default: 0 },
   paymentStatus: {
     type: String,
     enum: ['pending', 'partial', 'paid', 'overdue'],
@@ -285,6 +319,14 @@ const invoiceSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  /**
+   * Place of supply: the GST state code (e.g. "32" Kerala). Set on create from
+   * what was chosen, else the customer's GSTIN, else the business's own state
+   * for an intra-state supply. Read by GST reports (GSTR-1 B2CL/B2CS, 3.2).
+   */
+  placeOfSupply: { type: String, trim: true, match: /^\d{2}$/ },
+  /** Reverse charge applies (recipient pays the tax). Shown on the invoice and in GSTR-1. */
+  reverseCharge: { type: Boolean, default: false },
   companyDetails: {
     name: String,
     address: String,
@@ -316,6 +358,14 @@ invoiceSchema.index({ userId: 1, status: 1 });
 invoiceSchema.index({ userId: 1, paymentStatus: 1 });
 invoiceSchema.index({ dataScope: 1, status: 1 });
 invoiceSchema.index({ dataScope: 1, paymentStatus: 1 });
+// Scoped list by date, per-customer lookups (customer list totals, statements)
+// and the overdue/due-soon counts; see scripts/perf/explain.js.
+invoiceSchema.index({ dataScope: 1, invoiceDate: -1 });
+invoiceSchema.index({ dataScope: 1, createdAt: -1 });
+invoiceSchema.index({ dataScope: 1, customerId: 1, invoiceDate: -1 });
+invoiceSchema.index({ dataScope: 1, dueDate: 1 });
+// Job.invoices is a virtual populated by jobId (the job list, job detail).
+invoiceSchema.index({ jobId: 1 });
 
 // invoiceNumber only needs to be unique within one tenant, not across all of
 // them — two businesses each having their own "INV-202608-0001" is correct,
@@ -404,11 +454,11 @@ invoiceSchema.pre('save', function(next) {
 
   // Calculate balance amount. Rounded so a fully settled invoice reads exactly
   // 0 instead of a float residue like -0.19999999999999998.
-  this.balanceAmount = round2(this.totalAmount - this.paidAmount);
-
   // The payment state always follows the money: an invoice is never saved as
   // paid while something is still due, nor left unpaid once it is settled.
-  const { paymentStatus, status } = invoiceSchema.statics.paymentStateFor(this, this.paidAmount);
+  // What is owed includes issued credit notes (less) and debit notes (more).
+  const { paymentStatus, status, balanceAmount } = invoiceSchema.statics.paymentStateFor(this, this.paidAmount);
+  this.balanceAmount = balanceAmount;
   this.paymentStatus = paymentStatus;
   this.status = status;
 
@@ -427,9 +477,18 @@ invoiceSchema.pre('save', function(next) {
  * Draft, cancelled and refunded invoices keep their status; otherwise the
  * status reads "paid" exactly while the payment status does.
  */
+/**
+ * What the customer owes on an invoice before payments: its total, less issued
+ * credit notes, plus issued debit notes (services/creditNotes.js). Never below 0.
+ */
+invoiceSchema.statics.receivableOf = function (invoice) {
+  const round2 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+  return Math.max(0, round2(Number(invoice.totalAmount || 0) + Number(invoice.debitNoteTotal || 0) - Number(invoice.creditNoteApplied || 0)));
+};
+
 invoiceSchema.statics.paymentStateFor = function (invoice, paidAmount) {
   const round2 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
-  const total = round2(invoice.totalAmount);
+  const total = invoiceSchema.statics.receivableOf(invoice);
   const paid = round2(paidAmount);
   const paymentStatus = total > 0 && paid >= total - 0.005
     ? 'paid'
@@ -453,21 +512,30 @@ invoiceSchema.statics.paymentStateFor = function (invoice, paidAmount) {
  * Pass `session` to allocate inside a transaction: if it aborts, the number
  * goes back unused.
  */
-invoiceSchema.statics.generateInvoiceNumber = async function (userId, dataScope, { session } = {}) {
-  const today = new Date();
+invoiceSchema.statics.generateInvoiceNumber = async function (userId, dataScope, { session, date = new Date() } = {}) {
+  const today = new Date(date);
   const year = today.getFullYear();
   const month = String(today.getMonth() + 1).padStart(2, '0');
-  const prefix = `INV-${year}${month}-`;
   const scope = dataScope ? { dataScope } : { userId };
 
+  // The business's series (models/DocumentNumbering.js); none set = INV-YYYYMM-####.
+  const numbering = await mongoose.model('DocumentNumbering').findOne(dataScope ? { dataScope } : { userId }).session(session || null).lean().catch(() => null);
+  const cfg = { prefix: 'INV-', reset: 'monthly', padding: 4, ...(numbering?.invoice || {}) };
+  const { financialYearOf } = require('../utils/financialYear');
+  const period = cfg.reset === 'financial_year' ? financialYearOf(today).code : `${year}${month}`;
+  const prefix = `${cfg.prefix}${period}-`;
+  const legacy = cfg.prefix === 'INV-' && cfg.reset === 'monthly';
+
   const [highest] = await this.aggregate([
-    { $match: { ...scope, invoiceNumber: { $regex: `^${prefix}\\d+$` } } },
+    { $match: { ...scope, invoiceNumber: { $regex: `^${prefix.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}\\d+$` } } },
     { $group: { _id: null, max: { $max: { $toLong: { $substrCP: ['$invoiceNumber', prefix.length, 12] } } } } }
   ]).session(session || null);
 
   const NumberSequence = mongoose.model('NumberSequence');
-  const sequence = await NumberSequence.nextAfter(`invoice:${dataScope || userId}:${year}${month}`, Number(highest?.max) || 0, { session });
-  return `${prefix}${String(sequence).padStart(4, '0')}`;
+  // The original series keeps its original counter key, so existing counters continue.
+  const key = legacy ? `invoice:${dataScope || userId}:${year}${month}` : `invoice:${dataScope || userId}:${prefix}`;
+  const sequence = await NumberSequence.nextAfter(key, Number(highest?.max) || 0, { session });
+  return `${prefix}${String(sequence).padStart(cfg.padding || 4, '0')}`;
 };
 
 /** True when an insert failed because its invoice number is already used in the business. */
@@ -482,11 +550,27 @@ invoiceSchema.statics.isNumberTaken = (error) =>
  * Inside a transaction it does not retry — the transaction is over once an
  * insert fails — and the caller starts a new transaction instead.
  */
+/** True for the DRAFT-##### identifier a draft carries before it is issued. */
+invoiceSchema.statics.isDraftNumber = (number) => /^DRAFT-\d+$/.test(String(number || ''));
+
+/**
+ * The next draft identifier of a business: DRAFT-#####. A separate sequence
+ * from issued invoice numbers, so drafts never consume an official number.
+ */
+invoiceSchema.statics.generateDraftNumber = async function (userId, dataScope, { session } = {}) {
+  const NumberSequence = mongoose.model('NumberSequence');
+  const sequence = await NumberSequence.nextAfter(`invoice-draft:${dataScope || userId}`, 0, { session });
+  return `DRAFT-${String(sequence).padStart(5, '0')}`;
+};
+
 invoiceSchema.statics.createNumbered = async function (data, { session, attempts = 5 } = {}) {
+  const isDraft = (data.status || 'draft') === 'draft';
   for (let attempt = 1; ; attempt += 1) {
-    const invoiceNumber = await this.generateInvoiceNumber(data.userId, data.dataScope, { session });
+    const invoiceNumber = isDraft
+      ? await this.generateDraftNumber(data.userId, data.dataScope, { session })
+      : await this.generateInvoiceNumber(data.userId, data.dataScope, { session });
     try {
-      const [invoice] = await this.create([{ ...data, invoiceNumber }], session ? { session } : {});
+      const [invoice] = await this.create([{ ...data, invoiceNumber, ...(isDraft ? {} : { issuedAt: data.issuedAt || new Date() }) }], session ? { session } : {});
       return invoice;
     } catch (error) {
       if (!this.isNumberTaken(error) || session || attempt >= attempts) throw error;
@@ -512,4 +596,5 @@ invoiceSchema.statics.getInvoiceStats = function(matchQuery) {
   ]);
 };
 
+require('./DocumentNumbering');
 module.exports = mongoose.model('Invoice', invoiceSchema);

@@ -62,6 +62,8 @@ const protect = async (req, res, next) => {
 
     // Add user to request object
     req.user = user;
+    // Lets audit and transaction-failure records name the tenant and actor.
+    Object.assign(require('../utils/auditContext').currentContext(), { dataScope: user.dataScope, userId: user._id });
     next();
   } catch (error) {
     if (error.name === 'JsonWebTokenError') {

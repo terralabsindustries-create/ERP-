@@ -1,9 +1,14 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useDebounced } from "@/hooks/useDebounced";
+import { Pagination } from "@/components/data";
+
+const PAGE_SIZE = 25;
 import { StatCard } from "@/components/common/StatTile";
 import { useSearchParams } from "react-router-dom";
 import { JobStatusBadge, PriorityBadge } from "@/components/jobs/JobStatusBadge";
 import { dueState, formatINR, STAGES } from "@/lib/printWorkflow";
 import { invoiceState } from "@/lib/invoiceStatus";
+import { deliveryState, type JobDelivery } from "@/lib/deliveryStatus";
 import {
   Plus,
   Search,
@@ -19,6 +24,7 @@ import {
   Trash2,
   UserPlus,
   Eye,
+  Truck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,6 +54,7 @@ import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { ConfirmDialog, StatusPill } from "@/components/data";
+import { ErrorState, StaleDataBanner } from "@/components/common/LoadState";
 
 /** An invoice a job ticket is billed on, as GET /api/jobs returns it (never a cancelled one). */
 type JobInvoice = {
@@ -63,8 +70,10 @@ type JobInvoice = {
 export default function Jobs() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [jobs, setJobs] = useState<any[]>([]);
-  const [customers, setCustomers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  // A failed load is shown as an error (with the last good list kept), never as "no jobs".
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
   const [searchTerm, setSearchTerm] = useState(() => searchParams.get("q") || "");
   // A search from the header while already on this page arrives as a new ?q.
   const qParam = searchParams.get("q");
@@ -73,7 +82,17 @@ export default function Jobs() {
   }, [qParam]);
   const [statusFilter, setStatusFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState("all");
+  const [stageFilter, setStageFilter] = useState("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [page, setPage] = useState(1);
+  const [totalMatching, setTotalMatching] = useState(0);
+  const [summary, setSummary] = useState<{ total: number; active: number; completed: number; billed: number | null } | null>(null);
+  const debouncedSearch = useDebounced(searchTerm.trim(), 300);
+  const requestRef = useRef<AbortController | null>(null);
   // "New Job Ticket" in the header links here with ?new=1
+  const [editingJob, setEditingJob] = useState<any>(null);
+  const [editLockedReason, setEditLockedReason] = useState<string | undefined>(undefined);
   const [showCreateDialog, setShowCreateDialog] = useState(() => searchParams.get("new") === "1");
   const [assignTaskDialog, setAssignTaskDialog] = useState({ open: false, jobId: "" });
   const [updateStatusDialog, setUpdateStatusDialog] = useState({ open: false, jobId: "", currentStatus: "" });
@@ -102,10 +121,6 @@ export default function Jobs() {
   const canAssign = hasPermission("Staff & Tasks: Assign Tasks");
   const canDeleteJob = hasPermission("Jobs: Delete");
 
-  useEffect(() => {
-    fetchJobs();
-    fetchCustomers();
-  }, []);
 
   useEffect(() => {
     if (searchParams.get("new") === "1") {
@@ -116,12 +131,26 @@ export default function Jobs() {
     }
   }, [searchParams]);
 
+  // Search, filters and pages run on the server over every visible job; the
+  // page carries 25 light rows (invoice summaries, no line items). A newer
+  // request cancels the one in flight.
   const fetchJobs = async () => {
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
     setLoading(true);
     try {
-      // The API pages at 10 by default; the list filters client-side, so load them all.
-      const response = await apiClient.getJobs({ limit: 500 });
-      const jobsData = (response as any)?.jobs || (response as any) || [];
+      const response = await apiClient.getWithSignal<{ jobs: any[]; pagination: { totalJobs: number } }>("/jobs", {
+        page,
+        limit: PAGE_SIZE,
+        search: debouncedSearch || undefined,
+        status: statusFilter !== "all" ? statusFilter : undefined,
+        priority: priorityFilter !== "all" ? priorityFilter : undefined,
+        stage: stageFilter !== "all" ? stageFilter : undefined,
+        from: dateFrom || undefined,
+        to: dateTo || undefined,
+      }, controller.signal);
+      const jobsData = response?.jobs || [];
 
       const processedJobs = jobsData.map((job: any) => ({
         ...job,
@@ -130,31 +159,29 @@ export default function Jobs() {
         customerEmail: job.customerId?.email,
         customerPhone: job.customerId?.phone,
         customerCompany: job.customerId?.company,
-        invoiceId: job.invoices?.[0]?._id || null,
-        invoiceItems: job.invoices?.[0]?.items || null
+        invoiceId: job.invoices?.[0]?._id || null
       }));
 
       setJobs(processedJobs);
-    } catch (error) {
+      setTotalMatching(response?.pagination?.totalJobs ?? processedJobs.length);
+      setLoadError(null);
+      setLoadedAt(Date.now());
+      setLoading(false);
+    } catch (error: any) {
+      if (controller.signal.aborted || error?.kind === "cancelled") return;
       console.error('Error fetching jobs:', error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch jobs",
-        variant: "destructive",
-      });
-    } finally {
+      setLoadError(error);
       setLoading(false);
     }
+    apiClient.get<{ total: number; active: number; completed: number; billed: number | null }>("/jobs/stats/summary").then(setSummary).catch(() => undefined);
   };
 
-  const fetchCustomers = async () => {
-    try {
-      const customersData = await apiClient.listAll('/customers', 'customers');
-      setCustomers(customersData);
-    } catch (error) {
-      console.error('Error fetching customers:', error);
-    }
-  };
+  useEffect(() => { setPage(1); }, [debouncedSearch, statusFilter, priorityFilter, stageFilter, dateFrom, dateTo]);
+  useEffect(() => {
+    fetchJobs();
+    return () => requestRef.current?.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, debouncedSearch, statusFilter, priorityFilter, stageFilter, dateFrom, dateTo]);
 
   const [deletingJobId, setDeletingJobId] = useState<string | null>(null);
   const handleDeleteJob = (jobId: string) => setDeletingJobId(jobId);
@@ -222,6 +249,16 @@ export default function Jobs() {
         throw new Error('Invoice not found');
       }
 
+      // An issued invoice is a tax document: it is corrected with a credit or
+      // debit note (Invoices → ⋯ → Credit / debit note), not edited.
+      if (invoice.status !== 'draft') {
+        toast({
+          title: `${invoice.invoiceNumber} is already issued`,
+          description: "Its amounts are locked. Raise a credit or debit note from the Invoices page to correct it.",
+        });
+        return;
+      }
+
       setInvoiceToEdit(invoice);
       setShowEditInvoiceDialog(true);
     } catch (error: any) {
@@ -234,31 +271,40 @@ export default function Jobs() {
     }
   };
 
-  // Filter jobs
-  const filteredJobs = jobs.filter((job) => {
-    const customerName = job.customer || '';
-    const matchesSearch =
-      job.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      job.id.toLowerCase().includes(searchTerm.toLowerCase());
+  // The server has already filtered and paged the list.
+  const filteredJobs = jobs;
+  const filtersActive = !!searchTerm || statusFilter !== "all" || priorityFilter !== "all" || stageFilter !== "all" || !!dateFrom || !!dateTo;
 
-    const matchesStatus = statusFilter === "all" || job.status === statusFilter;
-    const matchesPriority = priorityFilter === "all" || job.priority === priorityFilter;
-
-    return matchesSearch && matchesStatus && matchesPriority;
-  });
-
-  // Calculate stats
-  const totalJobs = jobs.length;
-  const activeJobs = jobs.filter(job => !["completed", "delivered", "cancelled"].includes(job.status)).length;
-  const completedJobs = jobs.filter(job => ["completed", "delivered"].includes(job.status)).length;
+  // Header figures over every visible job (GET /jobs/stats/summary), not one page.
+  const totalJobs = summary?.total ?? 0;
+  const activeJobs = summary?.active ?? 0;
+  const completedJobs = summary?.completed ?? 0;
   // What a job was billed for (its invoices, incl. GST); the estimate until it is billed.
   // job.invoices holds the job's non-cancelled invoices only (GET /api/jobs), so
   // a job is billed as soon as it has one, whatever its payment state.
+  // Opens the ticket for editing. The full job is fetched first (the list is a summary).
+  const handleEditJob = async (job: any) => {
+    try {
+      const res: any = await apiClient.getJob(job._id || job.id);
+      const full = res?.job || res;
+      const live = (job.invoices || []).find((i: JobInvoice) => i.status !== "cancelled");
+      const finished = ["completed", "delivered"].includes(job.status);
+      setEditLockedReason(
+        live ? `Billed on invoice ${live.invoiceNumber}: the customer, items, cost, paper and sheets are locked. Priority, delivery date, title and notes can still be changed.`
+        : finished ? `This job is ${job.status}: its billing details are locked. Priority, delivery date, title and notes can still be changed.`
+        : undefined
+      );
+      setEditingJob(full);
+      setShowCreateDialog(true);
+    } catch (error: any) {
+      toast({ title: "Could not open the job", description: error?.message || "Please try again", variant: "destructive" });
+    }
+  };
+
   const isBilled = (job: { invoices?: JobInvoice[] }) => (job.invoices?.length || 0) > 0;
   const billedOf = (job: any) => (job.invoices || []).reduce((sum: number, inv: any) => sum + (inv.totalAmount || 0), 0);
   const estimateOf = (job: any) => job.estimated_cost || job.estimatedCost || 0;
-  const totalRevenue = jobs.reduce((sum, job) => sum + billedOf(job), 0);
+  const totalRevenue = summary?.billed ?? 0;
 
   const formatCurrency = (amount: number) => {
     return `₹${amount.toLocaleString('en-IN')}`;
@@ -339,34 +385,62 @@ export default function Jobs() {
             <SelectItem value="urgent">Urgent</SelectItem>
           </SelectContent>
         </Select>
+
+        <Select value={stageFilter} onValueChange={setStageFilter}>
+          <SelectTrigger className="w-[170px]" aria-label="Production stage">
+            <SelectValue placeholder="Production" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Any production state</SelectItem>
+            <SelectItem value="open">Open</SelectItem>
+            <SelectItem value="pre_production">Pre-production</SelectItem>
+            <SelectItem value="in_production">In production</SelectItem>
+            <SelectItem value="ready">Ready to dispatch</SelectItem>
+            <SelectItem value="closed">Delivered / cancelled</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Input type="date" aria-label="Created from" className="h-9 w-[150px]" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+          <span>–</span>
+          <Input type="date" aria-label="Created to" className="h-9 w-[150px]" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+        </div>
       </div>
 
       {/* Jobs Table */}
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm">All job tickets{!loading && <span className="ml-2 font-normal text-muted-foreground">{filteredJobs.length}</span>}</CardTitle>
+          <CardTitle className="text-sm">{filtersActive ? "Matching job tickets" : "All job tickets"}{loadedAt !== undefined && <span className="ml-2 font-normal text-muted-foreground">{totalMatching.toLocaleString("en-IN")}</span>}</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          {loading ? (
-            <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
-              Loading jobs...
+          {loadError && loadedAt !== undefined && (
+            <StaleDataBanner className="m-3" error={loadError} onRetry={fetchJobs} retrying={loading} updatedAt={loadedAt} />
+          )}
+          {loading && loadedAt === undefined ? (
+            <div className="space-y-2 p-4" aria-busy="true" aria-label="Loading job tickets">
+              {Array.from({ length: 6 }, (_, i) => <div key={i} className="h-10 animate-pulse rounded-md bg-muted" />)}
             </div>
+          ) : loadError && loadedAt === undefined ? (
+            <ErrorState error={loadError} what="job tickets" onRetry={fetchJobs} retrying={loading} />
           ) : filteredJobs.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
               <FileText className="h-10 w-10 text-muted-foreground opacity-40" />
               <h3 className="text-lg font-semibold">No jobs found</h3>
               <p className="text-muted-foreground text-sm max-w-sm">
-                {searchTerm || statusFilter !== "all" || priorityFilter !== "all"
+                {filtersActive
                   ? "Try adjusting your filters"
                   : "Create your first job to get started"}
               </p>
-              {searchTerm || statusFilter !== "all" || priorityFilter !== "all" ? (
+              {filtersActive ? (
                 <Button
                   variant="outline"
                   onClick={() => {
                     setSearchTerm("");
                     setStatusFilter("all");
                     setPriorityFilter("all");
+                    setStageFilter("all");
+                    setDateFrom("");
+                    setDateTo("");
                   }}
                 >
                   Clear filters
@@ -403,12 +477,13 @@ export default function Jobs() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="font-medium">{job.title}</div>
-                        {(job.printSpecs?.quantity > 1 || job.printSpecs?.paperType || job.printSpecs?.printSize) && (
+                        {(job.printSpecs?.quantity > 1 || job.printSpecs?.paperType || job.printSpecs?.printSize || job.printSpecs?.sheets > 0) && (
                           <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
                             {[
                               job.printSpecs?.quantity > 1 ? `${Number(job.printSpecs.quantity).toLocaleString('en-IN')} pcs` : null,
                               job.printSpecs?.printSize,
                               job.printSpecs?.paperType,
+                              job.printSpecs?.sheets > 0 ? `${Number(job.printSpecs.sheets).toLocaleString('en-IN')} sheets` : null,
                             ].filter(Boolean).join(' · ')}
                           </div>
                         )}
@@ -459,6 +534,7 @@ export default function Jobs() {
                                 </button>
                               );
                             })}
+                            <DeliveryPill job={job} billed />
                           </div>
                         ) : (
                           <div className="flex flex-col items-end gap-1">
@@ -468,6 +544,7 @@ export default function Jobs() {
                               </span>
                             )}
                             <span className="text-destructive-strong">Not billed</span>
+                            <DeliveryPill job={job} />
                             {/* The job ticket's items, notes and HSN codes come across to the invoice. */}
                             {canInvoice && job.status !== "cancelled" && (
                               <Button
@@ -484,7 +561,7 @@ export default function Jobs() {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        {(canInvoice || canViewInvoice || canQuote || canChangeStatus || canAssign || canDeleteJob) && (
+                        {(canInvoice || canViewInvoice || canQuote || canCreateJob || canChangeStatus || canAssign || canDeleteJob) && (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="icon" className="h-8 w-8">
@@ -492,6 +569,12 @@ export default function Jobs() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
+                            {canCreateJob && job.status !== "cancelled" && (
+                              <DropdownMenuItem onClick={() => handleEditJob(job)}>
+                                <Edit className="h-4 w-4" />
+                                Edit job
+                              </DropdownMenuItem>
+                            )}
                             {canQuote && job.status !== "cancelled" && (
                               <DropdownMenuItem onClick={() => {
                                 setQuotationJob(job);
@@ -509,7 +592,7 @@ export default function Jobs() {
                             )}
                             {canInvoice && isBilled(job) && (
                               <>
-                                <DropdownMenuItem onClick={() => handleEditInvoice(job)}>
+                                <DropdownMenuItem onClick={() => handleEditInvoice(job)} disabled={!!job.invoices?.[0] && job.invoices[0].status !== "draft"}>
                                   <FileEdit className="h-4 w-4" />
                                   Edit invoice
                                 </DropdownMenuItem>
@@ -562,16 +645,22 @@ export default function Jobs() {
               </table>
             </div>
           )}
+          {totalMatching > PAGE_SIZE && (
+            <div className="border-t px-4 py-2.5 text-xs text-muted-foreground">
+              <Pagination page={page} pageSize={PAGE_SIZE} total={totalMatching} onPageChange={setPage} noun="job tickets" />
+            </div>
+          )}
         </CardContent>
       </Card>
 
       {/* Dialogs */}
       <CreateJobDialog
         open={showCreateDialog}
-        onOpenChange={setShowCreateDialog}
+        onOpenChange={(open) => { setShowCreateDialog(open); if (!open) { setEditingJob(null); setEditLockedReason(undefined); } }}
         onJobCreated={fetchJobs}
-        customers={customers}
-        onCustomersUpdate={fetchCustomers}
+        editingJob={editingJob}
+        editLockedReason={editLockedReason}
+        onJobUpdated={fetchJobs}
       />
 
       {(() => {
@@ -650,5 +739,17 @@ export default function Jobs() {
         onConfirm={confirmDeleteJob}
       />
     </div>
+  );
+}
+
+/** The job's delivery state beside its payment state (lib/deliveryStatus.ts). */
+function DeliveryPill({ job, billed = false }: { job: { status?: string; deliveries?: JobDelivery[] }; billed?: boolean }) {
+  const st = deliveryState(job, { billed });
+  if (!st) return null;
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs font-normal" title={st.detail}>
+      <Truck className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+      <StatusPill tone={st.tone}>{st.label}</StatusPill>
+    </span>
   );
 }

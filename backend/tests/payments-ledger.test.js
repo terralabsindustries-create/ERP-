@@ -335,9 +335,13 @@ describe('reversals, edits and deletion', () => {
     expect(cancel.status).toBe(409);
     expect((await Invoice.findById(inv._id)).status).toBe('sent');
 
-    // Taken off: the money stays on account and the invoice can go.
+    // Taken off: the money stays on account. An issued invoice is never
+    // deleted (it keeps its number), but it can now be cancelled.
     await admin.put(`/api/payments/${id}/allocations`, { allocations: [] });
-    expect((await admin.delete(`/api/invoices/${inv._id}`)).status).toBe(200);
+    const deleted = await admin.delete(`/api/invoices/${inv._id}`);
+    expect(deleted.status).toBe(409);
+    expect(deleted.body.code).toBe('INVOICE_ISSUED_NOT_DELETABLE');
+    expect((await admin.patch(`/api/invoices/${inv._id}/cancel`, { reason: 'Wrong customer' })).status).toBe(200);
     expect((await Payment.findById(id)).allocations).toHaveLength(0);
     await expectConsistent();
   });

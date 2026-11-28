@@ -29,7 +29,7 @@ function scopeFilter(req, extra = {}) {
 // Salary figures are only for logins with Human Resources: View Salary or
 // Payroll; everyone else with HR access sees the employee without them.
 const canSeeSalary = (user) => userCan(user, 'Human Resources: View Salary') || userCan(user, 'Payroll');
-const SALARY_FIELDS = ['salary', 'deductions', 'grossSalary', 'netSalary', 'totalDeductions', 'bankDetails'];
+const SALARY_FIELDS = ['salary', 'deductions', 'grossSalary', 'netSalary', 'totalDeductions', 'bankDetails', 'statutory'];
 const present = (req, employee) => {
   if (!employee || canSeeSalary(req.user)) return employee;
   const obj = typeof employee.toJSON === 'function' ? employee.toJSON() : { ...employee };
@@ -116,7 +116,7 @@ router.post('/', requirePermission('Human Resources: Create & Edit'), [
     const data = { ...req.body };
     delete data._id;
     if (!canSeeSalary(req.user)) {
-      for (const field of ['salary', 'deductions', 'bankDetails']) delete data[field];
+      for (const field of ['salary', 'deductions', 'bankDetails', 'statutory']) delete data[field];
     }
     data.createdBy = req.user._id;
     data.userId = req.user._id;
@@ -157,7 +157,7 @@ router.put('/:id', requirePermission('Human Resources: Create & Edit'), async (r
     delete data.createdAt;
     delete data.updatedAt;
     if (!canSeeSalary(req.user)) {
-      for (const field of ['salary', 'deductions', 'bankDetails']) delete data[field];
+      for (const field of ['salary', 'deductions', 'bankDetails', 'statutory']) delete data[field];
     }
 
     const employee = await Employee.findOneAndUpdate(

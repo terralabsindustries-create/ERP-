@@ -253,7 +253,7 @@ export function JobInvoiceDialog({ children, job, onInvoiceGenerated }: JobInvoi
                   </div>
                 </div>
               ) : (
-                <div className="text-sm text-muted-foreground">No items added to this job</div>
+                <div className="text-sm text-muted-foreground">No inventory items on this job</div>
               )}
 
               {/* Totals */}

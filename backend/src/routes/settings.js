@@ -6,6 +6,7 @@ const { settingsOwnerId, businessSettings } = require('../utils/businessSettings
 const ActivityLog = require('../models/ActivityLog');
 const { protect, authorize } = require('../middleware/auth');
 
+const { gstinError, normalizeGstin } = require('../utils/gstin');
 const router = express.Router();
 
 // Validation rules
@@ -95,7 +96,12 @@ router.put('/company', protect, [
   body('companyPhone').optional({ values: 'falsy' }).matches(/^\+?[\d\s()-]{7,20}$/).withMessage('Enter a valid phone number'),
   body('companyEmail').optional({ values: 'falsy' }).isEmail().withMessage('Valid email required'),
   body('companyWebsite').optional({ values: 'falsy' }).isURL().withMessage('Valid website URL required'),
-  body('gstNumber').optional({ values: 'falsy' }).matches(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/).withMessage('Invalid GST number format'),
+  body('gstNumber').optional({ values: 'falsy' }).customSanitizer(normalizeGstin).custom((value) => {
+    const message = gstinError(value);
+    if (message) throw new Error(message);
+    return true;
+  }),
+
   body('panNumber').optional({ values: 'falsy' }).matches(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/).withMessage('Invalid PAN number format')
 ], validate, async (req, res) => {
   try {

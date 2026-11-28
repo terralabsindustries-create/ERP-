@@ -64,6 +64,8 @@ export default function Accounts() {
   // The profit & loss report is the owner's alone (the API refuses anyone else).
   const isOwner = user?.role === "admin";
   const [rows, setRows] = useState<Txn[]>([]);
+  // A failed load shows as an error with Retry, never as an empty list.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [balances, setBalances] = useState<Loaded<Balances>>({ state: "loading" });
@@ -90,6 +92,7 @@ export default function Accounts() {
     if (view === "reports" || view === "reconciliation" || view === "payment-accounts") return;
     setLoading(true);
     try {
+      setLoadError(null);
       const p: Record<string, string> = { page: String(page), limit: String(PAGE_SIZE), sortBy: "createdAt", sortOrder: "desc" };
       if (q) p.search = q;
       if (view === "income" || view === "expense") p.transactionType = view;
@@ -100,7 +103,7 @@ export default function Accounts() {
       setRows(list);
       setTotal(res?.pagination?.totalTransactions ?? list.length);
     } catch (error) {
-      toast({ title: "Transactions could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -280,6 +283,8 @@ export default function Accounts() {
             }
           >
             <DataTable
+              error={loadError}
+              onRetry={() => load()}
               columns={columns}
               rows={rows}
               rowKey={(t) => t._id}

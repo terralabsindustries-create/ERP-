@@ -60,6 +60,8 @@ export function TaxCodesView({ kind }: { kind: Kind }) {
   const cfg = CONFIG[kind];
   const { toast } = useToast();
   const [rows, setRows] = useState<TaxCode[]>([]);
+  // A failed load shows as an error with Retry, never as an empty list.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -87,6 +89,7 @@ export function TaxCodesView({ kind }: { kind: Kind }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      setLoadError(null);
       const params: Record<string, string> = { page: String(page), limit: String(PAGE_SIZE) };
       if (q) params.search = q;
       if (category !== "all") params.category = category;
@@ -98,7 +101,7 @@ export function TaxCodesView({ kind }: { kind: Kind }) {
       const p = res.pagination || {};
       setTotal(p.totalHsnCodes ?? p.totalSacCodes ?? list.length);
     } catch (error) {
-      toast({ title: `${cfg.title} could not be loaded`, description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -244,6 +247,8 @@ export function TaxCodesView({ kind }: { kind: Kind }) {
           footer={!loading && total > 0 && <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} noun="codes" />}
         >
           <DataTable
+            error={loadError}
+            onRetry={() => load()}
             columns={columns}
             rows={rows}
             rowKey={(r) => r._id}

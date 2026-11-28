@@ -149,24 +149,25 @@ export default function PaymentReminders() {
     }
   }, []);
 
+  // Failed loads show as errors with Retry, never as "no overdue invoices".
+  const [overdueError, setOverdueError] = useState<unknown>(null);
+  const [historyError, setHistoryError] = useState<unknown>(null);
   const fetchOverdueInvoices = useCallback(async () => {
     try {
+      setOverdueError(null);
       const response: any = await apiClient.getOverdueInvoices();
       if (response?.invoices) {
         setOverdueInvoices(response.invoices);
       }
     } catch (error) {
       console.error("Error fetching overdue invoices:", error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch overdue invoices",
-        variant: "destructive",
-      });
+      setOverdueError(error);
     }
-  }, [toast]);
+  }, []);
 
   const fetchReminders = useCallback(async (page = 1) => {
     try {
+      setHistoryError(null);
       const params: any = { page, limit: 20 };
       if (statusFilter && statusFilter !== "all") params.status = statusFilter;
       const response: any = await apiClient.getPaymentReminders(params);
@@ -176,6 +177,7 @@ export default function PaymentReminders() {
       }
     } catch (error) {
       console.error("Error fetching reminders:", error);
+      setHistoryError(error);
     }
   }, [statusFilter]);
 
@@ -486,6 +488,9 @@ export default function PaymentReminders() {
             footer={!loading && filteredInvoices.length > 0 && `${plural(filteredInvoices.length, "invoice")} · ${eligibleCount} can be reminded now`}
           >
             <DataTable
+              error={overdueError}
+              errorWhat="overdue invoices"
+              onRetry={() => fetchOverdueInvoices()}
               columns={overdueColumns}
               rows={filteredInvoices}
               rowKey={(i) => i._id}
@@ -544,6 +549,9 @@ export default function PaymentReminders() {
             footer={historyTotal > 0 && <Pagination page={historyPage} pageSize={20} total={historyTotal} onPageChange={setHistoryPage} noun="reminders" />}
           >
             <DataTable
+              error={historyError}
+              errorWhat="reminder history"
+              onRetry={() => fetchReminders()}
               columns={historyColumns}
               rows={reminders}
               rowKey={(r) => r._id}

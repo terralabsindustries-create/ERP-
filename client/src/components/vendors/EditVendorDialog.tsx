@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { gstinError, normalizeGstin } from "@/lib/gstin";
 import apiClient from "@/lib/apiClient";
 
 interface VendorDialogProps {
@@ -84,6 +85,12 @@ export function VendorDialog({ open, onOpenChange, onSuccess, vendor }: VendorDi
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+    const gstProblem = gstinError(formData.gstNumber);
+    if (gstProblem) {
+      toast({ title: "Invalid GST number", description: gstProblem, variant: "destructive" });
+      return;
+    }
+
 
         if (!formData.name) {
             toast({
@@ -271,7 +278,8 @@ export function VendorDialog({ open, onOpenChange, onSuccess, vendor }: VendorDi
                             <Input
                                 id="gstNumber"
                                 value={formData.gstNumber}
-                                onChange={(e) => setFormData(prev => ({ ...prev, gstNumber: e.target.value }))}
+                                onChange={(e) => setFormData(prev => ({ ...prev, gstNumber: e.target.value.toUpperCase() }))}
+                                maxLength={15}
                                 placeholder="Enter GST number"
                             />
                         </div>

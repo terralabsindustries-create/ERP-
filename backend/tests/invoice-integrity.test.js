@@ -206,7 +206,7 @@ describe('concurrent invoices', () => {
     const c = await createOrg('intc');
     const cust = await make.customer(c.admin);
     const results = await Promise.all(
-      Array.from({ length: 12 }, () => as(c.tokens.admin).post('/api/invoices', { customerId: String(cust._id), items: [line('Design work', 1)] }))
+      Array.from({ length: 12 }, () => as(c.tokens.admin).post('/api/invoices', { customerId: String(cust._id), status: 'sent', items: [line('Design work', 1)] }))
     );
     expect(results.map((r) => r.status)).toEqual(Array(12).fill(201));
     const numbers = results.map((r) => r.body.data.invoice.invoiceNumber).sort();
@@ -220,7 +220,7 @@ describe('concurrent invoices', () => {
     for (let n = 1; n <= 3; n += 1) {
       await make.invoice(d.admin, cust, { invoiceNumber: `${thisMonth()}${String(n).padStart(4, '0')}` });
     }
-    const res = await as(d.tokens.admin).post('/api/invoices', { customerId: String(cust._id), items: [line('Design work', 1)] });
+    const res = await as(d.tokens.admin).post('/api/invoices', { customerId: String(cust._id), status: 'sent', items: [line('Design work', 1)] });
     expect(res.status).toBe(201);
     expect(res.body.data.invoice.invoiceNumber).toBe(`${thisMonth()}0004`);
   });
@@ -228,12 +228,12 @@ describe('concurrent invoices', () => {
   test('a number taken at the last moment is retried under the next one, not a server error', async () => {
     const e = await createOrg('inte');
     const cust = await make.customer(e.admin);
-    const first = await as(e.tokens.admin).post('/api/invoices', { customerId: String(cust._id), items: [line('Design work', 1)] });
+    const first = await as(e.tokens.admin).post('/api/invoices', { customerId: String(cust._id), status: 'sent', items: [line('Design work', 1)] });
     const taken = first.body.data.invoice.invoiceNumber;
     // Another request numbered its invoice with the same number first.
     jest.spyOn(Invoice, 'generateInvoiceNumber').mockResolvedValueOnce(taken);
 
-    const res = await as(e.tokens.admin).post('/api/invoices', { customerId: String(cust._id), items: [line('Design work', 1)] });
+    const res = await as(e.tokens.admin).post('/api/invoices', { customerId: String(cust._id), status: 'sent', items: [line('Design work', 1)] });
     expect(res.status).toBe(201);
     expect(res.body.data.invoice.invoiceNumber).not.toBe(taken);
   });
@@ -242,10 +242,10 @@ describe('concurrent invoices', () => {
     const f = await createOrg('intf');
     const cust = await make.customer(f.admin);
     const item = await stock(f.admin, 'Kraft paper', 4);
-    const first = await as(f.tokens.admin).post('/api/invoices', { customerId: String(cust._id), items: [line('Design work', 1)] });
+    const first = await as(f.tokens.admin).post('/api/invoices', { customerId: String(cust._id), status: 'sent', items: [line('Design work', 1)] });
     jest.spyOn(Invoice, 'generateInvoiceNumber').mockResolvedValue(first.body.data.invoice.invoiceNumber);
 
-    const res = await as(f.tokens.admin).post('/api/invoices', { customerId: String(cust._id), items: [line('Kraft paper', 2)] });
+    const res = await as(f.tokens.admin).post('/api/invoices', { customerId: String(cust._id), status: 'sent', items: [line('Kraft paper', 2)] });
     expect(res.status).toBe(409);
     expect(res.body.message).toMatch(/try again/i);
     expect(await quantityOf(item)).toBe(4);

@@ -11,6 +11,8 @@ const LeaveRequest = require('../models/LeaveRequest');
 const { protect } = require('../middleware/auth');
 const { inTransaction } = require('../utils/transactions');
 const { resolveMonth } = require('../utils/leavePolicy');
+const { audit } = require('../utils/audit');
+const { computeStatutory } = require('../utils/statutory');
 
 const router = express.Router();
 router.use(protect);
@@ -89,8 +91,20 @@ router.post('/generate', async (req, res) => {
     }
 
     const empFilter = scopeFilter(req, { status: 'active' });
-    if (req.body.employeeId) empFilter._id = req.body.employeeId;
+    // All active employees, one (employeeId) or several (employeeIds).
+    const picked = [...new Set([...(Array.isArray(req.body.employeeIds) ? req.body.employeeIds : []), ...(req.body.employeeId ? [req.body.employeeId] : [])].map(String))];
+    if (picked.some((id) => !mongoose.isValidObjectId(id))) {
+      return res.status(400).json({ status: 'error', message: 'One of the selected employees is not valid' });
+    }
+    if (picked.length) empFilter._id = { $in: picked };
     const employees = await Employee.find(empFilter);
+    if (picked.length) {
+      const found = new Set(employees.map((e) => String(e._id)));
+      const missing = picked.filter((id) => !found.has(id));
+      if (missing.length) {
+        return res.status(400).json({ status: 'error', message: `${missing.length} selected employee(s) were not found or are not active. Nothing was generated.` });
+      }
+    }
     if (!employees.length) {
       return res.status(400).json({ status: 'error', message: 'No active employees found to generate payroll' });
     }
@@ -134,6 +148,19 @@ router.post('/generate', async (req, res) => {
       const perDay = workingDays > 0 ? gross / workingDays : 0;
       const lopAmount = round2(perDay * lopDays);
 
+      // PF / ESI: worked out from earned wages for employees opted in; a figure
+      // a person set by hand on an unpaid payslip is kept (the override flag).
+      const ratio = workingDays > 0 ? Math.max(0, paidDays) / workingDays : 1;
+      const earnedOf = Object.fromEntries(Object.entries({ basic: s.basic, hra: s.hra, allowances: s.allowances, specialAllowance: s.specialAllowance }).map(([k, v]) => [k, (v || 0) * ratio]));
+      const statutory = {
+        result: computeStatutory({ employee: emp, earned: earnedOf, grossFull: gross, paidDays, asOf: new Date(Date.UTC(year, month - 1, 1)) }),
+        pfAuto: !!emp.statutory?.pfApplicable,
+        esiAuto: !!emp.statutory?.esiApplicable
+      };
+      const kept = existing?.statutory?.manualOverride;
+      if (kept?.pf) { statutory.pfAuto = false; }
+      if (kept?.esi) { statutory.esiAuto = false; }
+
       const payslipData = {
         employeeId: emp._id,
         employeeName: emp.name,
@@ -151,12 +178,21 @@ router.post('/generate', async (req, res) => {
           bonus: 0
         },
         deductions: {
-          pf: d.pf || 0,
+          pf: statutory.pfAuto ? statutory.result.employee.pf : (d.pf || 0),
           professionalTax: d.professionalTax || 0,
-          esi: d.esi || 0,
+          esi: statutory.esiAuto ? statutory.result.employee.esi : (d.esi || 0),
           loan: 0,
           lop: lopAmount,
           other: d.other || 0
+        },
+        employerContributions: statutory.result.employer,
+        statutory: {
+          configEffectiveFrom: statutory.result.configEffectiveFrom,
+          pfWage: statutory.result.basis.pfWage,
+          esiWage: statutory.result.basis.esiWage,
+          notes: statutory.result.notes,
+          unverified: statutory.result.unverified,
+          manualOverride: { pf: false, esi: false }
         },
         workingDays,
         paidDays: round2(paidDays),
@@ -164,6 +200,8 @@ router.post('/generate', async (req, res) => {
         status: 'generated',
         ...own
       };
+      if (kept?.pf) { payslipData.deductions.pf = existing.deductions.pf; payslipData.statutory.manualOverride.pf = true; }
+      if (kept?.esi) { payslipData.deductions.esi = existing.deductions.esi; payslipData.statutory.manualOverride.esi = true; }
 
       let payslip;
       if (existing) {
@@ -176,7 +214,13 @@ router.post('/generate', async (req, res) => {
       } else {
         payslip = new Payroll(payslipData);
         payslip.recompute();
-        payslip = await payslip.save();
+        try {
+          payslip = await payslip.save();
+        } catch (error) {
+          // A simultaneous run already created this employee's payslip for the period.
+          if (error?.code === 11000) { skipped++; continue; }
+          throw error;
+        }
       }
       results.push(payslip);
     }
@@ -188,6 +232,9 @@ router.post('/generate', async (req, res) => {
       });
     }
 
+    for (const p of results) {
+      audit(req, { action: 'Payslip Generated', entityType: 'payroll', entityId: p._id, entityName: `${p.employeeName || ''} ${p.periodLabel || ''}`.trim(), actionType: 'create', after: { netPay: p.netPay, grossEarnings: p.grossEarnings, totalDeductions: p.totalDeductions, status: p.status } });
+    }
     res.json({
       status: 'success',
       message: `Payroll generated for ${results.length} employee(s)${skipped ? `, ${skipped} already paid (skipped)` : ''}${noSalary.length ? `, ${noSalary.length} without a salary left out` : ''}${review.length ? `. ${review.length} need a leave decision — no pay was deducted for those days` : ''}`,
@@ -208,13 +255,24 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'Cannot edit a payslip that is already paid' });
     }
 
+    const beforeSnap = { earnings: payslip.earnings?.toObject ? payslip.earnings.toObject() : payslip.earnings, deductions: payslip.deductions?.toObject ? payslip.deductions.toObject() : payslip.deductions, netPay: payslip.netPay };
     if (req.body.earnings) {
       Object.keys(req.body.earnings).forEach(k => { payslip.earnings[k] = Number(req.body.earnings[k]) || 0; });
       payslip.markModified('earnings');
     }
     if (req.body.deductions) {
+      const was = { pf: payslip.deductions?.pf || 0, esi: payslip.deductions?.esi || 0 };
       Object.keys(req.body.deductions).forEach(k => { payslip.deductions[k] = Number(req.body.deductions[k]) || 0; });
       payslip.markModified('deductions');
+      // A hand-set PF / ESI is flagged so regenerating does not overwrite it.
+      for (const k of ['pf', 'esi']) {
+        if (req.body.deductions[k] !== undefined && (Number(req.body.deductions[k]) || 0) !== was[k]) {
+          if (!(req.body.reason || req.body.notes)) {
+            return res.status(400).json({ status: 'error', message: `Give a reason for changing the ${k.toUpperCase()} amount by hand` });
+          }
+          payslip.set(`statutory.manualOverride.${k}`, true);
+        }
+      }
     }
     if (req.body.notes !== undefined) payslip.notes = req.body.notes;
     if (req.body.paidDays !== undefined) payslip.paidDays = req.body.paidDays;
@@ -227,13 +285,14 @@ router.put('/:id', async (req, res) => {
       { _id: payslip._id, status: { $ne: 'paid' }, updatedAt: payslip.updatedAt },
       { $set: {
         earnings: payslip.earnings, deductions: payslip.deductions, notes: payslip.notes,
-        paidDays: payslip.paidDays, lopDays: payslip.lopDays,
+        paidDays: payslip.paidDays, lopDays: payslip.lopDays, statutory: payslip.statutory,
         grossEarnings: payslip.grossEarnings, totalDeductions: payslip.totalDeductions, netPay: payslip.netPay
       } },
       { new: true, runValidators: true }
     );
     if (!saved) return res.status(409).json({ status: 'error', message: 'The payslip changed or was paid while saving. Refresh and try again.' });
 
+    audit(req, { action: 'Payslip Adjusted', entityType: 'payroll', entityId: saved._id, entityName: `${saved.employeeName || ''} ${saved.periodLabel || ''}`.trim(), actionType: 'update', before: beforeSnap, after: { earnings: saved.earnings, deductions: saved.deductions, netPay: saved.netPay }, reason: req.body.reason || req.body.notes, severity: 'high' });
     res.json({ status: 'success', message: 'Payslip updated', data: { payslip: saved } });
   } catch (error) {
     console.error('Update payslip error:', error);
@@ -320,6 +379,7 @@ router.patch('/:id/pay', async (req, res) => {
           }
           return claimed;
         }, { label: 'Payslip payment' });
+        audit(req, { action: 'Payslip Paid', entityType: 'payroll', entityId: paid._id, entityName: `${paid.employeeName || ''} ${paid.periodLabel || ''}`.trim(), actionType: 'update', before: { status: payslip.status }, after: { status: 'paid', netPay: paid.netPay, paymentMethod: paid.paymentMethod }, severity: 'high' });
         return res.json({ status: 'success', message: 'Payslip marked as paid', data: { payslip: paid } });
       } catch (error) {
         if (error instanceof PayslipChanged) continue; // read it again: paid by another request, or edited
@@ -346,6 +406,7 @@ router.delete('/:id', async (req, res) => {
     if (!removed.deletedCount) return res.status(409).json({ status: 'error', message: 'The payslip was paid in the meantime, so it was not deleted' });
     // An unpaid payslip has no salary expense; drop one left by a failed undo.
     await AccountTransaction.deleteMany({ sourcePayrollId: payslip._id, reconciled: { $ne: true } });
+    audit(req, { action: 'Payslip Deleted', entityType: 'payroll', entityId: payslip._id, entityName: `${payslip.employeeName || ''} ${payslip.periodLabel || ''}`.trim(), actionType: 'delete', before: { status: payslip.status, netPay: payslip.netPay }, reason: req.body?.reason, severity: 'high' });
     res.json({ status: 'success', message: 'Payslip deleted' });
   } catch (error) {
     console.error('Delete payslip error:', error);

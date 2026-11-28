@@ -57,8 +57,11 @@ beforeAll(async () => {
   cust = await make.customer(org.admin, { name: 'Lotus Events' });
   await login('designerA', 'designer');
   await login('designerB', 'designer');
-  await login('manager', 'manager'); // without "view all staff data"
-  await login('accounts', 'accountant');
+  await login('manager', 'manager', { canViewAllData: true }); // "Can view all data" switched on
+  await login('accounts', 'accountant', { canViewAllData: true });
+  await login('plainManager', 'manager'); // switch off: sees only their own
+  await login('staffOff', 'staff'); // switch off
+  await login('staffOn', 'staff', { canViewAllData: true });
   await login('leadDesigner', 'designer', { canViewAllData: true });
 
   await job('designerA', 'A — wedding banner');
@@ -199,5 +202,34 @@ describe('another business', () => {
       title: 'Snoop', startDate: new Date().toISOString(), endDate: new Date(Date.now() + 3600e3).toISOString(), jobId: jobs['B — menu cards']._id
     });
     expect(res.status).toBe(404);
+  });
+});
+
+// Tickets other people made (earlier tests rename some, so only the stable ones are named).
+const EVERYONES = ['A — shop sign', 'Admin — letterheads', 'B — menu cards', 'Manager — brochures'];
+
+describe('the "Can view all data" switch decides who sees everyone\'s job tickets', () => {
+  test('off: a manager or staff member sees only the tickets they created, whatever their role', async () => {
+    await job('plainManager', 'PM — own ticket');
+    await job('staffOff', 'Staff — own ticket');
+    expect((await titles('plainManager')).titles).toEqual(['PM — own ticket']);
+    expect((await titles('staffOff')).titles).toEqual(['Staff — own ticket']);
+    expect((await as('staffOff').get(`/api/jobs/${jobs['A — shop sign']._id}`)).status).toBe(404);
+  });
+  test('on: staff, managers and accountants see every ticket', async () => {
+    const all = (await titles('staffOn')).titles;
+    expect(all).toEqual(expect.arrayContaining(EVERYONES));
+    expect((await as('staffOn').get(`/api/jobs/${jobs['A — shop sign']._id}`)).status).toBe(200);
+  });
+  test('the admin turns it on or off from User Management and it takes effect at once', async () => {
+    const id = people.staffOff.user._id;
+    expect((await as('admin').put(`/api/users/${id}`, { canViewAllData: true })).status).toBe(200);
+    expect((await titles('staffOff')).titles).toEqual(expect.arrayContaining(EVERYONES));
+    expect((await as('admin').put(`/api/users/${id}`, { canViewAllData: false })).status).toBe(200);
+    expect((await titles('staffOff')).titles).toEqual(['Staff — own ticket']);
+  });
+  test('a login without the switch cannot grant it', async () => {
+    const res = await as('plainManager').put(`/api/users/${people.staffOff.user._id}`, { canViewAllData: true });
+    expect([403, 404]).toContain(res.status);
   });
 });

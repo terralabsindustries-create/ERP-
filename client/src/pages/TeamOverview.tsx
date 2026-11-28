@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { ErrorState } from "@/components/common/LoadState";
 import { Link, useSearchParams } from "react-router-dom";
 import { format, formatDistanceToNow } from "date-fns";
 import { AlertTriangle, PauseCircle, CalendarClock, Users, Info, Activity, ArrowRight } from "lucide-react";
@@ -254,15 +255,17 @@ export default function TeamOverview() {
       .catch(() => setTeams([]));
   }, []);
 
+  const [loadError, setLoadError] = useState<unknown>(null);
   const load = useCallback(async () => {
     try {
+      setLoadError(null);
       setData((await apiClient.getTeamOverview(days, team === "all" ? undefined : team)) as Overview);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       if (/permission/i.test(message)) setForbidden(true);
-      else toast({ title: "The team overview could not be loaded", description: message, variant: "destructive" });
+      else setLoadError(error);
     }
-  }, [days, team, toast]);
+  }, [days, team]);
 
   useEffect(() => {
     load();
@@ -346,7 +349,9 @@ export default function TeamOverview() {
       </section>
 
       <Panel title="Workload and completed work" icon={Users} description={`Last ${days} days · select a person to see their records`}>
-        {!data ? (
+        {!data && loadError ? (
+          <ErrorState compact error={loadError} what="the team overview" onRetry={load} />
+        ) : !data ? (
           <div className="space-y-2 p-4">{[0, 1, 2].map((i) => <div key={i} className="h-10 animate-pulse rounded bg-muted" />)}</div>
         ) : members.length === 0 ? (
           <EmptyState compact icon={Users} title="No team members yet" />

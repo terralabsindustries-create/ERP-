@@ -28,6 +28,9 @@ if (process.env.TRUST_PROXY) {
 
 app.use(helmet());
 app.use(compression());
+// Server-Timing on every response and a JSON log line for slow requests.
+app.use('/api', require('./middleware/requestTiming').requestTiming);
+app.use('/api', require('./utils/auditContext').auditContext);
 
 // CORS: the hosted web app, the desktop app, and any origins in FRONTEND_URL or
 // CORS_ORIGINS (comma-separated). The local Vite dev servers are allowed only
@@ -57,10 +60,10 @@ app.use(cors({
   origin: corsOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Portal-Session', 'Idempotency-Key'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Portal-Session', 'Idempotency-Key', 'X-Correlation-ID'],
   // Lets the app read a file's name (Invoice_INV-2026-11-0041.pdf) from a
   // download on another origin, instead of falling back to the record's id.
-  exposedHeaders: ['Content-Disposition']
+  exposedHeaders: ['Content-Disposition', 'X-Correlation-ID', 'Idempotent-Replay']
 }));
 
 
@@ -148,6 +151,21 @@ guarded('/api/jobs', require('./routes/jobs'), {
     { method: 'POST', path: /^\/[^/]+\/(update-status|update-flow-stage)$/, allow: 'Jobs: Change Status' }
   ]
 });
+guarded('/api/product-rates', require('./routes/productRates'), {
+  read: ['Product Rates', 'Sales Orders'],
+  write: 'Product Rates: Create & Edit',
+  remove: 'Product Rates: Delete',
+  rules: [{ method: 'POST', path: /^\/price$/, allow: ['Sales Orders', 'Product Rates'] }]
+});
+guarded('/api/sales-orders', require('./routes/salesOrders'), {
+  read: 'Sales Orders',
+  write: 'Sales Orders: Create & Edit',
+  remove: 'Sales Orders: Delete',
+  rules: [
+    // The route itself checks the specific action (approve, cancel, stages, invoice) and answers 403 with it.
+    { method: 'POST', path: /^\/[^/]+\/(approve|cancel|stages\/[a-z]+|invoice)$/, allow: 'Sales Orders' }
+  ]
+});
 guarded('/api/walk-in-jobs', require('./routes/walkInJobs'), { read: 'Walk-In Jobs', write: 'Walk-In Jobs: Create & Edit' });
 guarded('/api/quotations', require('./routes/quotations'), {
   read: 'Quotations',
@@ -171,13 +189,38 @@ guarded('/api/invoices', require('./routes/invoices'), {
     { method: 'POST', path: /^\/[^/]+\/send-whatsapp$/, allow: 'WhatsApp: Send Messages' }
   ]
 });
+// GST credit and debit notes against issued invoices (routes/creditNotes.js).
+guarded('/api/credit-notes', require('./routes/creditNotes'), {
+  read: ['Invoicing', 'Accounts', 'Reports'],
+  write: 'Invoicing: Credit & Debit Notes'
+});
+// Global search: every section is filtered by the caller's own permissions inside the route.
+guarded('/api/search', require('./routes/search'), { read: AUTHENTICATED, write: () => false });
+// GST working papers: GSTR-1 sections, GSTR-3B summary, registers, exports.
+guarded('/api/gst-reports', require('./routes/gstReports'), { read: ['Reports', 'Accounts'], write: () => false });
+// Customer and supplier statements; the route checks the module permissions itself.
+guarded('/api/statements', require('./routes/statements'), { read: ['Customers', 'Vendors', 'Purchase Bills', 'Accounts', 'Invoicing', 'Payments'], write: () => false });
+// Recurring invoices (templates + generation history).
+guarded('/api/recurring-invoices', require('./routes/recurringInvoices'), { read: 'Invoicing', write: 'Invoicing: Create & Edit' });
+// Tally XML export with preview and history (an Accounts task).
+guarded('/api/tally', require('./routes/tally'), { read: 'Accounts', write: () => false });
+// E-invoice (IRN) and e-way bill workflow; no provider is bundled (see services/gstCompliance.js).
+guarded('/api/gst-compliance', require('./routes/gstCompliance'), { read: ['Invoicing', 'Accounts'], write: ['Invoicing: Create & Edit', 'Settings: Edit'] });
+// Document numbering (invoice series, item-code prefix); saving needs Settings: Edit.
+guarded('/api/document-numbering', require('./routes/documentNumbering'), { read: AUTHENTICATED, write: 'Settings: Edit' });
+guarded('/api/invoices-bulk', require('./routes/bulkInvoices'), { read: 'Invoicing', write: 'Invoicing: Create & Edit' });
 guarded('/api/payments', require('./routes/payments'), {
   read: 'Payments',
   write: 'Payments: Record Payment',
   remove: 'Payments: Delete',
   // Invoice logins may record a payment applied in full to invoices (the
   // route refuses them money on account).
-  rules: [{ method: 'POST', path: /^\/?$/, allow: ['Payments: Record Payment', 'Invoicing: Record Payment', 'Accounts: Create & Edit'] }]
+  rules: [
+    { method: 'POST', path: /^\/?$/, allow: ['Payments: Record Payment', 'Invoicing: Record Payment', 'Accounts: Create & Edit'] },
+    // An invoice clerk who recorded a receipt can print their own payment;
+    // the route still applies its per-user and tenant payment scope.
+    { method: 'GET', path: /^\/[^/]+\/receipt$/, allow: ['Payments', 'Invoicing: Record Payment'] }
+  ]
 });
 // Where payments are received (Cash, Paytm, bank accounts). Logins that record
 // payments read the list to choose one; balances and reports need Accounts
@@ -312,6 +355,8 @@ guarded('/api/hr/leaves', require('./routes/leaves'), {
   rules: [{ method: 'PATCH', path: /^\/[^/]+\/status$/, allow: 'Human Resources: Manage Leaves' }]
 });
 guarded('/api/hr/payroll', require('./routes/payroll'), { read: 'Payroll', write: 'Payroll: Process Payroll' });
+guarded('/api/price-items', require('./routes/priceItems'), { read: AUTHENTICATED, write: AUTHENTICATED });
+guarded('/api/reconciliation', require('./routes/reconciliation'), { read: 'Reconciliation', write: 'Reconciliation: Resolve' });
 guarded('/api/payment-reminders', require('./routes/paymentReminders'), {
   read: 'Payment Reminders',
   write: 'Payment Reminders: Send Reminders',

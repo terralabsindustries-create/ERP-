@@ -36,7 +36,6 @@ test("a production build without VITE_API_URL is refused", async () => {
 
 test("a production build against a loopback API is refused", async () => {
   for (const apiUrl of [
-    "https://api.carbonprintflow.com/api",
     "https://LOCALHOST/api",
     "http://localhost./api",
     "http://api.localhost:4001/api",

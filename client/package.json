@@ -5,13 +5,17 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:local": "VITE_FORCE_LOCAL=false VITE_API_URL=http://localhost:4001/api vite",
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
     "preview": "vite preview",
     "build:desktop": "vite build --mode desktop",
+    "test": "node --test tests/*.test.mjs",
+    "test:e2e": "playwright test",
     "test:config": "node --test tests/vite-config.test.mjs",
-    "test:accounts": "node --test tests/accounts-summary.test.mjs"
+    "test:accounts": "node --test tests/accounts-summary.test.mjs",
+    "test:paper": "node --test tests/paper-stock.test.mjs"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",
@@ -54,6 +58,7 @@
     "input-otp": "^1.2.4",
     "lucide-react": "^0.462.0",
     "next-themes": "^0.3.0",
+    "pdf-lib": "^1.17.1",
     "pdfjs-dist": "4.10.38",
     "react": "^18.3.1",
     "react-day-picker": "^8.10.1",
@@ -70,6 +75,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.9.0",
+    "@playwright/test": "1.65.1",
     "@tailwindcss/typography": "^0.5.15",
     "@types/node": "^22.5.5",
     "@types/react": "^18.3.3",

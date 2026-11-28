@@ -12,6 +12,7 @@ const { orgMemberIds, orgScope } = require('../utils/accessScope');
 const ledger = require('../services/paymentLedger');
 const { resolveReceivingAccount } = require('../utils/paymentAccounts');
 
+const PDFService = require('../services/PDFService');
 const router = express.Router();
 
 const METHODS = ['cash', 'cheque', 'bank_transfer', 'card', 'upi', 'wallet'];
@@ -114,7 +115,7 @@ const paymentValidation = [
 // Fields a client may set; ids, numbering, ownership and allocations are server-side.
 const pickFields = (b) => {
   const out = {};
-  for (const k of ['amount', 'paymentMethod', 'paymentAccountId', 'status', 'paymentDate', 'referenceNumber', 'transactionId', 'notes', 'chequeDetails', 'bankDetails', 'upiDetails', 'cardDetails']) {
+  for (const k of ['amount', 'paymentMethod', 'paymentAccountId', 'status', 'paymentDate', 'referenceNumber', 'transactionId', 'notes', 'chequeDetails', 'bankDetails', 'upiDetails', 'cardDetails', 'salesOrderId']) {
     if (b[k] !== undefined && b[k] !== '') out[k] = b[k];
   }
   if (out.amount !== undefined) out.amount = round2(out.amount);
@@ -318,6 +319,35 @@ router.get('/:id', protect, async (req, res) => {
   }
 });
 
+// @route   GET /api/payments/:id/receipt
+// @desc    The payment receipt as a PDF: inline for preview/print, ?download=1
+//          for a file. A payment that is not completed produces a receipt
+//          marked with its status, never a valid-looking one.
+// @access  Private (Payments)
+router.get('/:id/receipt', protect, async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ status: 'error', message: 'Payment not found' });
+    const payment = await Payment.findOne({ $and: [{ _id: req.params.id }, await paymentScope(req.user)] }).lean();
+    if (!payment) return res.status(404).json({ status: 'error', message: 'Payment not found' });
+    const company = await require('./purchaseBills').getCompanyInfo(req.user);
+    if (company.isConfigured === false) return res.status(400).json({ status: 'error', code: 'COMPANY_NOT_CONFIGURED', message: company.error });
+
+    const Invoice = require('../models/Invoice');
+    const Customer = require('../models/Customer');
+    const allocations = ledger.allocationsOf(payment);
+    const found = await Invoice.find({ _id: { $in: allocations.map((a) => a.invoiceId) } }).select('invoiceNumber totalAmount balanceAmount status').lean();
+    const invoices = Object.fromEntries(found.map((i) => [String(i._id), i]));
+    const customer = (await Customer.findById(payment.customerId).select('name email phone address gstNumber').lean()) || {};
+    const buffer = await PDFService.generatePaymentReceiptPDF(payment, invoices, customer, company, allocations);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `${req.query.download === '1' ? 'attachment' : 'inline'}; filename="Receipt_${payment.paymentId}.pdf"`);
+    res.setHeader('Content-Length', buffer.length);
+    res.send(buffer);
+  } catch (error) {
+    sendError(res, error, 'Generating receipt');
+  }
+});
+
 /**
  * The earlier submission with this idempotency key, as the response to a
  * repeat: the same payment, not a second one — but only if the repeat asks for
@@ -364,6 +394,20 @@ router.post('/', protect, paymentValidation, async (req, res) => {
     const customer = await Customer.findOne({ _id: req.body.customerId, ...orgScope(req.user) });
     if (!customer) {
       return res.status(404).json({ status: 'error', message: 'Customer not found' });
+    }
+    // An advance taken for a sales order must belong to this business and customer.
+    if (fields.salesOrderId) {
+      const Job = require('../models/Job');
+      const { jobScope } = require('../utils/jobAccess');
+      const order = mongoose.isValidObjectId(fields.salesOrderId)
+        ? await Job.findOne({ _id: fields.salesOrderId, isSalesOrder: true, ...jobScope(req.user) }).select('customerId approval').lean()
+        : null;
+      if (!order || String(order.customerId) !== String(customer._id)) {
+        return res.status(400).json({ status: 'error', code: 'BAD_SALES_ORDER', message: 'That sales order was not found for this customer.' });
+      }
+      if (order.approval?.status === 'cancelled') {
+        return res.status(409).json({ status: 'error', code: 'ORDER_CANCELLED', message: 'This sales order is cancelled; no advance can be taken for it.' });
+      }
     }
     // Where the money was received (Cash, Paytm, a bank account).
     const receivingAccount = await resolveReceivingAccount(req.user, { paymentAccountId: fields.paymentAccountId, paymentMethod: fields.paymentMethod, required: true });
@@ -549,7 +593,9 @@ router.put('/:id', protect, requirePermission('Payments: Record Payment'), [
     }
     await ledger.updatePayment(payment, changes);
 
-    log(req, payment, 'Payment Updated', `Payment ${payment.paymentId} was updated`, 'update', {
+    const reversal = ['refunded', 'failed', 'cancelled'].includes(fields.status) && fields.status !== payment.status;
+    log(req, payment, reversal ? 'Payment Reversed' : 'Payment Updated', `Payment ${payment.paymentId} was ${reversal ? `reversed (${fields.status})` : 'updated'}`, reversal ? 'reverse' : 'update', {
+      reason: reversal ? (req.body.reason || req.body.notes || fields.status) : undefined,
       severity: fields.status && fields.status !== payment.status ? 'medium' : 'low',
       changes: {
         before: { status: payment.status, amount: payment.amount, allocations: existing },
@@ -581,7 +627,7 @@ router.delete('/:id', protect, requirePermission('Payments: Delete'), async (req
 
     log(req, payment, 'Payment Deleted',
       `Payment ${payment.paymentId} of ₹${payment.amount} (${payment.status}, ${describeAllocations(allocations)}) was deleted`, 'delete',
-      { severity: 'high', changes: { before: { amount: payment.amount, status: payment.status, allocations }, after: null, fields: ['deleted'] } });
+      { severity: 'high', reason: req.body?.reason, changes: { before: { amount: payment.amount, status: payment.status, allocations }, after: null, fields: ['deleted'] } });
 
     res.status(200).json({ status: 'success', message: 'Payment deleted successfully' });
   } catch (error) {

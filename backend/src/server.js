@@ -96,7 +96,16 @@ async function startServer() {
   const mongoUri = (process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/print_arts_flow')
     .replace('localhost', '127.0.0.1');
   try {
-    await mongoose.connect(mongoUri, { serverSelectionTimeoutMS: 15000 });
+    // A warm pool means a request never waits for a TLS handshake to the
+    // database (several round trips to a remote cluster). Sizes are tunable.
+    await mongoose.connect(mongoUri, {
+      serverSelectionTimeoutMS: 15000,
+      maxPoolSize: Number(process.env.MONGO_MAX_POOL || 50),
+      minPoolSize: Number(process.env.MONGO_MIN_POOL || 5),
+      maxIdleTimeMS: 10 * 60 * 1000,
+      // Compressed replies cut transfer time for large lists over a WAN link.
+      compressors: (process.env.MONGO_COMPRESSORS || 'zlib').split(',').filter(Boolean)
+    });
     console.log('✅ MongoDB connected successfully');
   } catch (error) {
     console.error('❌ MongoDB connection failed:', error.message);
@@ -116,6 +125,15 @@ async function startServer() {
     require('./services/subscriptionService').reconcileOpenPurchases()
       .catch((err) => console.error('Plan payment reconcile failed:', err.message));
   }, 15 * 60 * 1000).unref();
+
+  // Recurring invoices: due dates are billed every 15 minutes (and once shortly
+  // after start, catching up dates missed while the server was down). Each date
+  // is claimed once in the database, so several instances never bill it twice.
+  const runRecurring = () => require('./services/recurringInvoices').runDueRecurringInvoices()
+    .then((r) => r.generated && console.log(`🔁 Recurring invoices: ${r.generated} generated, ${r.failed} failed`))
+    .catch((err) => console.error('Recurring invoices run failed:', err.message));
+  setInterval(runRecurring, 15 * 60 * 1000).unref();
+  setTimeout(runRecurring, 60 * 1000).unref();
 
   setInterval(autoCheckPaymentReminders, 3600000);
   setTimeout(autoCheckPaymentReminders, 30000);

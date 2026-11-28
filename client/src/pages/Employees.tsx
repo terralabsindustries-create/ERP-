@@ -24,6 +24,7 @@ const emptyEmployee = () => ({
   designation: "", department: "", dateOfJoining: "", employmentType: "full-time", status: "active",
   salary: { basic: 0, hra: 0, allowances: 0, specialAllowance: 0 },
   deductions: { pf: 0, professionalTax: 0, esi: 0, other: 0 },
+  statutory: { pfApplicable: false, pfOnFullWage: false, esiApplicable: false, disability: false },
   bankDetails: { accountName: "", accountNumber: "", ifscCode: "", bankName: "", upiId: "" },
   panNumber: "", aadhaarNumber: "", pfNumber: "", notes: "",
 });
@@ -53,8 +54,11 @@ export default function Employees() {
 
   const fetchAll = async () => { await Promise.all([fetchEmployees(), fetchStats()]); };
 
+  // A failed load shows as an error with Retry, never as an empty list.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const fetchEmployees = async () => {
     try {
+      setLoadError(null);
       const params: any = {};
       if (search) params.search = search;
       if (statusFilter !== "all") params.status = statusFilter;
@@ -62,7 +66,7 @@ export default function Employees() {
       setEmployees(res.employees || []);
     } catch (e) {
       console.error(e);
-      toast({ title: "Error", description: "Failed to load employees", variant: "destructive" });
+      setLoadError(e);
     } finally {
       setLoading(false);
     }
@@ -85,6 +89,7 @@ export default function Employees() {
       dateOfJoining: emp.dateOfJoining ? emp.dateOfJoining.substring(0, 10) : "",
       salary: { ...emptyEmployee().salary, ...(emp.salary || {}) },
       deductions: { ...emptyEmployee().deductions, ...(emp.deductions || {}) },
+      statutory: { ...emptyEmployee().statutory, ...(emp.statutory || {}) },
       bankDetails: { ...emptyEmployee().bankDetails, ...(emp.bankDetails || {}) },
     });
     setDialogOpen(true);
@@ -224,6 +229,9 @@ export default function Employees() {
           footer={!loading && rows.length > 0 && plural(rows.length, "employee")}
         >
           <DataTable
+            error={loadError}
+            errorWhat="employees"
+            onRetry={() => fetchEmployees()}
             columns={columns}
             rows={rows}
             rowKey={(e) => e._id || e.id}
@@ -336,6 +344,21 @@ export default function Employees() {
                 <Field label="Professional Tax"><Input type="number" placeholder="0" value={form.deductions.professionalTax || ""} onChange={(e) => setDed("professionalTax", e.target.value)} /></Field>
                 <Field label="ESI"><Input type="number" placeholder="0" value={form.deductions.esi || ""} onChange={(e) => setDed("esi", e.target.value)} /></Field>
                 <Field label="Other Deductions"><Input type="number" placeholder="0" value={form.deductions.other || ""} onChange={(e) => setDed("other", e.target.value)} /></Field>
+              </div>
+              <p className="text-sm font-medium text-muted-foreground pt-2">Automatic PF &amp; ESI</p>
+              <div className="space-y-2 rounded-lg border p-3 text-sm">
+                <p className="text-xs text-muted-foreground">When on, payroll works the contribution out from this month's earned wages (EPF 12% up to the ₹15,000 ceiling; ESI 0.75% employee / 3.25% employer up to ₹21,000) and ignores the fixed PF / ESI amounts above. Employer shares are shown on the payslip and are not deducted from pay.</p>
+                {([
+                  ["pfApplicable", "Calculate PF automatically"],
+                  ["pfOnFullWage", "PF on full basic (above the ceiling)"],
+                  ["esiApplicable", "Calculate ESI automatically"],
+                  ["disability", "Person with disability (ESI limit ₹25,000)"],
+                ] as const).map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2">
+                    <input type="checkbox" className="h-4 w-4" checked={!!form.statutory?.[key]} onChange={(e) => setForm({ ...form, statutory: { ...form.statutory, [key]: e.target.checked } })} />
+                    {label}
+                  </label>
+                ))}
               </div>
               <div className="rounded-lg bg-muted p-4 grid grid-cols-3 gap-2 text-center">
                 <div><div className="text-xs text-muted-foreground">Gross</div><div className="font-semibold">{inr(gross)}</div></div>

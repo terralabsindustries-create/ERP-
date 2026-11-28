@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Factory, FileText, Pencil, Plus, ReceiptText } from "lucide-react";
+import { Ban, Factory, FileText, Pencil, Plus, ReceiptText, RotateCcw } from "lucide-react";
+import { StatementDialog } from "@/components/customers/StatementDialog";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -36,6 +37,8 @@ export default function Vendors() {
   const { toast } = useToast();
   const navigate = useNavigate();
   const [vendors, setVendors] = useState<Vendor[]>([]);
+  // A failed load shows as an error with Retry, never as an empty list.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [view, setView] = useState<View>("all");
@@ -48,12 +51,23 @@ export default function Vendors() {
   const canBill = hasPermission("Purchase Bills: Create & Edit");
   const seesBills = hasPermission("Purchase Bills");
 
+  const [statementFor, setStatementFor] = useState<Vendor | null>(null);
+  const toggleActive = async (v: Vendor, active: boolean) => {
+    try {
+      await (active ? apiClient.reactivateVendor(v._id) : apiClient.deactivateVendor(v._id));
+      toast({ title: `${v.name} ${active ? "reactivated" : "deactivated"}` });
+      load();
+    } catch (error) {
+      toast({ title: "Not changed", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+    }
+  };
   const load = useCallback(async () => {
     try {
+      setLoadError(null);
       const res = (await apiClient.getVendors({ limit: 100 })) as { vendors?: Vendor[] };
       setVendors(res?.vendors || []);
     } catch (error) {
-      toast({ title: "Suppliers could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -204,6 +218,8 @@ export default function Vendors() {
           footer={!loading && rows.length > 0 && `${rows.length} of ${vendors.length} suppliers`}
         >
           <DataTable
+            error={loadError}
+            onRetry={() => load()}
             columns={columns}
             rows={rows}
             rowKey={(v) => v._id}
@@ -212,7 +228,11 @@ export default function Vendors() {
             actions={(v) => [
               { label: "Edit supplier", icon: Pencil, onClick: () => setEditing(v), hidden: !canEdit },
               { label: "Record a bill", icon: ReceiptText, onClick: () => setBillFor(v), hidden: !canBill },
-              { label: "View bills", icon: FileText, onClick: () => navigate(`/purchase-bills?vendor=${v._id}`), hidden: !seesBills }
+              { label: "View bills", icon: FileText, onClick: () => navigate(`/purchase-bills?vendor=${v._id}`), hidden: !seesBills },
+              { label: "Statement of account", icon: FileText, onClick: () => setStatementFor(v), hidden: !seesBills && !canEdit },
+              // Deactivated suppliers stay on past records but are not offered on new purchase orders.
+              { label: "Deactivate supplier", icon: Ban, separated: true, onClick: () => toggleActive(v, false), hidden: !canEdit || v.status !== "active" },
+              { label: "Reactivate supplier", icon: RotateCcw, separated: true, onClick: () => toggleActive(v, true), hidden: !canEdit || v.status === "active" }
             ]}
             actionsLabel={(v) => `Actions for ${v.name}`}
             defaultSort={{ id: "name", dir: "asc" }}
@@ -272,6 +292,7 @@ export default function Vendors() {
         }}
         defaultVendorId={billFor?._id}
       />
+      <StatementDialog party={statementFor ? { id: statementFor._id, name: statementFor.name, kind: "supplier" } : null} onOpenChange={(o) => !o && setStatementFor(null)} />
     </PageShell>
   );
 }

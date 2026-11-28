@@ -44,6 +44,9 @@ const paymentSchema = new mongoose.Schema({
     required: [true, 'Customer name is required'],
     trim: true
   },
+  // The sales order an advance was taken for (routes/salesOrders.js). The
+  // order's advance and balance are read from these payments, never stored twice.
+  salesOrderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Job', index: true, sparse: true },
   // The invoices this payment pays. Whatever is not allocated is held on
   // account (an advance) until it is applied. Payments recorded before
   // allocations existed have none and paid their whole amount to invoiceId.

@@ -66,6 +66,47 @@ test('a job skipped at invoice creation appears on the Invoices page until it is
 describe('creating an invoice', () => {
   let invoice;
 
+  test('a design charge alone can be invoiced and edited without an inventory line', async () => {
+    const job = await admin().post('/api/jobs', {
+      title: 'Design only job', customerId: String(cust._id), items: [],
+      designCharge: { amount: 1000, gstRate: 18, totalAmount: 1180 }
+    });
+    expect(job.status).toBe(201);
+    const created = await admin().post('/api/invoices', {
+      customerId: String(cust._id), jobId: job.body.data.job._id,
+      items: [], designCharge: 1000, designChargeGstRate: 18
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.data.invoice).toMatchObject({
+      jobId: expect.objectContaining({ _id: job.body.data.job._id }),
+      items: [], subtotal: 0, designCharge: 1000, designChargeGstAmount: 180,
+      totalAmount: 1180, balanceAmount: 1180
+    });
+
+    const updated = await admin().put(`/api/invoices/${created.body.data.invoice._id}`, {
+      items: [], designCharge: 500, designChargeGstRate: 18
+    });
+    expect(updated.status).toBe(200);
+    expect(updated.body.data.invoice).toMatchObject({
+      items: [], subtotal: 0, designCharge: 500, designChargeGstAmount: 90,
+      totalAmount: 590, balanceAmount: 590
+    });
+    const stored = await Invoice.findById(created.body.data.invoice._id);
+    const document = PDFService.invoiceDocument(stored.toObject({ virtuals: true }), company);
+    expect(document.items).toHaveLength(0);
+    expect(document.summary).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'Design Charge', value: 'INR 500.00' }),
+      expect.objectContaining({ label: 'Total', value: 'INR 590.00' })
+    ]));
+    expect((await PDFService.generateInvoicePDF(stored, company)).subarray(0, 4).toString()).toBe('%PDF');
+
+    const empty = await admin().post('/api/invoices', {
+      customerId: String(cust._id), items: [], designCharge: 0
+    });
+    expect(empty.status).toBe(400);
+    expect(empty.body.message).toMatch(/item or a design charge/);
+  });
+
   test('prices dimension lines by area × quantity, adds the design charge, and charges GST on the discounted value', async () => {
     const res = await admin().post('/api/invoices', {
       customerId: String(cust._id),
@@ -183,17 +224,11 @@ describe('editing an invoice', () => {
     expect(res.body.data.invoice).toMatchObject({ notes: 'Deliver to the hall', totalAmount: 1780, designCharge: 350 });
   });
 
-  test('will not bring the total below what has been paid', async () => {
+  test('once issued, its amounts are locked (corrected with credit or debit notes)', async () => {
     await Invoice.updateOne({ _id: id }, { paidAmount: 1000, paymentStatus: 'partial', status: 'sent' });
     const res = await admin().put(`/api/invoices/${id}`, { designCharge: 0, items: [{ ...cardLine, quantity: 10 }] });
-    expect(res.status).toBe(400);
-    expect(res.body.message).toMatch(/already paid/);
-  });
-
-  test('a total brought down to what was paid settles the invoice', async () => {
-    const res = await admin().put(`/api/invoices/${id}`, { items: [{ ...cardLine, quantity: 260 }], designCharge: 350, discountAmount: 0 });
-    expect(res.status).toBe(200);
-    expect(res.body.data.invoice).toMatchObject({ totalAmount: 1000, balanceAmount: 0, paymentStatus: 'paid', status: 'paid' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('INVOICE_ISSUED_LOCKED');
   });
 });
 
@@ -214,12 +249,12 @@ describe('invoices issued with GST before October 2026', () => {
     expect(d.items[0].amount).toBe('1,000.00');
   });
 
-  test('a notes-only edit keeps the GST, and so does re-pricing a line at its rate', async () => {
+  test('a notes-only edit keeps the GST; re-pricing an issued line is refused', async () => {
     const notes = await admin().put(`/api/invoices/${legacy._id}`, { notes: 'Checked' });
     expect(notes.body.data.invoice.totalAmount).toBe(1180);
     const repriced = await admin().put(`/api/invoices/${legacy._id}`, { items: [{ itemName: 'Line 1', quantity: 1, unitPrice: 1000, gstRate: 18 }] });
-    expect(repriced.status).toBe(200);
-    expect(repriced.body.data.invoice).toMatchObject({ totalGstAmount: 180, totalCgstAmount: 90, totalSgstAmount: 90, totalAmount: 1180, balanceAmount: 1000 });
+    expect(repriced.status).toBe(409);
+    expect(await Invoice.findById(legacy._id)).toMatchObject({ totalGstAmount: 180, totalCgstAmount: 90, totalSgstAmount: 90, totalAmount: 1180 });
   });
 });
 
@@ -413,4 +448,133 @@ describe('design charge report', () => {
     expect(other.body.data.totals.invoiced.amount).not.toBe(800);
     expect((await as(r.tokens.admin).get('/api/reports/design-charges?year=26')).status).toBe(400);
   });
+});
+
+describe('quotation ↔ invoice lifecycle', () => {
+  const quote = () => Quotation.create({
+    quotationNumber: `QUO-LC-${Date.now()}-${Math.floor(Math.random() * 1e4)}`,
+    customer_id: cust._id,
+    status: 'approved',
+    gst_type: 'gst',
+    items: [{ item_name: 'Poster', quantity: 10, unit_price: 100, tax_rate: 18, tax_amount: 180, total_amount: 1180 }],
+    total_amount: 1180,
+    userId: org.admin._id,
+    dataScope: org.admin.dataScope
+  });
+
+  test('deleting the draft invoice releases the quotation; re-conversion gets a new number', async () => {
+    const q = await quote();
+    const first = (await admin().post(`/api/quotations/${q._id}/convert-to-invoice`, {})).body.data.invoice;
+    expect((await Quotation.findById(q._id)).status).toBe('converted');
+
+    const del = await request(app).delete(`/api/invoices/${first._id}`).set(auth(org.tokens.admin));
+    expect(del.status).toBe(200);
+    const released = await Quotation.findById(q._id);
+    expect(released.status).toBe('approved');
+    expect(released.convertedInvoiceId).toBeUndefined();
+    expect(released.conversionHistory).toHaveLength(1);
+    expect(released.conversionHistory[0]).toMatchObject({ invoiceNumber: first.invoiceNumber, releasedReason: 'invoice_deleted' });
+
+    const second = await admin().post(`/api/quotations/${q._id}/convert-to-invoice`, {});
+    expect(second.status).toBe(201);
+    expect(second.body.data.invoice.invoiceNumber).not.toBe(first.invoiceNumber);
+    expect((await Quotation.findById(q._id)).conversionHistory).toHaveLength(2);
+  });
+
+  test('cancelling the invoice releases the quotation and keeps the cancelled invoice', async () => {
+    const q = await quote();
+    const inv = (await admin().post(`/api/quotations/${q._id}/convert-to-invoice`, {})).body.data.invoice;
+    const cancel = await request(app).patch(`/api/invoices/${inv._id}/cancel`).set(auth(org.tokens.admin)).send({ reason: 'Customer changed mind' });
+    expect(cancel.status).toBe(200);
+    expect((await Quotation.findById(q._id)).status).toBe('approved');
+    expect((await Invoice.findById(inv._id)).status).toBe('cancelled');
+  });
+
+  test('simultaneous conversions create exactly one invoice', async () => {
+    const q = await quote();
+    const before = await Invoice.countDocuments({ customerId: cust._id });
+    const results = await Promise.all(Array.from({ length: 6 }, () => admin().post(`/api/quotations/${q._id}/convert-to-invoice`, {})));
+    const codes = results.map((r) => r.status).sort();
+    expect(codes.filter((c) => c === 201)).toHaveLength(1);
+    expect(codes.filter((c) => c !== 201).every((c) => c === 409)).toBe(true);
+    expect(await Invoice.countDocuments({ customerId: cust._id })).toBe(before + 1);
+    const stored = await Quotation.findById(q._id);
+    expect(stored.status).toBe('converted');
+    expect(stored.conversionLockAt).toBeUndefined();
+    expect(stored.conversionHistory).toHaveLength(1);
+    // A retry after success is a clean 409 pointing at the existing invoice.
+    const retry = await admin().post(`/api/quotations/${q._id}/convert-to-invoice`, {});
+    expect(retry.status).toBe(409);
+    expect(retry.body.data.invoiceNumber).toBe(stored.convertedInvoiceNumber);
+  });
+
+  test('a failed conversion leaves no invoice and no lock, and can be retried', async () => {
+    const q = await quote();
+    const before = await Invoice.countDocuments({ customerId: cust._id });
+    const spy = jest.spyOn(Invoice, 'createNumbered').mockRejectedValueOnce(new Error('disk full'));
+    const failed = await admin().post(`/api/quotations/${q._id}/convert-to-invoice`, {});
+    spy.mockRestore();
+    expect(failed.status).toBe(500);
+    expect(await Invoice.countDocuments({ customerId: cust._id })).toBe(before);
+    const mid = await Quotation.findById(q._id);
+    expect(mid.status).toBe('approved');
+    expect(mid.conversionLockAt).toBeUndefined();
+    expect((await admin().post(`/api/quotations/${q._id}/convert-to-invoice`, {})).status).toBe(201);
+  });
+
+  test('a fresh claim by another request blocks conversion; a stale one does not', async () => {
+    const q = await quote();
+    await Quotation.updateOne({ _id: q._id }, { $set: { conversionLockAt: new Date() } });
+    const blocked = await admin().post(`/api/quotations/${q._id}/convert-to-invoice`, {});
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.code).toBe('CONVERSION_IN_PROGRESS');
+    await Quotation.updateOne({ _id: q._id }, { $set: { conversionLockAt: new Date(Date.now() - 5 * 60 * 1000) } });
+    expect((await admin().post(`/api/quotations/${q._id}/convert-to-invoice`, {})).status).toBe(201);
+  });
+
+  test('issued invoice: cancel through the workflow, keep it, never reuse its number, only one active invoice', async () => {
+    const q = await quote();
+    const first = (await admin().post(`/api/quotations/${q._id}/convert-to-invoice`, {})).body.data.invoice;
+    const issued = await request(app).patch(`/api/invoices/${first._id}/issue`).set(auth(org.tokens.admin));
+    expect(issued.status).toBe(200);
+    const issuedNumber = (await Invoice.findById(first._id)).invoiceNumber;
+    expect(issuedNumber).toMatch(/^INV-/);
+
+    // While the first is active, converting again is refused.
+    expect((await admin().post(`/api/quotations/${q._id}/convert-to-invoice`, {})).status).toBe(409);
+
+    // Payments must come off before cancelling.
+    const Payment = require('../src/models/Payment');
+    const paid = await request(app).post('/api/payments').set(auth(org.tokens.admin)).send({ customerId: String(cust._id), invoiceId: String(first._id), amount: 100, paymentMethod: 'cash', idempotencyKey: `k-${Date.now()}` });
+    expect(paid.status).toBe(201);
+    const blocked = await request(app).patch(`/api/invoices/${first._id}/cancel`).set(auth(org.tokens.admin)).send({ reason: 'x' });
+    expect(blocked.status).toBe(409);
+    expect((await Quotation.findById(q._id)).status).toBe('converted');
+    await request(app).put(`/api/payments/${paid.body.data.payment._id}/allocations`).set(auth(org.tokens.admin)).send({ allocations: [] });
+    expect(await Payment.countDocuments({ _id: paid.body.data.payment._id })).toBe(1);
+
+    const cancel = await request(app).patch(`/api/invoices/${first._id}/cancel`).set(auth(org.tokens.admin)).send({ reason: 'Wrong rate' });
+    expect(cancel.status).toBe(200);
+    const kept = await Invoice.findById(first._id);
+    expect(kept.status).toBe('cancelled');
+    expect(kept.invoiceNumber).toBe(issuedNumber);
+
+    const second = (await admin().post(`/api/quotations/${q._id}/convert-to-invoice`, {})).body.data.invoice;
+    expect(second.invoiceNumber).not.toBe(issuedNumber);
+    const active = await Invoice.countDocuments({ _id: { $in: [first._id, second._id] }, status: { $ne: 'cancelled' } });
+    expect(active).toBe(1);
+    const stored = await Quotation.findById(q._id);
+    expect(String(stored.convertedInvoiceId)).toBe(String(second._id));
+    expect(stored.conversionHistory.map((h) => h.invoiceNumber)).toEqual([issuedNumber, second.invoiceNumber]);
+    expect(stored.conversionHistory[0].releasedReason).toBe('invoice_cancelled');
+  });
+});
+
+test('a blank GST rate is refused rather than treated as 0%; an explicit 0 is accepted', async () => {
+  const body = (rate) => ({ customer_id: String(cust._id), gst_type: 'gst', items: [{ item_name: 'Card', quantity: 1, unit_price: 100, tax_rate: rate }] });
+  const blank = await admin().post('/api/quotations', body(''));
+  expect(blank.status).toBe(400);
+  expect(JSON.stringify(blank.body)).toMatch(/blank rate/);
+  const zero = await admin().post('/api/quotations', body(0));
+  expect(zero.status).toBe(201);
 });

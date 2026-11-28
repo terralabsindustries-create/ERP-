@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { StaleDataBanner } from "@/components/common/LoadState";
 import { addDays, addMonths, endOfDay, format, isSameDay, isSameMonth, isToday, startOfDay, startOfMonth, subMonths } from "date-fns";
 import { CalendarCheck, CalendarDays, CheckCircle, ChevronLeft, ChevronRight, Clock, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -53,6 +54,7 @@ export default function CalendarPage() {
   const [deleting, setDeleting] = useState<CalItem | null>(null);
 
   // Everything due or happening in the weeks the grid shows.
+  const [monthError, setMonthError] = useState<unknown>(null);
   const loadMonth = useCallback(async () => {
     setLoading(true);
     const { start, end } = monthWindow(month);
@@ -60,7 +62,9 @@ export default function CalendarPage() {
       apiClient.getTasks({ dueFrom: start.toISOString(), dueTo: end.toISOString(), limit: 200, sortBy: "dueDate", sortOrder: "asc" }),
       apiClient.getEvents({ startDate: start.toISOString(), endDate: end.toISOString(), limit: 100 })
     ]);
-    if (t.status === "rejected" && e.status === "rejected") toast({ title: "The calendar could not be loaded", variant: "destructive" });
+    // Either half failing is reported: a gap must not read as "nothing due".
+    const failed = [t, e].find((r) => r.status === "rejected") as PromiseRejectedResult | undefined;
+    setMonthError(failed ? failed.reason : null);
     setItems(toItems(t.status === "fulfilled" ? taskList(t.value) : [], e.status === "fulfilled" ? eventList(e.value) : []));
     setLoading(false);
   }, [month, toast]);
@@ -242,6 +246,9 @@ export default function CalendarPage() {
             </div>
           }
         >
+          {!!monthError && (
+            <StaleDataBanner className="mb-2" error={monthError} onRetry={loadMonth} retrying={loading} />
+          )}
           <MonthGrid month={month} items={shown} selected={selected} onSelect={select} loading={loading} />
         </DataCard>
 

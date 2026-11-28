@@ -30,6 +30,8 @@ export default function Proofing() {
   };
 
   const [data, setData] = useState<ProofListResponse | null>(null);
+  // A failed load shows as an error with Retry, never as an empty list.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [stats, setStats] = useState<ProofStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -51,9 +53,10 @@ export default function Proofing() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      setLoadError(null);
       setData(await proofsApi.list({ view, search: q || undefined, page, limit: PAGE_SIZE }));
     } catch (error) {
-      toast({ title: "Proofs could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -278,6 +281,8 @@ export default function Proofing() {
           footer={!loading && total > 0 && <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} noun="proofs" />}
         >
           <DataTable
+            error={loadError}
+            onRetry={() => load()}
             columns={columns}
             rows={rows}
             rowKey={(p) => p._id}

@@ -31,9 +31,70 @@ interface ApiResponse<T = any> {
   errors?: string[];
 }
 
+/** How a request failed, so screens can show the right message (never "no records"). */
+export type ApiErrorKind = 'timeout' | 'network' | 'auth' | 'forbidden' | 'not_found' | 'validation' | 'subscription' | 'server' | 'cancelled';
+
+export interface ApiError extends Error {
+  status?: number;
+  kind?: ApiErrorKind;
+  code?: string;
+}
+
+export const errorKindForStatus = (status: number): ApiErrorKind =>
+  status === 401 ? 'auth'
+    : status === 402 ? 'subscription'
+      : status === 403 ? 'forbidden'
+        : status === 404 ? 'not_found'
+          : status === 400 || status === 409 || status === 422 ? 'validation'
+            : 'server';
+
+export interface JobCard {
+  _id: string;
+  title: string;
+  status: string;
+  priority?: string;
+  dueDate?: string;
+  customerName?: string;
+  customerId?: { _id?: string; name?: string; company?: string } | null;
+  printSpecs?: { paperType?: string; quantity?: number; printSize?: string };
+}
+
+export interface CreditNoteLine { invoiceLineRef: string; itemName: string; quantity: number; taxableValue: number; gstRate: number; total: number }
+export interface CreditNoteRecord {
+  _id: string;
+  noteType: 'credit' | 'debit';
+  noteNumber: string;
+  status: 'draft' | 'issued' | 'cancelled';
+  noteDate: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  totalAmount: number;
+  appliedToInvoice?: number;
+  unappliedAmount?: number;
+  items: CreditNoteLine[];
+}
+export interface CreditableLine {
+  invoiceLineRef: string; itemName: string; unit?: string; gstRate: number; quantity: number;
+  taxableValue: number; creditableValue: number; creditableQuantity: number;
+}
+
+export interface JobBoard {
+  counts: Record<string, number>;
+  totals: {
+    all: number; open: number; preProduction: number; inProduction: number; readyForDispatch: number;
+    delivered: number; cancelled: number; overdue: number; dueToday: number; rush: number;
+  };
+  jobs: JobCard[];
+  truncated: boolean;
+}
+
+/** Ordinary requests give up after this long; PDFs have their own, longer limit. */
+export const REQUEST_TIMEOUT_MS = 30_000;
+
 class ApiClient {
   private baseURL: string;
   private token: string | null = null;
+  private inflight = new Map<string, Promise<unknown>>();
 
   constructor(baseURL: string = BASE_URL) {
     this.baseURL = baseURL;
@@ -51,7 +112,13 @@ class ApiClient {
 
     // Create AbortController for timeout
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    // A caller's own signal (React Query cancels when a page unmounts) aborts too.
+    const callerSignal = options.signal;
+    if (callerSignal) {
+      if (callerSignal.aborted) controller.abort();
+      else callerSignal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
 
     // Caller options first, so the merged headers (with the token) and the
     // timeout signal are not replaced by a caller's own `headers`.
@@ -90,6 +157,7 @@ class ApiClient {
         }
         const err = new Error(data.message || 'API request failed') as any;
         err.status = response.status;
+        err.kind = errorKindForStatus(response.status);
         err.details = (data as any).details;
         err.stockCheck = (data as any).stockCheck;
         err.code = (data as any).code;
@@ -105,7 +173,25 @@ class ApiClient {
     } catch (error: any) {
       clearTimeout(timeoutId);
       if (error.name === 'AbortError') {
-        throw new Error('Request timed out. Please try again.');
+        // Aborted by the caller (page left, newer search) rather than by the timeout.
+        if (options.signal?.aborted) {
+          const cancelled = new Error('Request cancelled') as ApiError;
+          cancelled.kind = 'cancelled';
+          throw cancelled;
+        }
+        const timeout = new Error('The server took too long to answer. Please try again.') as ApiError;
+        timeout.kind = 'timeout';
+        throw timeout;
+      }
+      if (!error.kind) {
+        // fetch itself failed: offline, DNS, CORS or the connection dropped.
+        if (error instanceof TypeError) {
+          const network = new Error('Could not reach the server. Check your connection and try again.') as ApiError;
+          network.kind = 'network';
+          console.error(`API Error (${endpoint}):`, error);
+          throw network;
+        }
+        error.kind = 'server';
       }
       console.error(`API Error (${endpoint}):`, error);
       throw error;
@@ -189,7 +275,22 @@ class ApiClient {
     const searchParams = new URLSearchParams(clean).toString();
     const url = searchParams ? `${endpoint}${endpoint.includes('?') ? '&' : '?'}${searchParams}` : endpoint;
 
-    return this.request<T>(url);
+    // Identical GETs already in flight share one request: several components
+    // asking for the same list on the same render cause one network call.
+    const key = `${localStorage.getItem('token') || ''}|${url}`;
+    const pending = this.inflight.get(key);
+    if (pending) return pending as Promise<T>;
+    const promise = this.request<T>(url).finally(() => this.inflight.delete(key));
+    this.inflight.set(key, promise);
+    return promise;
+  }
+
+  /** A GET that the caller can cancel (React Query passes its signal). Not deduplicated. */
+  async getWithSignal<T>(endpoint: string, params: Record<string, any> | undefined, signal?: AbortSignal): Promise<T> {
+    const clean = params ? Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => [k, String(v)])) : {};
+    const searchParams = new URLSearchParams(clean).toString();
+    const url = searchParams ? `${endpoint}${endpoint.includes('?') ? '&' : '?'}${searchParams}` : endpoint;
+    return this.request<T>(url, { signal });
   }
 
   /**
@@ -200,10 +301,28 @@ class ApiClient {
    */
   async listAll<T = any>(endpoint: string, key?: string, params: Record<string, any> = {}, max = 5000): Promise<T[]> {
     const pageSize = 100;
-    const all: T[] = [];
-    for (let page = 1; all.length < max; page++) {
-      const res: any = await this.get(endpoint, { ...params, page, limit: pageSize });
-      const rows: T[] = Array.isArray(res) ? res : (key ? res?.[key] : null) || [];
+    const rowsOf = (res: any): T[] => (Array.isArray(res) ? res : (key ? res?.[key] : null) || []);
+    const first: any = await this.get(endpoint, { ...params, page: 1, limit: pageSize });
+    const all: T[] = rowsOf(first);
+    if (all.length < pageSize) return all;
+
+    // When the endpoint reports its page count, fetch the remaining pages a few
+    // at a time instead of one after another (each page is a round trip).
+    // `pages` where an endpoint reports it; otherwise these list endpoints use `total` for the page count.
+    const pages = Number(first?.pagination?.pages ?? first?.pagination?.total);
+    if (Number.isFinite(pages) && pages > 1) {
+      const last = Math.min(pages, Math.ceil(max / pageSize));
+      for (let start = 2; start <= last; start += 4) {
+        const batch = await Promise.all(
+          Array.from({ length: Math.min(4, last - start + 1) }, (_, i) => this.get(endpoint, { ...params, page: start + i, limit: pageSize }))
+        );
+        for (const res of batch) all.push(...rowsOf(res));
+      }
+      return all.slice(0, max);
+    }
+
+    for (let page = 2; all.length < max; page++) {
+      const rows = rowsOf(await this.get(endpoint, { ...params, page, limit: pageSize }));
       all.push(...rows);
       if (rows.length < pageSize) break;
     }
@@ -254,8 +373,18 @@ class ApiClient {
     return this.put(`/customers/${id}`, data);
   }
 
+  /** Deactivates the customer (history is kept). */
   async deleteCustomer(id: string) {
     return this.delete(`/customers/${id}`);
+  }
+
+  async reactivateCustomer(id: string) {
+    return this.patch(`/customers/${id}/reactivate`);
+  }
+
+  /** Permanent delete; the server refuses when the customer has invoices, jobs, quotations or payments. */
+  async deleteCustomerPermanently(id: string) {
+    return this.delete(`/customers/${id}?permanent=true`);
   }
 
   // Jobs
@@ -265,6 +394,11 @@ class ApiClient {
 
   async getJob(id: string) {
     return this.get(`/jobs/${id}`);
+  }
+
+  /** Stage counts, every open job as a light card, and the latest deliveries (one request). */
+  async getJobBoard(signal?: AbortSignal) {
+    return this.getWithSignal<JobBoard>('/jobs/board', undefined, signal);
   }
 
   async createJob(data: any) {
@@ -560,8 +694,17 @@ class ApiClient {
     return this.put(`/vendors/${id}`, data);
   }
 
+  /** Permanent delete; the server refuses when the supplier has purchase history. */
   async deleteVendor(id: string) {
     return this.delete(`/vendors/${id}`);
+  }
+
+  async deactivateVendor(id: string) {
+    return this.patch(`/vendors/${id}/deactivate`);
+  }
+
+  async reactivateVendor(id: string) {
+    return this.patch(`/vendors/${id}/reactivate`);
   }
 
   async getVendorStats() {
@@ -608,6 +751,38 @@ class ApiClient {
    * A server-made PDF (invoice, quotation, purchase bill), fetched fresh so it
    * always shows the document as last saved. `what` names it in errors.
    */
+  /** Downloads any file the API returns (Excel, CSV, XML) and saves it, with the server's file name. */
+  /** Downloads a generated file. With a body the request is a JSON POST. */
+  async downloadExport(path: string, fallbackName: string, body?: unknown): Promise<void> {
+    const token = localStorage.getItem('token');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PDF_TIMEOUT_MS);
+    try {
+      const response = await fetch(`${this.baseURL}${path}`, {
+        method: body === undefined ? 'GET' : 'POST',
+        headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        let message = `Download failed (${response.status})`;
+        try { message = (await response.json()).message || message; } catch { /* not JSON */ }
+        const err = new Error(message) as ApiError;
+        err.status = response.status;
+        err.kind = errorKindForStatus(response.status);
+        throw err;
+      }
+      const disposition = response.headers.get('content-disposition') || '';
+      const named = /filename="?([^";]+)"?/i.exec(disposition)?.[1];
+      saveFile({ blob: await response.blob(), filename: named || fallbackName } as PdfFile);
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error('The download took too long. Try again.');
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   private async fetchPdfFile(path: string, fallbackName: string, what: string, signal?: AbortSignal): Promise<PdfFile> {
     const token = localStorage.getItem('token');
     // A stalled connection must not leave a Print or Download spinning forever.
@@ -664,6 +839,59 @@ class ApiClient {
   /** Opens the print dialog on the purchase bill PDF. Call it directly from a click handler (see printPdf). */
   printPurchaseBillPDF(billId: string, billNumber?: string): Promise<PrintOutcome> {
     return printPdf(() => this.getPurchaseBillPdfFile(billId, billNumber));
+  }
+
+
+  // Product rate master and sales orders. Prices come from the server (see lib/salesOrders.ts).
+  async listProductRates(params?: Record<string, any>) { return this.get<{ products: any[]; pagination: { total: number; pages: number } }>('/product-rates', params); }
+  async getProductRate(id: string) { return this.get<{ product: any }>(`/product-rates/${id}`); }
+  async productRateMaterialTypes() { return this.get<{ materialTypes: string[] }>('/product-rates/material-types'); }
+  async saveProductRate(id: string | null, data: any) { return id ? this.put(`/product-rates/${id}`, data) : this.post('/product-rates', data); }
+  async deactivateProductRate(id: string) { return this.delete(`/product-rates/${id}`); }
+  async priceOrder(data: any) { return this.post<{ lines: any[]; totals: any; partyType?: string; isInterState: boolean; customerState?: string }>('/product-rates/price', data); }
+  async listSalesOrders(params?: Record<string, any>) { return this.get<{ orders: any[]; pagination: { total: number; pages: number }; counts: Record<string, number> }>('/sales-orders', params); }
+  async getSalesOrder(id: string) { return this.get<{ order: import('./salesOrders').SalesOrderRecord }>(`/sales-orders/${id}`); }
+  async salesOrderFromQuotation(id: string) { return this.get<{ quotationId: string; customerId?: string; customer?: { name: string; phone?: string; address?: string; gstNumber?: string }; existingOrder: string | null; lines: import('./salesOrders').QuotationLine[] }>(`/sales-orders/from-quotation/${id}`); }
+  async saveSalesOrder(id: string | null, data: any) { return id ? this.put(`/sales-orders/${id}`, data) : this.post('/sales-orders', data); }
+  async approveSalesOrder(id: string, note?: string) { return this.post(`/sales-orders/${id}/approve`, { note }); }
+  async cancelSalesOrder(id: string, reason: string) { return this.post(`/sales-orders/${id}/cancel`, { reason }); }
+  async deleteSalesOrder(id: string) { return this.delete(`/sales-orders/${id}`); }
+  async salesOrderStage(id: string, stage: string, action: 'start' | 'complete' | 'skip', extra?: { reason?: string; assigneeId?: string }) { return this.post(`/sales-orders/${id}/stages/${stage}`, { action, ...extra }); }
+  async invoiceSalesOrder(id: string) { return this.post<{ invoice: any }>(`/sales-orders/${id}/invoice`, {}); }
+
+  // Purchase order documents. Nothing here downloads by itself: only the explicit actions do.
+  getPurchaseOrderPdfFile(id: string, poNumber?: string, signal?: AbortSignal): Promise<PdfFile> {
+    return this.fetchPdfFile(`/purchase-orders/${id}/pdf`, `PurchaseOrder_${poNumber || id}.pdf`, 'purchase order', signal);
+  }
+
+  async downloadPurchaseOrderPDF(id: string, poNumber?: string) {
+    saveFile(await this.getPurchaseOrderPdfFile(id, poNumber));
+  }
+
+  printPurchaseOrderPDF(id: string, poNumber?: string): Promise<PrintOutcome> {
+    return printPdf(() => this.getPurchaseOrderPdfFile(id, poNumber));
+  }
+
+  async sendPurchaseOrderEmail(id: string, recipientEmail?: string, message?: string) {
+    return this.post(`/purchase-orders/${id}/send-email`, { recipientEmail: recipientEmail || undefined, message: message || undefined });
+  }
+
+  /** A purchase return: takes one received delivery back out of stock. */
+  async returnPurchaseOrderDelivery(id: string, receiptId: string, reason: string) {
+    return this.post(`/purchase-orders/${id}/receipts/${receiptId}/reverse`, { reason });
+  }
+
+  // Payment receipts (preview opens the PDF in a tab, print opens the print dialog, download saves it).
+  getPaymentReceiptPdfFile(id: string, receiptNumber?: string, signal?: AbortSignal): Promise<PdfFile> {
+    return this.fetchPdfFile(`/payments/${id}/receipt`, `Receipt_${receiptNumber || id}.pdf`, 'payment receipt', signal);
+  }
+
+  async downloadPaymentReceiptPDF(id: string, receiptNumber?: string) {
+    saveFile(await this.getPaymentReceiptPdfFile(id, receiptNumber));
+  }
+
+  printPaymentReceiptPDF(id: string, receiptNumber?: string): Promise<PrintOutcome> {
+    return printPdf(() => this.getPaymentReceiptPdfFile(id, receiptNumber));
   }
 
   // Payment Management
@@ -799,7 +1027,40 @@ class ApiClient {
   }
 
   async issueInvoice(id: string) {
-    return this.patch(`/invoices/${id}/issue`, {});
+    return this.patch<{ invoice: { invoiceNumber: string } }>(`/invoices/${id}/issue`, {});
+  }
+
+  // GST credit and debit notes (backend routes/creditNotes.js)
+  getCreditNotes(params: { invoiceId?: string; customerId?: string; noteType?: string; status?: string; page?: number; limit?: number }) {
+    return this.get<{ notes: CreditNoteRecord[]; pagination: { totalNotes: number } }>('/credit-notes', params);
+  }
+
+  getCreditableLines(invoiceId: string) {
+    return this.get<{ invoice: { isInterState?: boolean; invoiceNumber: string; balanceAmount: number }; lines: CreditableLine[] }>(`/credit-notes/invoice/${invoiceId}/lines`);
+  }
+
+  createCreditNote(data: Record<string, unknown>) {
+    return this.request<{ note: CreditNoteRecord; duplicate: boolean }>('/credit-notes', {
+      method: 'POST',
+      body: JSON.stringify(data),
+      headers: data.idempotencyKey ? { 'Idempotency-Key': String(data.idempotencyKey) } : undefined,
+    });
+  }
+
+  issueCreditNote(id: string) {
+    return this.patch<{ note: CreditNoteRecord; invoice: { balanceAmount: number } }>(`/credit-notes/${id}/issue`, {});
+  }
+
+  cancelCreditNote(id: string, reason: string) {
+    return this.patch<{ note: CreditNoteRecord }>(`/credit-notes/${id}/cancel`, { reason });
+  }
+
+  deleteCreditNote(id: string) {
+    return this.delete(`/credit-notes/${id}`);
+  }
+
+  async downloadCreditNotePdf(id: string, noteNumber: string) {
+    saveFile(await this.fetchPdfFile(`/credit-notes/${id}/pdf`, `${noteNumber}.pdf`, 'note'));
   }
 
   async deleteInvoice(id: string) {
@@ -1594,8 +1855,9 @@ class ApiClient {
   async getPayrollSummary(month: number, year: number) {
     return this.get(`/hr/payroll/stats/summary?month=${month}&year=${year}`);
   }
-  async generatePayroll(month: number, year: number, employeeId?: string) {
-    return this.post('/hr/payroll/generate', { month, year, employeeId });
+  /** `employeeIds` limits payroll to those employees; leave it out for all active ones. */
+  async generatePayroll(month: number, year: number, employeeIds?: string[]) {
+    return this.post('/hr/payroll/generate', { month, year, ...(employeeIds?.length ? { employeeIds } : {}) });
   }
   async updatePayslip(id: string, data: any) {
     return this.put(`/hr/payroll/${id}`, data);

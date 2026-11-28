@@ -30,7 +30,7 @@ export const JOB_TYPE_LABEL: Record<CounterJobType, string> = {
 export const PRIORITY_META: Record<CounterPriority, { label: string; rank: number; tone: PillTone }> = {
   urgent: { label: "Urgent", rank: 0, tone: "danger" },
   high: { label: "High", rank: 1, tone: "warning" },
-  medium: { label: "Normal", rank: 2, tone: "neutral" },
+  medium: { label: "Medium", rank: 2, tone: "neutral" },
   low: { label: "Low", rank: 3, tone: "neutral" }
 };
 

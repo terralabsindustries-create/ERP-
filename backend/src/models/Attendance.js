@@ -41,6 +41,13 @@ const attendanceSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  // Who set the status: 'login' when the employee's sign-in marked them
+  // present (utils/autoAttendance.js), 'manual' once HR saves the day. Older
+  // records have none and count as manual.
+  source: {
+    type: String,
+    enum: ['manual', 'login']
+  },
 
   // Multi-tenant ownership
   createdBy: {

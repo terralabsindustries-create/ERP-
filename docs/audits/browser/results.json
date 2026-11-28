@@ -1,0 +1,108 @@
+{
+  "at": "2026-11-27T14:50:10.489Z",
+  "results": [
+    {
+      "name": "Customers: total over all customers, paged",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Customers: search finds a customer beyond page 1",
+      "ok": true,
+      "detail": "2 customers"
+    },
+    {
+      "name": "Customers 360px: no horizontal page overflow",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Customers 390px: no horizontal page overflow",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Customers 768px: no horizontal page overflow",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Customers 1024px: no horizontal page overflow",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Job Tickets: header and list counts of 70 jobs",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Job Tickets 390px: no horizontal page overflow",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Production Board: Pre-production column on the shop-floor view",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Dashboard: Awaiting dispatch tile",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "GST returns: GSTR-3B summary shown",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "GST returns: B2B section lists the registered buyer",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Recurring invoices page renders",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Tally export page shows a preview",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Settings: document numbering card",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Customer statement dialog: opening and closing balance",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "Job Tickets with the API down: error and Retry, not \"No jobs found\"",
+      "ok": true,
+      "detail": "Can't reach the server"
+    },
+    {
+      "name": "Dark mode applied",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "No request left this machine",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "No uncaught page errors",
+      "ok": false,
+      "detail": "Error fetching jobs: Error: Could not reach the server. Check your connection and try again."
+    }
+  ],
+  "consoleErrors": [
+    "Error fetching jobs: Error: Could not reach the server. Check your connection and try again."
+  ]
+}

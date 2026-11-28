@@ -16,7 +16,9 @@ const { canViewAllStaffData } = require('./dataScopeHelper');
   Seeing a job is not permission to change it: editing, status changes,
   invoicing and deleting still need their own permissions on top of this.
 */
-const ownJobsOnly = (user) => user.role === 'designer' && !canViewAllStaffData(user);
+// Every login except the admin sees only the job tickets it created unless its
+// "Can view all data" switch (User Management) is on.
+const ownJobsOnly = (user) => user.role !== 'admin' && !canViewAllStaffData(user);
 
 /** Filter for the job tickets a login may see (spread into a query or a $match). */
 const jobScope = (user) => (ownJobsOnly(user) ? { ...orgScope(user), userId: user._id } : orgScope(user));

@@ -47,6 +47,27 @@ const payrollSchema = new mongoose.Schema({
     other: { type: Number, default: 0 }
   },
 
+  // Employer-side statutory contributions: a cost to the business, never
+  // deducted from the employee's net pay.
+  employerContributions: {
+    pf: { type: Number, default: 0 },
+    eps: { type: Number, default: 0 },
+    epf: { type: Number, default: 0 },
+    edli: { type: Number, default: 0 },
+    esi: { type: Number, default: 0 }
+  },
+  // How the statutory figures were reached: the configuration in force, the
+  // wages used, anything unverified, and which deductions a person has set by
+  // hand (those survive regeneration; the change is in the audit log).
+  statutory: {
+    configEffectiveFrom: String,
+    pfWage: Number,
+    esiWage: Number,
+    notes: [String],
+    unverified: [String],
+    manualOverride: { pf: { type: Boolean, default: false }, esi: { type: Boolean, default: false } }
+  },
+
   // Attendance summary for the period
   workingDays: { type: Number, default: 0 },
   paidDays: { type: Number, default: 0 },

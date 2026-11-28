@@ -233,6 +233,7 @@ function toInvoiceLine(item = {}) {
     taxableValue: p.amount,
     itemTotal: p.amount,
     gstRate,
+    ...(item.pricingSnapshot ? { pricingSnapshot: item.pricingSnapshot } : {}),
     gstAmount: 0,
     cgstAmount: 0,
     sgstAmount: 0,
@@ -260,6 +261,7 @@ function toQuotationLine(item = {}) {
     area_per_piece: p.areaPerPiece,
     total_area: p.totalArea,
     tax_rate: parseGstRate(item.tax_rate) || 0,
+    ...(item.pricing_snapshot ? { pricing_snapshot: item.pricing_snapshot } : {}),
     tax_amount: 0,
     total_amount: p.amount
   };
@@ -267,7 +269,7 @@ function toQuotationLine(item = {}) {
 
 /** The invoice line a quotation line becomes on conversion, at the quoted GST rate. */
 const quotationLineToInvoiceLine = (q) =>
-  toInvoiceLine({ itemName: q.item_name, description: q.description, hsnCode: q.hsn_code, quantity: q.quantity, unit: q.unit, unitPrice: q.unit_price, length: q.length, width: q.width, gstRate: q.tax_rate });
+  toInvoiceLine({ itemName: q.item_name, description: q.description, hsnCode: q.hsn_code, quantity: q.quantity, unit: q.unit, unitPrice: q.unit_price, length: q.length, width: q.width, gstRate: q.tax_rate, pricingSnapshot: q.pricing_snapshot });
 
 const taxFields = (part) => ({
   taxableValue: part.taxableValue,

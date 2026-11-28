@@ -10,6 +10,8 @@ const { protect } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { orgUserFilter, purchaseOrderScope } = require('../utils/accessScope');
 const InventoryService = require('../services/InventoryService');
+const PDFService = require('../services/PDFService');
+const mailer = require('../utils/mailer');
 const { inTransaction } = require('../utils/transactions');
 
 const router = express.Router();
@@ -59,8 +61,12 @@ const orderRules = [
 
 /** Vendor and lines checked against the business; lines priced and named from the stock items. */
 async function buildOrder(req) {
-  const vendor = await Vendor.findOne({ _id: req.body.vendorId, ...(await orgUserFilter(req.user)) }).select('name');
+  const vendor = await Vendor.findOne({ _id: req.body.vendorId, ...(await orgUserFilter(req.user)) }).select('name status');
   if (!vendor) return { error: 'Supplier not found', status: 404 };
+  // A new order cannot go to a deactivated supplier; edits of an existing one still can.
+  if (req.method === 'POST' && vendor.status && vendor.status !== 'active') {
+    return { error: `${vendor.name} is ${vendor.status}. Reactivate the supplier before raising a new purchase order.`, status: 400, code: 'VENDOR_INACTIVE' };
+  }
   const ids = req.body.items.map((i) => i.inventoryId);
   const stock = await Inventory.find({ _id: { $in: ids }, ...InventoryService.itemScope(req.user) }).select('name category unit');
   const byId = new Map(stock.map((s) => [String(s._id), s]));
@@ -156,7 +162,7 @@ router.get('/:id', protect, async (req, res) => {
 router.post('/', protect, orderRules, validate, async (req, res) => {
   try {
     const built = await buildOrder(req);
-    if (built.error) return res.status(built.status).json({ status: 'error', message: built.error });
+    if (built.error) return res.status(built.status).json({ status: 'error', message: built.error, ...(built.code ? { code: built.code } : {}) });
     const send = req.body.send === true || req.body.send === 'true';
     let po;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -360,6 +366,28 @@ async function unreceive(orderId, receiptId, allocations, statusBefore) {
   throw new Error(`delivery ${receiptId} could not be taken off order ${orderId}`);
 }
 
+/** Adds a received delivery to an item's supplier list (one entry per supplier). */
+async function recordSupplier(inventoryId, po, quantity, unitCost, when, session, onUndo) {
+  const vendorId = po.vendorId;
+  const known = await Inventory.updateOne(
+    { _id: inventoryId, 'suppliers.vendorId': vendorId },
+    { $set: { 'suppliers.$.lastPurchasedAt': when, 'suppliers.$.lastUnitCost': unitCost, 'suppliers.$.vendorName': po.vendorName }, $inc: { 'suppliers.$.totalReceived': quantity } },
+    { session }
+  );
+  if (known.matchedCount) {
+    onUndo(() => Inventory.updateOne({ _id: inventoryId, 'suppliers.vendorId': vendorId }, { $inc: { 'suppliers.$.totalReceived': -quantity } }));
+    return;
+  }
+  const added = await Inventory.updateOne(
+    { _id: inventoryId, 'suppliers.vendorId': { $ne: vendorId } },
+    { $push: { suppliers: { vendorId, vendorName: po.vendorName, lastPurchasedAt: when, lastUnitCost: unitCost, totalReceived: quantity } } },
+    { session }
+  );
+  if (added.modifiedCount) onUndo(() => Inventory.updateOne({ _id: inventoryId }, { $pull: { suppliers: { vendorId } } }));
+  // The typed supplier is only filled when nobody has named one.
+  await Inventory.updateOne({ _id: inventoryId, $or: [{ supplier: { $exists: false } }, { supplier: '' }, { supplier: null }] }, { $set: { supplier: po.vendorName } }, { session });
+}
+
 const idempotencyKeyOf = (req) => {
   const key = (req.get('Idempotency-Key') || req.body.idempotencyKey || '').toString().trim();
   return key || undefined;
@@ -443,6 +471,9 @@ router.post(
                 await Inventory.updateOne({ _id: stockItem._id }, { $set: { unitCost: lastCost } }, { session });
                 onUndo(() => Inventory.updateOne({ _id: stockItem._id, unitCost: lastCost }, { $set: { unitCost: stockItem.unitCost } }));
               }
+              // Remember who this item was bought from — one entry per supplier,
+              // so a second supplier adds to the list instead of replacing the first.
+              await recordSupplier(stockItem._id, po, quantity, lastCost, now, session, onUndo);
               movements.push({
                 inventoryItem: stockItem._id,
                 itemName: stockItem.name,
@@ -483,6 +514,160 @@ router.post(
     }
   }
 );
+
+// POST /api/purchase-orders/:id/receipts/:receiptId/reverse  { reason }
+// A purchase return: takes one delivery back out of stock and off the order.
+// The delivery stays on the order, marked reversed (who, when, why), and the
+// stock movement is a 'return' entry — nothing is deleted. Refused when the
+// goods have since been used (stock is lower than the delivery) or the
+// delivery was already reversed.
+router.post('/:id/receipts/:receiptId/reverse', protect, [
+  body('reason').trim().notEmpty().withMessage('Give a reason for the return').isLength({ max: 300 })
+], validate, async (req, res) => {
+  try {
+    for (let attempt = 0; attempt < ATTEMPTS; attempt += 1) {
+      const po = await findPO(req, req.params.id);
+      if (!po) return res.status(404).json({ status: 'error', message: 'Purchase order not found' });
+      const receipt = po.receipts.find((r) => String(r._id) === req.params.receiptId);
+      if (!receipt) return res.status(404).json({ status: 'error', message: 'Delivery not found on this order' });
+      if (receipt.reversedAt) return res.status(409).json({ status: 'error', code: 'ALREADY_REVERSED', message: 'This delivery has already been returned.' });
+
+      const lines = combineLines(receipt.lines || []);
+      const scope = InventoryService.itemScope(req.user);
+      // Take the quantity back off the order lines, last line first.
+      const allocations = [];
+      for (const { inventoryId, quantity } of lines) {
+        let left = quantity;
+        const idx = po.items.map((item, index) => ({ item, index })).filter(({ item }) => String(item.inventoryId) === inventoryId).reverse();
+        for (const { item, index } of idx) {
+          const take = Math.min(left, round4(item.receivedQuantity));
+          if (take > 0) { allocations.push({ inventoryId, index, quantity: take }); left = round4(left - take); }
+          if (!(left > 0)) break;
+        }
+      }
+      const { set } = receivedState(po.toObject(), allocations, -1, 'sent');
+      const now = new Date();
+      try {
+        const purchaseOrder = await inTransaction(async ({ session, onUndo }) => {
+          const claimed = await PurchaseOrder.findOneAndUpdate(
+            { _id: po._id, ...atVersion(po), receipts: { $elemMatch: { _id: receipt._id, reversedAt: { $exists: false } } } },
+            {
+              $set: { ...set, 'receipts.$.reversedAt': now, 'receipts.$.reversedBy': req.user._id, 'receipts.$.reversedByName': req.user.fullName, 'receipts.$.reverseReason': req.body.reason },
+              $unset: { completedAt: '', actualDelivery: '' },
+              $inc: { __v: 1 }
+            },
+            { new: true, session }
+          );
+          if (!claimed) throw new OrderChanged();
+          onUndo(() => {
+            // Put the order back as it was if the stock could not be taken back.
+            const prior = { status: po.status };
+            allocations.forEach(({ index }) => {
+              prior[`items.${index}.receivedQuantity`] = po.items[index].receivedQuantity;
+              prior[`items.${index}.pendingQuantity`] = po.items[index].pendingQuantity;
+            });
+            if (po.completedAt) prior.completedAt = po.completedAt;
+            if (po.actualDelivery) prior.actualDelivery = po.actualDelivery;
+            return PurchaseOrder.updateOne(
+              { _id: po._id, 'receipts._id': receipt._id },
+              { $set: prior, $unset: { 'receipts.$.reversedAt': '', 'receipts.$.reversedBy': '', 'receipts.$.reversedByName': '', 'receipts.$.reverseReason': '' } }
+            );
+          });
+          const movements = [];
+          for (const { inventoryId, quantity } of lines) {
+            const filter = { _id: inventoryId, ...scope };
+            const taken = await InventoryService.changeStock(filter, -quantity, { session });
+            if (!taken) throw new ReceiveError(409, 'Some of this delivery has already been used or sold, so it cannot be returned in full. Adjust stock first, or return a smaller amount by adjusting the stock count.');
+            onUndo(() => InventoryService.changeStock(filter, quantity));
+            await Inventory.updateOne({ _id: inventoryId, 'suppliers.vendorId': po.vendorId }, { $inc: { 'suppliers.$.totalReceived': -quantity } }, { session });
+            const parts = po.items.filter((i) => String(i.inventoryId) === inventoryId);
+            const unitCost = parts.length ? parts[parts.length - 1].unitCost : 0;
+            movements.push({
+              inventoryItem: taken.item._id, itemName: taken.item.name, movementType: 'return', quantity, unit: taken.item.unit,
+              unitCost, totalCost: Math.round(unitCost * quantity * 100) / 100,
+              previousQuantity: taken.previousQuantity, newQuantity: taken.newQuantity,
+              referenceType: 'purchase_order', referenceId: po._id, referenceNumber: po.poNumber,
+              reason: `Returned to ${po.vendorName}: ${req.body.reason}`, userId: req.user._id, performedByName: req.user.fullName,
+              dataScope: taken.item.dataScope || req.user.dataScope
+            });
+          }
+          const recorded = await InventoryMovement.insertMany(movements, { session });
+          onUndo(() => InventoryMovement.deleteMany({ _id: { $in: recorded.map((m) => m._id) } }));
+          return claimed;
+        }, { label: 'Purchase order return' });
+        log(req, purchaseOrder, 'Purchase Order Delivery Returned', 'receive', 'high');
+        return res.json({ status: 'success', message: 'Delivery returned: stock and the order were adjusted', data: { purchaseOrder } });
+      } catch (error) {
+        if (error instanceof OrderChanged) continue;
+        throw error;
+      }
+    }
+    return res.status(409).json({ status: 'error', message: 'The order changed while returning. Refresh and try again.' });
+  } catch (error) {
+    if (error instanceof ReceiveError) return res.status(error.status).json({ status: 'error', message: error.message });
+    console.error('Reverse purchase order delivery error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error while returning the delivery. Nothing was changed.' });
+  }
+});
+
+/** The order, its supplier and the company block a document needs; or a ready error response. */
+async function documentParts(req, res) {
+  const po = await findPO(req, req.params.id);
+  if (!po) { res.status(404).json({ status: 'error', message: 'Purchase order not found' }); return null; }
+  const company = await require('./purchaseBills').getCompanyInfo(req.user);
+  if (company.isConfigured === false) { res.status(400).json({ status: 'error', code: 'COMPANY_NOT_CONFIGURED', message: company.error }); return null; }
+  const vendor = await Vendor.findOne({ _id: po.vendorId, ...(await orgUserFilter(req.user)) }).lean();
+  return { po, company, vendor: vendor || {} };
+}
+
+// GET /api/purchase-orders/:id/pdf
+// Shown in the browser for preview and print; ?download=1 asks for a file. It
+// never downloads by itself.
+router.get('/:id/pdf', protect, async (req, res) => {
+  try {
+    const parts = await documentParts(req, res);
+    if (!parts) return;
+    const buffer = await PDFService.generatePurchaseOrderPDF(parts.po, parts.company, parts.vendor);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `${req.query.download === '1' ? 'attachment' : 'inline'}; filename="PurchaseOrder_${parts.po.poNumber}.pdf"`);
+    res.setHeader('Content-Length', buffer.length);
+    res.send(buffer);
+  } catch (error) {
+    console.error('Purchase order PDF error:', error);
+    res.status(500).json({ status: 'error', message: 'Could not generate the purchase order PDF' });
+  }
+});
+
+// POST /api/purchase-orders/:id/send-email  { recipientEmail?, message? }
+// Emails the PDF to the supplier (their email on file unless one is given).
+router.post('/:id/send-email', protect, [
+  body('recipientEmail').optional({ values: 'falsy' }).isEmail().withMessage('Enter a valid email address'),
+  body('message').optional({ values: 'falsy' }).isString().isLength({ max: 2000 })
+], validate, async (req, res) => {
+  try {
+    if (!mailer.isEmailConfigured()) return mailer.sendMailErrorResponse ? mailer.sendMailErrorResponse(res, new mailer.EmailNotConfiguredError()) : res.status(503).json({ status: 'error', message: 'Email is not configured' });
+    const parts = await documentParts(req, res);
+    if (!parts) return;
+    const to = req.body.recipientEmail || parts.vendor.email;
+    if (!to) return res.status(400).json({ status: 'error', message: 'The supplier has no email address. Enter one to send to.' });
+    if (parts.po.status === 'cancelled') return res.status(409).json({ status: 'error', message: 'A cancelled purchase order cannot be sent.' });
+    const buffer = await PDFService.generatePurchaseOrderPDF(parts.po, parts.company, parts.vendor);
+    const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    await mailer.createTransporter().sendMail({
+      from: mailer.getFromAddress(parts.company.name),
+      to,
+      subject: `Purchase Order ${parts.po.poNumber} from ${parts.company.name}`,
+      html: `<p>Dear ${esc(parts.po.vendorName)},</p><p>Please find purchase order <b>${esc(parts.po.poNumber)}</b> attached.</p>${req.body.message ? `<p>${esc(req.body.message).replace(/\n/g, '<br>')}</p>` : ''}<p>Regards,<br>${esc(parts.company.name)}</p>`,
+      attachments: [{ filename: `PurchaseOrder_${parts.po.poNumber}.pdf`, content: buffer }]
+    });
+    log(req, parts.po, 'Purchase Order Emailed', 'send', 'low');
+    res.json({ status: 'success', message: `Purchase order ${parts.po.poNumber} sent to ${to}` });
+  } catch (error) {
+    if (mailer.logMailError) mailer.logMailError('Send purchase order', error);
+    console.error('Send purchase order error:', error.message);
+    res.status(500).json({ status: 'error', message: mailer.describeMailError ? mailer.describeMailError(error) : 'Could not send the purchase order' });
+  }
+});
 
 // DELETE /api/purchase-orders/:id — only drafts and cancelled orders
 router.delete('/:id', protect, async (req, res) => {

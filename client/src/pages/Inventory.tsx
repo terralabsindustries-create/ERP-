@@ -79,6 +79,8 @@ export default function Inventory() {
   const { hasPermission } = useAuth();
   const { toast } = useToast();
   const [items, setItems] = useState<Item[]>([]);
+  // A failed load shows as an error with Retry, never as an empty list.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [view, setView] = useState<View>("all");
@@ -98,10 +100,11 @@ export default function Inventory() {
 
   const load = useCallback(async () => {
     try {
+      setLoadError(null);
       const res = await apiClient.getInventory();
       setItems(Array.isArray(res) ? (res as Item[]) : ((res as { inventory?: Item[] })?.inventory || []));
     } catch (error) {
-      toast({ title: "Stock could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -309,6 +312,8 @@ export default function Inventory() {
             }
           >
             <DataTable
+              error={loadError}
+              onRetry={() => load()}
               columns={columns}
               rows={rows}
               rowKey={(i) => i._id}

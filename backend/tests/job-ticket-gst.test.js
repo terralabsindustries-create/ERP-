@@ -151,18 +151,14 @@ describe('an invoice raised from a job ticket', () => {
     expect(notes.status).toBe(200);
     expect(notes.body.data.invoice).toMatchObject({ totalGstAmount: 216.84, totalAmount: TICKET_TOTAL });
 
-    // Changing only the discount re-prices it and keeps every line's rate.
+    // Once issued, the amounts are locked: a changed discount is refused
+    // (it is corrected with a credit note) and the GST stays as billed.
     const discounted = await api().put(`/api/invoices/${invoice._id}`, { discountAmount: 88 });
-    expect(discounted.status).toBe(200);
+    expect(discounted.status).toBe(409);
+    expect(discounted.body.code).toBe('INVOICE_ISSUED_LOCKED');
     stored = await Invoice.findById(invoice._id);
-    // Taxable 1,288 − 88 = 1,200; GST on each part's share of it.
-    expect(stored.taxableAmount).toBe(1200);
+    expect(stored).toMatchObject({ totalGstAmount: 216.84, totalAmount: TICKET_TOTAL });
     expect(stored.items.map((i) => i.gstRate)).toEqual([18, 12]);
-    expect(stored.designChargeGstRate).toBe(18);
-    const expectedGst = round2(stored.items.reduce((s, i) => s + i.gstAmount, 0) + stored.designChargeGstAmount);
-    expect(stored.totalGstAmount).toBe(expectedGst);
-    expect(stored.totalAmount).toBe(round2(1200 + expectedGst));
-    expect(stored.totalGstAmount).toBeLessThan(216.84);
   });
 });
 

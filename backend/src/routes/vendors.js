@@ -10,12 +10,18 @@ const { canViewAllStaffData } = require('../utils/dataScopeHelper');
 
 const { orgUserFilter } = require('../utils/accessScope');
 
+const { gstinError, normalizeGstin } = require('../utils/gstin');
 const router = express.Router();
 
 // Validation rules
 const vendorValidation = [
   body('name').notEmpty().withMessage('Vendor name is required').trim(),
   body('email').optional({ values: 'falsy' }).isEmail().normalizeEmail(),
+  body('gstNumber').optional({ values: 'falsy' }).customSanitizer(normalizeGstin).custom((value) => {
+    const message = gstinError(value);
+    if (message) throw new Error(message);
+    return true;
+  }),
   body('phone').optional({ values: 'falsy' }).matches(/^\+?[\d\s()-]{7,20}$/).withMessage('Enter a valid phone number'),
   body('vendorType').optional({ values: 'falsy' }).isIn(['Supplier', 'Service Provider', 'Contractor', 'Other']),
   body('status').optional({ values: 'falsy' }).isIn(['active', 'inactive', 'blacklisted'])
@@ -290,22 +296,87 @@ router.put('/:id', protect, requirePermission('Vendors: Create & Edit'), vendorV
   }
 });
 
+// Everything that still refers to a supplier. A supplier with any of it is
+// deactivated, never deleted, so purchase history stays readable.
+async function vendorHistory(vendor) {
+  const PurchaseOrder = require('../models/PurchaseOrder');
+  const PurchaseBill = require('../models/PurchaseBill');
+  const Cost = require('../models/Cost');
+  const AccountTransaction = require('../models/AccountTransaction');
+  const Cheque = require('../models/Cheque');
+  const id = vendor._id;
+  const [orders, bills, costs, transactions, cheques] = await Promise.all([
+    PurchaseOrder.countDocuments({ vendorId: id }),
+    PurchaseBill.countDocuments({ vendorId: id }),
+    Cost.countDocuments({ vendorId: id }),
+    AccountTransaction.countDocuments({ vendorId: id }),
+    Cheque.countDocuments({ vendorId: id })
+  ]);
+  return { orders, bills, costs, transactions, cheques, total: orders + bills + costs + transactions + cheques };
+}
+
+async function setVendorStatus(req, res, status) {
+  try {
+    const vendor = await Vendor.findOne({ _id: req.params.id, ...(await orgUserFilter(req.user)) });
+    if (!vendor) return res.status(404).json({ status: 'error', message: 'Vendor not found' });
+    if (vendor.status === status) {
+      return res.status(200).json({ status: 'success', message: `Supplier is already ${status}`, data: { vendor } });
+    }
+    vendor.status = status;
+    await vendor.save();
+    ActivityLog.logActivity({
+      action: status === 'active' ? 'Vendor Reactivated' : 'Vendor Deactivated',
+      description: `Vendor ${vendor.name} was ${status === 'active' ? 'reactivated' : 'deactivated'}`,
+      entityType: 'vendor',
+      entityId: vendor._id,
+      entityName: vendor.name,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'update',
+      severity: 'medium',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch(err => console.error('Activity log (vendor status) failed:', err.message));
+    res.status(200).json({
+      status: 'success',
+      message: status === 'active'
+        ? `${vendor.name} is active again and can be used on new purchase orders.`
+        : `${vendor.name} was deactivated. Existing orders and bills keep showing it; it will not be offered on new ones.`,
+      data: { vendor }
+    });
+  } catch (error) {
+    console.error('Vendor status error:', error);
+    res.status(500).json({ status: 'error', message: 'Server error while updating supplier' });
+  }
+}
+
+// @route   PATCH /api/vendors/:id/deactivate | /reactivate
+router.patch('/:id/deactivate', protect, requirePermission('Vendors: Create & Edit'), (req, res) => setVendorStatus(req, res, 'inactive'));
+router.patch('/:id/reactivate', protect, requirePermission('Vendors: Create & Edit'), (req, res) => setVendorStatus(req, res, 'active'));
+
 // @route   DELETE /api/vendors/:id
-// @desc    Delete vendor
+// @desc    Permanently delete a vendor that has no purchase history
 // @access  Private
 router.delete('/:id', protect, requirePermission('Vendors: Delete'), async (req, res) => {
   try {
-    const vendor = await Vendor.findOneAndDelete({
-      _id: req.params.id,
-      ...(await orgUserFilter(req.user))
-    });
-    
+    const vendor = await Vendor.findOne({ _id: req.params.id, ...(await orgUserFilter(req.user)) });
     if (!vendor) {
       return res.status(404).json({
         status: 'error',
         message: 'Vendor not found'
       });
     }
+
+    const history = await vendorHistory(vendor);
+    if (history.total > 0) {
+      return res.status(409).json({
+        status: 'error',
+        code: 'VENDOR_HAS_HISTORY',
+        message: `${vendor.name} has purchase history (${history.orders} orders, ${history.bills} bills, ${history.costs + history.transactions + history.cheques} payments/costs) and cannot be deleted. Deactivate it instead: it stays on past records but is not offered on new ones.`,
+        details: history
+      });
+    }
+    await Vendor.deleteOne({ _id: vendor._id });
 
     ActivityLog.logActivity({
       action: 'Vendor Deleted',

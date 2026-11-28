@@ -400,40 +400,16 @@ router.get('/:id', protect, async (req, res) => {
 });
 
 // @route   DELETE /api/activity-log/:id
-// @desc    Delete an activity log entry
-// @access  Private (admin only — an audit trail that any user can prune isn't one)
-router.delete('/:id', protect, async (req, res) => {
-  try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({
-        status: 'error',
-        message: 'Only an admin can delete activity log entries.'
-      });
-    }
-
-    const activity = mongoose.isValidObjectId(req.params.id) ? await ActivityLog.findOne({ _id: req.params.id, ...scopeQueryFor(req.user) }) : null;
-
-    if (!activity) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Activity log entry not found'
-      });
-    }
-
-    await ActivityLog.findByIdAndDelete(req.params.id);
-
-    res.status(200).json({
-      status: 'success',
-      message: 'Activity log entry deleted successfully'
-    });
-
-  } catch (error) {
-    console.error('Delete activity log error:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error while deleting activity log entry'
-    });
-  }
+// @desc    Always refused. The audit trail is append-only: no user, including an
+//          admin, can delete entries through the application. Removal happens only
+//          through the retention job (scripts/audit-retention.js).
+// @access  -
+router.delete('/:id', protect, (req, res) => {
+  res.status(405).set('Allow', 'GET').json({
+    status: 'error',
+    code: 'AUDIT_IMMUTABLE',
+    message: 'Audit log entries are append-only and cannot be deleted.'
+  });
 });
 
 module.exports = router;

@@ -80,6 +80,8 @@ export default function Leaves() {
   const canEdit = hasPermission("Human Resources: Create & Edit");
   const canDecide = hasPermission("Human Resources: Manage Leaves");
   const [leaves, setLeaves] = useState<Leave[]>([]);
+  // A failed load shows as an error with Retry, never as an empty list.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<View>("all");
@@ -95,10 +97,11 @@ export default function Leaves() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      setLoadError(null);
       const res = (await apiClient.getLeaves()) as { leaves?: Leave[] };
       setLeaves(res?.leaves || []);
     } catch (error) {
-      toast({ title: "Leave requests could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -304,6 +307,8 @@ export default function Leaves() {
           footer={!loading && rows.length > 0 && <span>{plural(rows.length, "request")} · {plural(rows.reduce((s, l) => s + l.days, 0), "day")}</span>}
         >
           <DataTable
+            error={loadError}
+            onRetry={() => load()}
             columns={columns}
             rows={rows}
             rowKey={(l) => l._id}

@@ -8,6 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Panel } from "@/components/common/Panel";
 import { EmptyState } from "@/components/common/EmptyState";
+import { ErrorState } from "@/components/common/LoadState";
 import { useAuth } from "@/contexts/AuthContext";
 import apiClient from "@/lib/apiClient";
 import { useToast } from "@/hooks/use-toast";
@@ -43,6 +44,8 @@ const Portal = () => {
   const [selected, setSelected] = useState<CustomerOption | null>(null);
   const [links, setLinks] = useState<PortalLink[]>([]);
   const [loading, setLoading] = useState(true);
+  // A failed load shows as an error with Retry, never as "No portal links yet".
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [customerId, setCustomerId] = useState("");
   const [days, setDays] = useState("30");
   const [sendEmail, setSendEmail] = useState(false);
@@ -52,10 +55,11 @@ const Portal = () => {
 
   const loadLinks = useCallback(async () => {
     try {
+      setLoadError(null);
       const res = (await apiClient.getPortalAccessLinks()) as { links: PortalLink[] };
       setLinks(res.links || []);
     } catch (error) {
-      toast({ title: "Portal links could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -187,6 +191,8 @@ const Portal = () => {
           <div className="space-y-2 p-4 sm:p-5">
             {[0, 1].map((i) => <div key={i} className="h-12 animate-pulse rounded-md bg-muted" />)}
           </div>
+        ) : loadError && links.length === 0 ? (
+          <ErrorState compact error={loadError} what="portal links" onRetry={loadLinks} />
         ) : links.length === 0 ? (
           <EmptyState compact icon={Link2} title="No portal links yet" description="Create one above to give a customer access." />
         ) : (

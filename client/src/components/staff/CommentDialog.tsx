@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { fmtDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -92,7 +93,7 @@ export function CommentDialog({ open, onOpenChange, task, onCommentAdded }: Comm
   const formatCommentDate = (dateString: string) => {
     try {
       const date = new Date(dateString);
-      return date.toLocaleString();
+      return fmtDateTime(date);
     } catch {
       return "Invalid date";
     }

@@ -217,6 +217,9 @@ taskSchema.index({ userId: 1, assignedTo: 1 });
 taskSchema.index({ userId: 1, priority: 1 });
 taskSchema.index({ userId: 1, dueDate: 1 });
 taskSchema.index({ userId: 1, createdAt: -1 });
+// "My tasks" and the overdue counts in notifications and the dashboard.
+taskSchema.index({ assignedTo: 1, status: 1, dueDate: 1 });
+taskSchema.index({ dataScope: 1, status: 1, dueDate: 1 });
 taskSchema.index({ parentTask: 1 });
 taskSchema.index({ jobId: 1 });
 taskSchema.index({ dataScope: 1, assignedTo: 1, status: 1 });

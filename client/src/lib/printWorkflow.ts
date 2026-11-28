@@ -90,6 +90,20 @@ export const SHOP_FLOOR_STATUSES: JobStatus[] = [
   "completed",
 ];
 
+/** Before the order is confirmed: shown on the board's shop-floor view as one Pre-production column. */
+export const PRE_PRODUCTION_STATUSES: JobStatus[] = ["inquiry", "quotation_sent"];
+
+/** A board column that groups the pre-production stages (not a stored status). */
+export const PRE_PRODUCTION_COLUMN: string = "pre_production";
+export const PRE_PRODUCTION_STAGE: Stage = {
+  status: PRE_PRODUCTION_COLUMN as JobStatus,
+  label: "Pre-production",
+  short: "Pre-prod",
+  description: "Enquiries and quotes sent, waiting for the order",
+  phase: "sales",
+  dot: "bg-phase-sales/50",
+};
+
 export const CLOSED_STATUSES: JobStatus[] = ["delivered", "cancelled"];
 
 export const isOpen = (status?: string) => !CLOSED_STATUSES.includes(status as JobStatus) && status !== "completed";
@@ -112,10 +126,10 @@ export const dueState = (dueDate?: string | Date | null, status?: string): "over
 
 export const PRIORITY_STYLES: Record<string, { label: string; className: string; bar: string }> = {
   low: { label: "Low", className: "border-border bg-muted text-muted-foreground", bar: "bg-ink-3/50" },
-  medium: { label: "Normal", className: "border-info/25 bg-info-soft text-info-strong", bar: "bg-info" },
+  medium: { label: "Medium", className: "border-info/25 bg-info-soft text-info-strong", bar: "bg-info" },
   high: { label: "High", className: "border-primary/20 bg-primary-soft text-primary-strong", bar: "bg-primary" },
   // A rush job is amber: its tag, its edge and (on the board) its card's border
-  urgent: { label: "Rush", className: "border-amber/50 bg-warning-soft text-warning-strong", bar: "bg-amber" },
+  urgent: { label: "Urgent", className: "border-amber/50 bg-warning-soft text-warning-strong", bar: "bg-amber" },
 };
 
 export const formatINR = (amount: number, opts: { compact?: boolean } = {}) => {

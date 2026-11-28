@@ -3,6 +3,7 @@ import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, ChevronsUpDown, MoreHori
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { ErrorState, StaleDataBanner } from "@/components/common/LoadState";
 
 /** A bordered card holding a list: toolbar on top, table, footer line. */
 export function DataCard({ toolbar, footer, children, className }: { toolbar?: React.ReactNode; footer?: React.ReactNode; children: React.ReactNode; className?: string }) {
@@ -90,6 +91,25 @@ interface DataTableProps<T> {
   minWidth?: number;
   /** Start sorted by this column id. */
   defaultSort?: { id: string; dir: "asc" | "desc" };
+  /**
+   * The last load failed. With no rows the table shows the error and Retry
+   * instead of `empty` (a failed request is not "no records"); with rows from
+   * an earlier load it keeps them under a "may be out of date" notice.
+   */
+  error?: unknown;
+  onRetry?: () => void;
+  /** Noun for the error message, e.g. "invoices" */
+  errorWhat?: string;
+  /**
+   * Server-side sorting: the rows arrive already sorted for `sort`, and a
+   * header click calls onSortChange instead of re-ordering one page locally.
+   */
+  sort?: { id: string; dir: "asc" | "desc" } | null;
+  onSortChange?: (sort: { id: string; dir: "asc" | "desc" } | null) => void;
+  /** Row checkboxes for bulk actions; `selected` holds row keys. "Select page" selects the rows shown. */
+  selectable?: boolean;
+  selected?: Set<string>;
+  onSelectedChange?: (selected: Set<string>) => void;
 }
 
 /**
@@ -108,12 +128,46 @@ export function DataTable<T>({
   mobile,
   rowClassName,
   minWidth = 760,
-  defaultSort
+  defaultSort,
+  error,
+  onRetry,
+  errorWhat,
+  sort: serverSort,
+  onSortChange,
+  selectable,
+  selected,
+  onSelectedChange
 }: DataTableProps<T>) {
-  const [sort, setSort] = useState<{ id: string; dir: "asc" | "desc" } | null>(defaultSort || null);
+  const canSelect = !!(selectable && selected && onSelectedChange);
+  const pageKeys = rows.map(rowKey);
+  const allOnPage = canSelect && pageKeys.length > 0 && pageKeys.every((k) => selected!.has(k));
+  const toggleRow = (k: string) => {
+    const next = new Set(selected);
+    if (next.has(k)) next.delete(k); else next.add(k);
+    onSelectedChange!(next);
+  };
+  const togglePage = () => {
+    const next = new Set(selected);
+    if (allOnPage) pageKeys.forEach((k) => next.delete(k)); else pageKeys.forEach((k) => next.add(k));
+    onSelectedChange!(next);
+  };
+  const checkCell = (row: T) =>
+    canSelect ? (
+      <td className="w-10 px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+        <input type="checkbox" className="h-4 w-4 accent-primary" aria-label="Select row" checked={selected!.has(rowKey(row))} onChange={() => toggleRow(rowKey(row))} />
+      </td>
+    ) : null;
+  const [localSort, setLocalSort] = useState<{ id: string; dir: "asc" | "desc" } | null>(defaultSort || null);
+  const serverSide = !!onSortChange;
+  const sort = serverSide ? serverSort ?? null : localSort;
+  const setSort = (next: { id: string; dir: "asc" | "desc" } | null | ((s: { id: string; dir: "asc" | "desc" } | null) => { id: string; dir: "asc" | "desc" } | null)) => {
+    const value = typeof next === "function" ? next(sort) : next;
+    if (serverSide) onSortChange!(value);
+    else setLocalSort(value);
+  };
 
   const sorted = useMemo(() => {
-    if (!sort) return rows;
+    if (!sort || serverSide) return rows;
     const col = columns.find((c) => c.id === sort.id);
     if (!col?.sortValue) return rows;
     const val = col.sortValue;
@@ -126,7 +180,7 @@ export function DataTable<T>({
       const r = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true });
       return sort.dir === "asc" ? r : -r;
     });
-  }, [rows, sort, columns]);
+  }, [rows, sort, columns, serverSide]);
 
   const toggleSort = (id: string) =>
     setSort((s) => (s?.id !== id ? { id, dir: "asc" } : s.dir === "asc" ? { id, dir: "desc" } : null));
@@ -145,7 +199,8 @@ export function DataTable<T>({
     );
   }
 
-  if (rows.length === 0) return <>{empty}</>;
+  if (rows.length === 0) return error ? <ErrorState error={error} onRetry={onRetry} what={errorWhat} /> : <>{empty}</>;
+  const stale = error ? <StaleDataBanner className="m-3" error={error} onRetry={onRetry} /> : null;
 
   const actionsCell = (row: T) =>
     actions ? (
@@ -156,10 +211,14 @@ export function DataTable<T>({
 
   return (
     <>
+      {stale}
       {mobile && (
         <ul className="divide-y md:hidden">
           {sorted.map((row) => (
             <li key={rowKey(row)} className="flex items-start gap-2">
+              {canSelect && (
+                <input type="checkbox" className="ml-3 mt-4 h-4 w-4 accent-primary" aria-label="Select row" checked={selected!.has(rowKey(row))} onChange={() => toggleRow(rowKey(row))} />
+              )}
               <div
                 role={onRowClick ? "button" : undefined}
                 tabIndex={onRowClick ? 0 : undefined}
@@ -182,6 +241,11 @@ export function DataTable<T>({
         <table className="w-full text-sm" style={{ minWidth }}>
           <thead>
             <tr className="border-b bg-background">
+              {canSelect && (
+                <th className="w-10 px-3">
+                  <input type="checkbox" className="h-4 w-4 accent-primary" aria-label="Select all rows on this page" checked={allOnPage} onChange={togglePage} />
+                </th>
+              )}
               {columns.map((c) => {
                 const active = sort?.id === c.id;
                 return (
@@ -224,6 +288,7 @@ export function DataTable<T>({
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
                 className={cn("transition-colors duration-200", onRowClick && "cursor-pointer hover:bg-muted", rowClassName?.(row))}
               >
+                {checkCell(row)}
                 {columns.map((c) => (
                   <td key={c.id} className={cn("px-4 py-2.5 align-middle", ALIGN[c.align || "left"], c.align === "right" && "num font-mono", c.hideBelow && HIDE[c.hideBelow], c.className)}>
                     {c.cell(row)}

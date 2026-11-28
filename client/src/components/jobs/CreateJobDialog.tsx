@@ -9,6 +9,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
+import { unitPriceForTotal } from "@/lib/lineTotal";
+import { EditableLineTotal } from "./EditableLineTotal";
+import { normalizePriority } from "@/lib/priority";
 import apiClient from "@/lib/apiClient";
 import { Plus, Trash2 } from "lucide-react";
 import { JobInvoiceDialog } from "./JobInvoiceDialog";
@@ -17,10 +20,11 @@ import { UNITS_OF_MEASUREMENT } from "../inventory/CreateItemDialog";
 import { CustomerTypePicker } from "../customers/CustomerTypePicker";
 import { CustomerSearch, customerIdOf } from "../customers/CustomerSearch";
 import { StockAvailability, StockCheckList } from "../billing/StockAvailability";
-import { sellingRate, stockItemNamed, stockNeeded, unitText, type StockItem } from "../billing/stock";
+import { qtyText, sellingRate, stockItemNamed, stockNeeded, unitText, type StockItem } from "../billing/stock";
 import { HSN_PATTERN, draftTotals, jobItemPieces, lineDraftFromJobItem } from "../billing/lineDraft";
 import { localDate } from "@/lib/format";
 import { priceLine } from "@/lib/billing";
+import { paperStock, withPaperLine } from "@/lib/paperStock";
 
 const AREA_UNITS = ['sqft', 'sqm'];
 
@@ -50,6 +54,31 @@ const storedDimension = (value: string, unit: 'ft' | 'in') => {
     : undefined;
 };
 
+const money = (n: number) => `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** What picking the paper did: the rate × sheets line it added, or why it added none. */
+function PaperHint({ paperType, paper, line, hasPaperStock }: {
+  paperType: string;
+  paper?: StockItem;
+  line?: { quantity: number; unitPrice: number; gstRate: number };
+  hasPaperStock: boolean;
+}) {
+  let text: React.ReactNode = null;
+  if (paper && line && line.quantity > 0) {
+    const unit = unitText(paper.unit) || "unit";
+    const amount = line.quantity * (Number(line.unitPrice) || 0);
+    text = Number(line.unitPrice) > 0
+      ? <>{qtyText(line.quantity)} {unit} × {money(Number(line.unitPrice))} per {unit} = <span className="font-medium text-foreground">{money(amount)}</span>{line.gstRate ? ` + ${line.gstRate}% GST` : ""} · added to Inventory Items below; the invoice takes it out of stock.</>
+      : <>This paper has no selling price yet. Enter the rate on its line under Inventory Items, or set a selling price on the stock item.</>;
+  } else if (paper) {
+    text = <>Enter the {unitText(paper.unit) || "quantity"} used to add {paper.name} at {money(sellingRate(paper))} per {unitText(paper.unit) || "unit"}. {qtyText(paper.quantity || 0)} in stock.</>;
+  } else if (paperType.trim() && hasPaperStock) {
+    text = <>Not a stock item: the rate is not filled in and no stock is taken. Pick a paper from the list to price it per sheet.</>;
+  }
+  if (!text) return null;
+  return <p id="specPaperHint" className="mt-2 text-xs text-muted-foreground" aria-live="polite">{text}</p>;
+}
+
 interface CreateJobDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -57,6 +86,11 @@ interface CreateJobDialogProps {
   customers?: any[];
   onCustomersUpdate?: () => void;
   preselectedCustomer?: any;
+  /** A full job (from GET /jobs/:id) to edit instead of creating a new one. */
+  editingJob?: any;
+  /** Set when the job is billed or finished: only title, priority, date and notes are saved. */
+  editLockedReason?: string;
+  onJobUpdated?: () => void;
 }
 
 interface InvoiceItem {
@@ -76,6 +110,8 @@ interface InvoiceItem {
   dimensionUnit?: 'ft' | 'in';
   lengthInput?: string;
   widthInput?: string;
+  /** The line for the paper picked in the print specification (not saved). */
+  fromPaper?: boolean;
 }
 
 // Saved on the job as `printSpecs` (backend/src/models/Job.js)
@@ -83,6 +119,8 @@ const EMPTY_PRINT_SPECS = {
   quantity: "",
   printSize: "",
   paperType: "",
+  /** Sheets of the paper, when it is a stock item (adds the paper line to the items) */
+  sheets: "",
   colorType: "color",
   lamination: "",
   binding: "",
@@ -118,7 +156,10 @@ export function CreateJobDialog({
   onJobCreated,
   customers = [],
   preselectedCustomer,
-  onCustomersUpdate
+  onCustomersUpdate,
+  editingJob,
+  editLockedReason,
+  onJobUpdated
 }: CreateJobDialogProps) {
   const [formData, setFormData] = useState({
     title: "",
@@ -138,7 +179,8 @@ export function CreateJobDialog({
   const [selectedCustomer, setSelectedCustomer] = useState<any>(preselectedCustomer || null);
   const [showAddCustomerForm, setShowAddCustomerForm] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState<{ [key: number]: boolean }>({});
-  const [inventoryItems, setInventoryItems] = useState<(StockItem & { gstRate?: number })[]>([]);
+  const [tableView, setTableView] = useState(false);
+  const [inventoryItems, setInventoryItems] = useState<(StockItem & { gstRate?: number; category?: string })[]>([]);
   const [hsnCodes, setHsnCodes] = useState<any[]>([]);
   const [sacCodes, setSacCodes] = useState<any[]>([]);
   const [newCustomerData, setNewCustomerData] = useState({
@@ -198,6 +240,39 @@ export function CreateJobDialog({
     }
   };
 
+  // Editing: load the saved job into the form each time the dialog opens on one.
+  useEffect(() => {
+    if (!open || !editingJob) return;
+    const job = editingJob;
+    const customer = typeof job.customerId === 'object' && job.customerId ? job.customerId : null;
+    if (customer) setSelectedCustomer({ ...customer, id: customer._id || customer.id });
+    const paperName = job.printSpecs?.sheets > 0 ? job.printSpecs?.paperType : undefined;
+    setFormData({
+      title: job.title || "",
+      description: job.description || "",
+      customerId: String(customer?._id || customer?.id || job.customerId || ""),
+      priority: normalizePriority(job.priority) as 'low' | 'medium' | 'high',
+      status: job.status || "inquiry",
+      estimatedCost: job.estimatedCost ? String(job.estimatedCost) : "",
+      dueDate: job.dueDate ? String(job.dueDate).slice(0, 10) : "",
+      notes: job.notes || "",
+      items: (job.items || []).map((it: InvoiceItem, idx: number) => ({
+        ...it,
+        dimensionUnit: 'ft' as const,
+        lengthInput: it.length ? String(it.length) : '',
+        widthInput: it.width ? String(it.width) : '',
+        fromPaper: !!paperName && it.itemName === paperName && (job.items || []).findIndex((x: InvoiceItem) => x.itemName === paperName) === idx
+      })),
+      designCharge: job.designCharge && job.designCharge.amount > 0 ? job.designCharge : null,
+      printSpecs: {
+        ...EMPTY_PRINT_SPECS,
+        ...(job.printSpecs || {}),
+        quantity: job.printSpecs?.quantity ? String(job.printSpecs.quantity) : "",
+        sheets: job.printSpecs?.sheets ? String(job.printSpecs.sheets) : "",
+      }
+    });
+  }, [open, editingJob]);
+
   // Update selected customer when preselectedCustomer changes
   useEffect(() => {
     if (preselectedCustomer) {
@@ -210,34 +285,32 @@ export function CreateJobDialog({
   }, [preselectedCustomer]);
 
   // Invoice Items Functions
+  const blankItem = (): InvoiceItem => ({
+    itemName: '',
+    description: '',
+    quantity: 1,
+    unitPrice: '' as any,
+    hsnCode: '',
+    gstRate: 18,
+    itemTotal: 0,
+    itemType: 'Numbers',
+    unit: 'pieces',
+    length: undefined,
+    width: undefined,
+    totalSquareFeet: 0,
+    dimensionUnit: 'ft'
+  });
+
   const addItem = () => {
-    setFormData(prev => ({
-      ...prev,
-      items: [
-        ...prev.items,
-        {
-          itemName: '',
-          description: '',
-          quantity: 1,
-          unitPrice: '' as any,
-          hsnCode: '',
-          gstRate: 18,
-          itemTotal: 0,
-          itemType: 'Numbers',
-          unit: 'pieces',
-          length: undefined,
-          width: undefined,
-          totalSquareFeet: 0,
-          dimensionUnit: 'ft'
-        }
-      ]
-    }));
+    setFormData(prev => ({ ...prev, items: [...prev.items, blankItem()] }));
   };
 
   const removeItem = (index: number) => {
     setFormData(prev => ({
       ...prev,
-      items: prev.items.filter((_, i) => i !== index)
+      items: prev.items.filter((_, i) => i !== index),
+      // Removing the paper line takes its sheets off the print specification too.
+      printSpecs: prev.items[index]?.fromPaper ? { ...prev.printSpecs, sheets: "" } : prev.printSpecs
     }));
     setShowSuggestions(prev => {
       const newState = { ...prev };
@@ -249,12 +322,36 @@ export function CreateJobDialog({
   const updateItem = (index: number, field: keyof InvoiceItem, value: any) => {
     setFormData(prev => {
       const newItems = [...prev.items];
+      const wasPaper = newItems[index]?.fromPaper;
       newItems[index] = { ...newItems[index], [field]: value };
+      // Renaming the paper line makes it an ordinary line.
+      if (wasPaper && field === 'itemName') newItems[index].fromPaper = false;
 
       newItems[index] = priceJobItem(newItems[index]);
 
-      return { ...prev, items: newItems };
+      // The paper line's quantity is the print specification's sheets.
+      const printSpecs = wasPaper && field === 'quantity'
+        ? { ...prev.printSpecs, sheets: value ? String(value) : "" }
+        : wasPaper && field === 'itemName' ? { ...prev.printSpecs, sheets: "" } : prev.printSpecs;
+
+      return { ...prev, items: newItems, printSpecs };
     });
+  };
+
+  // Typing a line's total (incl. GST) sets the unit price that gives it.
+  const setItemTotal = (index: number, total: number) => {
+    const item = formData.items[index];
+    if (!item) return;
+    const isArea = item.itemType === 'Square Feet';
+    const solved = unitPriceForTotal({ total, gstRate: Number(item.gstRate) || 0, quantity: item.quantity, unit: isArea ? item.unit : undefined, length: item.length, width: item.width });
+    if (!solved) {
+      toast({ title: "Total not applied", description: total > 0 ? (isArea ? "Enter the length, width and pieces first." : "Enter the quantity first.") : "The total must be more than ₹0.", variant: "destructive" });
+      return;
+    }
+    updateItem(index, 'unitPrice', solved.unitPrice);
+    if (!solved.exact) {
+      toast({ title: `Closest total is ₹${solved.total.toFixed(2)}`, description: `₹${total.toFixed(2)} can't be reached exactly with this quantity and GST, so the unit price is ₹${solved.unitPrice}.` });
+    }
   };
 
   // Switching between a count unit and an area unit changes which fields the
@@ -280,6 +377,28 @@ export function CreateJobDialog({
   const updateDimension = (index: number, field: 'length' | 'width', value: string, unit: 'ft' | 'in') => {
     updateItem(index, field, storedDimension(value, unit));
     updateItem(index, field === 'length' ? 'lengthInput' : 'widthInput', value);
+  };
+
+  const selectInventoryItem = (index: number, invItem: StockItem & { gstRate?: number }) => {
+    setFormData(prev => {
+      const newItems = [...prev.items];
+      const invUnit = invItem.unit || 'pieces';
+      const isAreaUnit = AREA_UNITS.includes(invUnit);
+      newItems[index] = priceJobItem({
+        ...newItems[index],
+        itemName: invItem.name,
+        unitPrice: sellingRate(invItem),
+        hsnCode: invItem.hsnCode || undefined,
+        gstRate: invItem.gstRate || 18,
+        unit: invUnit,
+        itemType: isAreaUnit ? 'Square Feet' : 'Numbers',
+        length: isAreaUnit ? newItems[index].length : undefined,
+        width: isAreaUnit ? newItems[index].width : undefined,
+        totalSquareFeet: isAreaUnit ? newItems[index].totalSquareFeet || 0 : 0,
+        quantity: newItems[index].quantity || 1,
+      });
+      return { ...prev, items: newItems };
+    });
   };
 
   const handleCustomerSelect = (customer: any) => {
@@ -578,6 +697,7 @@ export function CreateJobDialog({
           dimensionUnit: undefined,
           lengthInput: undefined,
           widthInput: undefined,
+          fromPaper: undefined,
           itemName: item.itemName.trim(),
           description: (item.description || '').trim()
         })),
@@ -585,8 +705,23 @@ export function CreateJobDialog({
         printSpecs: {
           ...formData.printSpecs,
           quantity: Number(formData.printSpecs.quantity) || 1,
+          // Sheets only mean something for a stock paper (its line carries them).
+          sheets: formData.items.some((i) => i.fromPaper) ? Number(formData.printSpecs.sheets) : undefined,
         }
       };
+
+      if (editingJob) {
+        const id = editingJob._id || editingJob.id;
+        // A billed or finished job keeps its billing fields; send only what can change.
+        const payload = editLockedReason
+          ? { title: jobData.title, description: jobData.description, customerId: jobData.customerId, priority: jobData.priority, dueDate: jobData.dueDate, notes: jobData.notes }
+          : jobData;
+        await apiClient.updateJob(id, payload);
+        toast({ title: "Job updated", description: `${jobData.title} was saved` });
+        onOpenChange(false);
+        (onJobUpdated || onJobCreated)();
+        return;
+      }
 
       const response = await apiClient.createJob(jobData);
 
@@ -618,8 +753,8 @@ export function CreateJobDialog({
       setSelectedCustomer(null);
       setShowSuggestions({});
     } catch (error: any) {
-      console.error('Error creating job:', error);
-      const errorMessage = error?.message || "Failed to create job";
+      console.error('Error saving job:', error);
+      const errorMessage = error?.message || (editingJob ? "Failed to update job" : "Failed to create job");
       const errorDetails = error?.errors?.join(", ") || errorMessage;
 
       toast({
@@ -674,16 +809,31 @@ export function CreateJobDialog({
   const setPrintSpec = (field: keyof typeof EMPTY_PRINT_SPECS, value: string) =>
     setFormData(prev => ({ ...prev, printSpecs: { ...prev.printSpecs, [field]: value } }));
 
+  // Paper from inventory: picking one and entering the sheets puts the paper
+  // on the items at its selling rate per sheet (lib/paperStock.ts).
+  const papers = paperStock(inventoryItems);
+  const pickedPaper = stockItemNamed(papers, formData.printSpecs.paperType);
+  const paperLine = formData.items.find((i) => i.fromPaper);
+  const setPaper = (paperType: string, sheetsText: string) =>
+    setFormData(prev => {
+      const paper = stockItemNamed(paperStock(inventoryItems), paperType);
+      const sheets = Number(sheetsText) || 0;
+      const items = withPaperLine(prev.items, paper, paper ? sheets : 0, (p) => sellingRate(p), blankItem).map((i) => (i.fromPaper ? priceJobItem(i) : i));
+      return { ...prev, items, printSpecs: { ...prev.printSpecs, paperType, sheets: sheetsText } };
+    });
+
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="w-[95vw] max-w-[1200px] max-h-[90vh] overflow-y-auto" onKeyDown={createJobOnEnter}>
           <DialogHeader>
             <DialogTitle className="text-lg sm:text-xl">
-              {preselectedCustomer ? `New Job Ticket for ${preselectedCustomer.name}` : 'New Job Ticket'}
+              {editingJob ? `Edit Job Ticket — ${editingJob.title || ''}` : preselectedCustomer ? `New Job Ticket for ${preselectedCustomer.name}` : 'New Job Ticket'}
             </DialogTitle>
             <DialogDescription className="text-sm">
-              {preselectedCustomer
+              {editingJob
+                ? (editLockedReason || 'Change the order, print specification, paper, cost, priority, delivery date or instructions.')
+                : preselectedCustomer
                 ? `Create a new job for ${preselectedCustomer.name}. Customer is pre-selected and cannot be changed.`
                 : 'Capture the order, its print specification and the delivery date.'
               }
@@ -933,12 +1083,32 @@ export function CreateJobDialog({
                     id="specPaper"
                     list="paper-stock-options"
                     value={formData.printSpecs.paperType}
-                    onChange={(e) => setPrintSpec("paperType", e.target.value)}
+                    onChange={(e) => setPaper(e.target.value, formData.printSpecs.sheets)}
                     placeholder="e.g. Art Card 300 GSM"
+                    aria-describedby="specPaperHint"
                   />
                   <datalist id="paper-stock-options">
-                    {PAPER_SUGGESTIONS.map((p) => <option key={p} value={p} />)}
+                    {papers.length > 0
+                      ? papers.map((p) => <option key={p._id || p.id || p.name} value={p.name}>{`${qtyText(p.quantity || 0)} ${unitText(p.unit)} in stock · ₹${sellingRate(p)} per ${unitText(p.unit) || 'unit'}`}</option>)
+                      : PAPER_SUGGESTIONS.map((p) => <option key={p} value={p} />)}
                   </datalist>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="specSheets" className="text-xs">
+                    {pickedPaper && pickedPaper.unit && pickedPaper.unit !== 'sheets' ? `Paper used (${unitText(pickedPaper.unit)})` : 'Sheets'}
+                  </Label>
+                  <Input
+                    id="specSheets"
+                    type="number"
+                    min="0"
+                    step="any"
+                    inputMode="decimal"
+                    value={formData.printSpecs.sheets}
+                    onChange={(e) => setPaper(formData.printSpecs.paperType, e.target.value)}
+                    disabled={!pickedPaper}
+                    placeholder={pickedPaper ? "e.g. 250" : "Pick a paper from stock"}
+                    aria-describedby="specPaperHint"
+                  />
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs">Colours</Label>
@@ -983,6 +1153,12 @@ export function CreateJobDialog({
                   />
                 </div>
               </div>
+              <PaperHint
+                paperType={formData.printSpecs.paperType}
+                paper={pickedPaper}
+                line={paperLine}
+                hasPaperStock={papers.length > 0}
+              />
               {stockRows.some((r) => r.item) && (
                 <div className="mt-4 space-y-1.5">
                   <div className="text-xs font-medium text-muted-foreground">Stock for this job</div>
@@ -1005,84 +1181,121 @@ export function CreateJobDialog({
             {/* Invoice Items Section */}
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center justify-between text-base">
-                  <span>Inventory Items</span>
-                  <Button type="button" onClick={addItem} size="sm">
-                    <Plus className="h-4 w-4" />
-                    Add Item
-                  </Button>
-                </CardTitle>
+                <CardTitle className="text-base">Inventory Items</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
+                {tableView ? (
+                  <div className="overflow-x-auto rounded-lg border" role="region" aria-label="Inventory items table" tabIndex={0}>
+                    <table className="w-full min-w-[1700px] table-fixed text-sm">
+                      <colgroup>
+                        <col className="w-[250px]" /><col className="w-[150px]" />
+                        <col className="w-[120px]" /><col className="w-[120px]" /><col className="w-[100px]" />
+                        <col className="w-[100px]" /><col className="w-[120px]" /><col className="w-[110px]" />
+                        <col className="w-[90px]" /><col className="w-[130px]" /><col className="w-[220px]" />
+                      </colgroup>
+                      <thead className="bg-muted/50 text-left text-xs font-medium text-muted-foreground">
+                        <tr>
+                          {['Item name', 'Unit', 'Length', 'Width', 'Area', 'Qty / copies', 'Unit price', 'HSN code', 'GST %', 'Net amount', 'Note'].map((heading) => (
+                            <th key={heading} scope="col" className="border-b px-2 py-3">{heading}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {formData.items.map((item, index) => {
+                          const isArea = item.itemType === 'Square Feet';
+                          const dimensionUnit = item.unit === 'sqm' ? 'm' : item.dimensionUnit || 'ft';
+                          const stock = stockItemNamed(inventoryItems, item.itemName);
+                          return (
+                            <tr key={index} className="align-top even:bg-muted/20">
+                              <td className="border-b p-2">
+                                <SuggestionPopover
+                                  open={!!showSuggestions[index]}
+                                  onOpenChange={(next) => setShowSuggestions(prev => ({ ...prev, [index]: next }))}
+                                  items={(() => {
+                                    const query = item.itemName.trim().toLowerCase();
+                                    return (query ? inventoryItems.filter(inv => inv.name.toLowerCase().includes(query)) : inventoryItems).slice(0, MAX_SUGGESTIONS);
+                                  })()}
+                                  getKey={(invItem) => invItem._id || invItem.id || invItem.name}
+                                  onSelect={(invItem) => selectInventoryItem(index, invItem)}
+                                  listLabel="Inventory items"
+                                  empty={<div className="p-2 text-sm text-muted-foreground">{inventoryItems.length === 0 ? 'No inventory items available' : 'No matching inventory item — will be added as a custom item'}</div>}
+                                  renderItem={(invItem) => (
+                                    <div className="flex flex-col items-start">
+                                      <span className="font-medium">{invItem.name}</span>
+                                      <span className="text-xs text-muted-foreground">In stock: {invItem.quantity || 0} {unitText(invItem.unit)} · ₹{sellingRate(invItem)}</span>
+                                    </div>
+                                  )}
+                                >
+                                  <Input
+                                    aria-label={`Item ${index + 1} name`}
+                                    value={item.itemName}
+                                    onChange={(e) => { updateItem(index, 'itemName', e.target.value); setShowSuggestions(prev => ({ ...prev, [index]: true })); }}
+                                    onFocus={() => setShowSuggestions(prev => ({ ...prev, [index]: true }))}
+                                    placeholder="Type or pick item"
+                                    autoComplete="off"
+                                  />
+                                </SuggestionPopover>
+                                {stock && <StockAvailability className="mt-1" item={stock} needed={stockNeededFor(item, stock.unit)} />}
+                              </td>
+                              <td className="border-b p-2">
+                                <Select value={item.unit || 'pieces'} onValueChange={(value) => changeItemUnit(index, value)}>
+                                  <SelectTrigger aria-label={`Item ${index + 1} unit`}><SelectValue placeholder="Unit" /></SelectTrigger>
+                                  <SelectContent>{UNITS_OF_MEASUREMENT.map((unit) => <SelectItem key={unit.value} value={unit.value}>{unit.label}</SelectItem>)}</SelectContent>
+                                </Select>
+                              </td>
+                              <td className="border-b p-2">
+                                {isArea ? <>
+                                  <Input aria-label={`Item ${index + 1} length in ${dimensionUnit}`} type="number" min="0" step="any" value={item.unit === 'sqft' ? item.lengthInput ?? shownDimension(item.length, item.dimensionUnit || 'ft') : item.length || ''} onChange={(e) => item.unit === 'sqft' ? updateDimension(index, 'length', e.target.value, item.dimensionUnit || 'ft') : updateItem(index, 'length', parseFloat(e.target.value) || undefined)} />
+                                  {item.unit === 'sqft' && <Select value={item.dimensionUnit || 'ft'} onValueChange={(value: 'ft' | 'in') => changeDimensionUnit(index, value)}><SelectTrigger aria-label={`Item ${index + 1} dimension unit`} className="mt-1 h-7 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="ft">Feet</SelectItem><SelectItem value="in">Inches</SelectItem></SelectContent></Select>}
+                                </> : <span className="block py-2 text-center text-muted-foreground">—</span>}
+                              </td>
+                              <td className="border-b p-2">{isArea ? <Input aria-label={`Item ${index + 1} width in ${dimensionUnit}`} type="number" min="0" step="any" value={item.unit === 'sqft' ? item.widthInput ?? shownDimension(item.width, item.dimensionUnit || 'ft') : item.width || ''} onChange={(e) => item.unit === 'sqft' ? updateDimension(index, 'width', e.target.value, item.dimensionUnit || 'ft') : updateItem(index, 'width', parseFloat(e.target.value) || undefined)} /> : <span className="block py-2 text-center text-muted-foreground">—</span>}</td>
+                              <td className="border-b px-2 py-4 text-right tabular-nums">{isArea ? `${(item.totalSquareFeet || 0).toFixed(2)} ${item.unit === 'sqm' ? 'sq m' : 'sq ft'}` : '—'}</td>
+                              <td className="border-b p-2"><Input aria-label={`Item ${index + 1} quantity`} type="number" min={isArea ? '1' : '0'} step={isArea ? '1' : 'any'} value={item.quantity || ''} onChange={(e) => updateItem(index, 'quantity', isArea ? Math.max(0, Math.floor(Number(e.target.value) || 0)) : parseFloat(e.target.value) || 0)} /></td>
+                              <td className="border-b p-2"><Input aria-label={`Item ${index + 1} unit price`} type="number" min="0" step="0.01" value={item.unitPrice} onChange={(e) => updateItem(index, 'unitPrice', parseFloat(e.target.value) || 0)} /></td>
+                              <td className="border-b p-2"><Input aria-label={`Item ${index + 1} HSN code`} list="job-hsn-options" inputMode="numeric" placeholder="e.g. 4911" value={item.hsnCode || ''} onChange={(e) => updateItem(index, 'hsnCode', e.target.value.replace(/\D/g, '').slice(0, 8) || undefined)} /></td>
+                              <td className="border-b p-2"><Input aria-label={`Item ${index + 1} GST percentage`} type="number" min="0" max="100" step="0.01" value={item.gstRate} onChange={(e) => updateItem(index, 'gstRate', parseFloat(e.target.value) || 0)} /></td>
+                              <td className="border-b px-2 py-3"><div className="flex items-center justify-between gap-1"><EditableLineTotal value={item.itemTotal} label={`Item ${index + 1} total including GST`} onCommit={(t) => setItemTotal(index, t)} className="-ml-1.5" /><Button type="button" variant="ghost" size="icon" aria-label={`Remove item ${index + 1}`} onClick={() => removeItem(index)}><Trash2 className="h-4 w-4" /></Button></div></td>
+                              <td className="border-b p-2"><Input aria-label={`Item ${index + 1} note`} value={item.description || ''} onChange={(e) => updateItem(index, 'description', e.target.value)} placeholder="Finish, colour…" maxLength={500} /></td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                <>
                 {formData.items.map((item, index) => (
-                  <div key={index} className={`grid grid-cols-1 gap-2 p-4 border rounded-lg ${item.itemType === 'Square Feet' ? 'md:grid-cols-9' : 'md:grid-cols-8'}`}>
-                    <div className="space-y-1">
-                      <Label className="text-xs">Item Name</Label>
+                  <div key={index} className="grid grid-cols-1 gap-2 rounded-lg border p-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="space-y-1 sm:col-span-2">
+                      <Label htmlFor={`job-item-${index}`} className="text-xs">Item Name</Label>
                       <SuggestionPopover
-                        // Suggestions only once something is typed.
-                        open={!!showSuggestions[index] && !!item.itemName}
+                        open={!!showSuggestions[index]}
                         onOpenChange={(next) => setShowSuggestions(prev => ({ ...prev, [index]: next }))}
-                        items={inventoryItems
-                          .filter(inv => inv.name.toLowerCase().includes(item.itemName.toLowerCase()))
-                          .slice(0, MAX_SUGGESTIONS)}
+                        items={(() => {
+                          const query = item.itemName.trim().toLowerCase();
+                          return (query ? inventoryItems.filter(inv => inv.name.toLowerCase().includes(query)) : inventoryItems).slice(0, MAX_SUGGESTIONS);
+                        })()}
                         getKey={(invItem) => invItem._id || invItem.id || invItem.name}
-                        onSelect={(invItem) => {
-                          setFormData(prev => {
-                            const newItems = [...prev.items];
-                            const invUnit = invItem.unit || 'pieces';
-                            const isAreaUnit = AREA_UNITS.includes(invUnit);
-
-                            newItems[index] = {
-                              ...newItems[index],
-                              itemName: invItem.name,
-                              unitPrice: sellingRate(invItem),
-                              hsnCode: invItem.hsnCode || undefined,
-                              gstRate: invItem.gstRate || 18,
-                              unit: invUnit,
-                              itemType: isAreaUnit ? 'Square Feet' : 'Numbers',
-                              length: isAreaUnit ? newItems[index].length : undefined,
-                              width: isAreaUnit ? newItems[index].width : undefined,
-                              totalSquareFeet: isAreaUnit ? (newItems[index].totalSquareFeet || 0) : 0,
-                            };
-
-                            if (!newItems[index].quantity) newItems[index].quantity = 1;
-                            newItems[index] = priceJobItem(newItems[index]);
-
-                            return { ...prev, items: newItems };
-                          });
-                        }}
+                        onSelect={(invItem) => selectInventoryItem(index, invItem)}
                         listLabel="Inventory items"
-                        itemClassName="p-3"
                         empty={
-                          inventoryItems.length === 0 ? (
-                            <div className="p-4 text-center">
-                              <div className="text-muted-foreground text-sm">
-                                No inventory items available
-                              </div>
-                              <div className="text-muted-foreground/70 text-xs mt-1">
-                                Add items in Inventory section first
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="p-4 text-center text-muted-foreground text-sm">
-                              Inventory does not have this item
-                            </div>
-                          )
+                          <div className="p-2 text-sm text-muted-foreground">
+                            {inventoryItems.length === 0 ? "No inventory items available" : "No matching inventory item — will be added as a custom item"}
+                          </div>
                         }
                         renderItem={(invItem) => (
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <div className="font-medium">{invItem.name}</div>
-                              <div className="text-sm text-muted-foreground">{invItem.description || 'No description'}</div>
-                            </div>
-                            <div className="text-right text-sm">
-                              <div className="font-medium">₹{sellingRate(invItem)}</div>
-                              <div className="text-muted-foreground">In stock: {invItem.quantity || 0} {unitText(invItem.unit)}</div>
-                            </div>
+                          <div className="flex flex-col items-start">
+                            <span className="font-medium">{invItem.name}</span>
+                            <span className="text-xs text-muted-foreground">
+                              In stock: {invItem.quantity || 0} {unitText(invItem.unit)} · ₹{sellingRate(invItem)}
+                              {invItem.hsnCode ? ` · HSN ${invItem.hsnCode}` : ''}
+                            </span>
                           </div>
                         )}
                       >
                         <Input
+                          id={`job-item-${index}`}
                           value={item.itemName}
                           onChange={(e) => {
                             updateItem(index, 'itemName', e.target.value);
@@ -1091,8 +1304,8 @@ export function CreateJobDialog({
                           onFocus={() => {
                             setShowSuggestions(prev => ({ ...prev, [index]: true }));
                           }}
-                          placeholder="Type item name"
-                          className="pr-8"
+                          placeholder="Type or pick an inventory item"
+                          autoComplete="off"
                         />
                       </SuggestionPopover>
                     </div>
@@ -1257,7 +1470,7 @@ export function CreateJobDialog({
                           </span>
                         )}
                         <div className="flex items-center space-x-1 w-full">
-                          <span className="text-sm font-medium">₹{item.itemTotal.toFixed(2)}</span>
+                          <EditableLineTotal value={item.itemTotal} label={`Item ${index + 1} total including GST`} onCommit={(t) => setItemTotal(index, t)} className="-ml-1.5" />
                           <Button
                             type="button"
                             variant="ghost"
@@ -1271,7 +1484,7 @@ export function CreateJobDialog({
                       </div>
                     </div>
 
-                    <div className={`space-y-1 ${item.itemType === 'Square Feet' ? 'md:col-span-9' : 'md:col-span-8'}`}>
+                    <div className="space-y-1 sm:col-span-2 lg:col-span-4">
                       <Label htmlFor={`job-note-${index}`} className="text-xs">Note for this item</Label>
                       <Input
                         id={`job-note-${index}`}
@@ -1283,10 +1496,12 @@ export function CreateJobDialog({
                     </div>
                     {(() => {
                       const stock = stockItemNamed(inventoryItems, item.itemName);
-                      return stock ? <StockAvailability className={item.itemType === 'Square Feet' ? 'md:col-span-9' : 'md:col-span-8'} item={stock} needed={stockNeededFor(item, stock.unit)} /> : null;
+                      return stock ? <StockAvailability className="sm:col-span-2 lg:col-span-4" item={stock} needed={stockNeededFor(item, stock.unit)} /> : null;
                     })()}
                   </div>
                 ))}
+                </>
+                )}
                 <datalist id="job-hsn-options">
                   {hsnCodes.map((hsn) => (
                     <option key={hsn._id || hsn.id} value={hsn.hsnCode}>{hsn.description}</option>
@@ -1295,9 +1510,18 @@ export function CreateJobDialog({
 
                 {formData.items.length === 0 && (
                   <div className="text-center py-8 text-muted-foreground">
-                    No items added yet. Click "Add Item" to get started.
+                    No inventory items added. You can bill a design charge on its own.
                   </div>
                 )}
+                <div className="flex justify-end gap-2">
+                  <Button type="button" variant="outline" size="sm" aria-pressed={tableView} onClick={() => { setShowSuggestions({}); setTableView((current) => !current); }}>
+                    {tableView ? 'Card View' : 'Table View'}
+                  </Button>
+                  <Button type="button" onClick={addItem} size="sm">
+                    <Plus className="h-4 w-4" />
+                    Add Item
+                  </Button>
+                </div>
               </CardContent>
             </Card>
 
@@ -1450,7 +1674,10 @@ export function CreateJobDialog({
               )}
             </Card>
 
-            {/* Total Amount Summary */}
+            {/* Total Amount Summary — only when there is something to total.
+                Rendered unconditionally it showed as an empty grey box above
+                the buttons on a new job ticket. */}
+            {(formData.items.length > 0 || !!formData.designCharge) && (
             <Card className="bg-muted/50">
               <CardContent className="pt-6">
                 <div className="space-y-3">
@@ -1487,13 +1714,14 @@ export function CreateJobDialog({
                 </div>
               </CardContent>
             </Card>
+            )}
 
             <DialogFooter className="flex flex-col sm:flex-row gap-2 sm:gap-0 sm:justify-end">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)} className="w-full sm:w-auto">
                 Cancel
               </Button>
               <Button ref={submitButtonRef} type="submit" disabled={loading || !formData.customerId} className="w-full sm:w-auto">
-                {loading ? "Creating..." : "Create Job"}
+                {loading ? (editingJob ? "Saving..." : "Creating...") : (editingJob ? "Save Changes" : "Create Job")}
               </Button>
             </DialogFooter>
           </form>

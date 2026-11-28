@@ -6,6 +6,8 @@ const Invoice = require('../models/Invoice');
 const Payment = require('../models/Payment');
 const Customer = require('../models/Customer');
 const Job = require('../models/Job');
+const Delivery = require('../models/Delivery');
+const WalkInJob = require('../models/WalkInJob');
 const HsnCode = require('../models/HsnCode');
 const Settings = require('../models/Settings');
 const { settingsOwnerId, businessSettings } = require('../utils/businessSettings');
@@ -13,7 +15,9 @@ const ActivityLog = require('../models/ActivityLog');
 const PDFService = require('../services/PDFService');
 const InventoryService = require('../services/InventoryService');
 const { createInvoiceWithStock } = require('../services/invoiceCreation');
+const { issueInvoice, IssueError } = require('../services/invoiceIssue');
 const ledger = require('../services/paymentLedger');
+const { releaseQuotationForInvoice } = require('../services/quotationLink');
 const { protect } = require('../middleware/auth');
 const { requirePermission, userCan } = require('../middleware/requirePermission');
 const { parseDesignCharge, parseGstRate, priceInvoiceDocument, HSN_PATTERN } = require('../utils/billing');
@@ -22,24 +26,48 @@ const { parseDesignCharge, parseGstRate, priceInvoiceDocument, HSN_PATTERN } = r
 // "Invoicing (View No GST)".
 const noGstVisibility = (user) => (userCan(user, 'Invoicing (View No GST)') ? {} : { noGst: { $ne: true } });
 const { staffScopeQuery } = require('../utils/dataScopeHelper');
-const { orgScope } = require('../utils/accessScope');
+const { orgScope, orgMemberIds } = require('../utils/accessScope');
 const { jobScope } = require('../utils/jobAccess');
 const { sendWhatsAppMessage, buildTemplateVariables } = require('../utils/metaWhatsApp');
 
+const { idempotent } = require('../middleware/idempotency');
+
+const { resolveLinePrices, PricingError } = require('../services/pricingService');
+
 const router = express.Router();
 
-// A successful delivery issues a draft. Keep the delivery response successful
-// even if this follow-up write fails: the message has already left the system.
-async function markIssuedAfterDelivery(invoice) {
-  if (invoice.status !== 'draft') return true;
-  try {
-    const result = await Invoice.updateOne({ _id: invoice._id, status: 'draft' }, { $set: { status: 'sent' } });
-    return result.modifiedCount === 1;
-  } catch (error) {
-    console.error('Invoice delivered but status could not be updated:', error);
-    return false;
-  }
+// Sending a draft to the customer issues it first, so the document they
+// receive carries its official invoice number (never a DRAFT identifier).
+// Returns the issued invoice re-read with the same population, or the
+// invoice unchanged when it was already issued.
+async function issueBeforeSending(invoice, populate) {
+  if (invoice.status !== 'draft') return { invoice, issued: false };
+  const issued = await issueInvoice({ _id: invoice._id });
+  let query = Invoice.findById(issued._id);
+  for (const p of populate) query = query.populate(...p);
+  return { invoice: await query, issued: true };
 }
+
+const SEND_POPULATE = [['customerId', 'name email phone address gstNumber'], ['jobId', 'title']];
+
+// Kept for the response shape: true once the invoice is issued.
+async function markIssuedAfterDelivery(invoice) {
+  return invoice.status !== 'draft';
+}
+
+/*
+  Fields that make up an issued invoice's tax document. Once issued they are
+  locked: an error is corrected with a credit note or debit note
+  (/api/credit-notes) or by cancelling the invoice, which keeps its number.
+  Notes, terms, payment terms, the due date and the job link stay editable.
+*/
+const LOCKED_WHEN_ISSUED = ['items', 'designCharge', 'designChargeGstRate', 'discountAmount', 'isInterState', 'customerId', 'invoiceDate', 'noGst', 'placeOfSupply', 'reverseCharge'];
+const ISSUED_LOCKED = (invoice, fields) => ({
+  status: 'error',
+  code: 'INVOICE_ISSUED_LOCKED',
+  message: `Invoice ${invoice.invoiceNumber} has been issued, so its amounts, customer and date can no longer be edited. Raise a credit note or debit note to correct it, or cancel it.`,
+  details: { fields }
+});
 
 const INVOICE_CHANGED = {
   status: 'error',
@@ -87,6 +115,29 @@ const INVOICE_VIEWS = {
   paid: () => ({ ...ISSUED, ...SETTLED }),
   cancelled: () => ({ status: 'cancelled' })
 };
+
+// A delivery record belongs to a job, not an invoice line. Keep the unpaid
+// list honest about that distinction, including invoices with no linked job.
+function deliveryState(job, records = [], counterJob, invoice) {
+  if (job?.status === 'delivered') return { status: 'delivered', evidence: 'Job ticket marked delivered', source: 'job' };
+  const active = records.filter((d) => d.status !== 'cancelled');
+  const delivered = active.filter((d) => d.status === 'delivered').length;
+  if (active.length && delivered === active.length) return { status: 'delivered', evidence: 'All recorded deliveries marked delivered', source: 'job' };
+  if (delivered) return { status: 'part_delivered', evidence: `${delivered} of ${active.length} recorded deliveries marked delivered`, source: 'job' };
+  if (active.some((d) => d.status === 'in_transit')) return { status: 'in_transit', evidence: 'Delivery is in transit', source: 'job' };
+  if (active.some((d) => d.status === 'scheduled')) return { status: 'scheduled', evidence: 'Delivery is scheduled', source: 'job' };
+  if (active.some((d) => d.status === 'failed')) return { status: 'failed', evidence: 'Delivery attempt failed', source: 'job' };
+  if (job?.status === 'completed') return { status: 'ready', evidence: 'Job completed; delivery not recorded', source: 'job' };
+  if (job) return { status: 'not_delivered', evidence: 'No delivery recorded for this job', source: 'job' };
+  if (counterJob?.status === 'collected') return { status: 'collected', evidence: 'Counter job collected by customer', source: 'counter' };
+  if (counterJob?.status === 'ready') return { status: 'ready', evidence: 'Counter job ready for pickup', source: 'counter' };
+  if (counterJob) return { status: 'not_delivered', evidence: 'Counter job not yet collected', source: 'counter' };
+  if (invoice?.fulfillmentStatus === 'delivered') {
+    return { status: 'delivered', evidence: `Manually marked delivered${invoice.fulfilledByName ? ` by ${invoice.fulfilledByName}` : ''}`, source: 'invoice' };
+  }
+  if (invoice?.fulfillmentStatus === 'not_delivered') return { status: 'not_delivered', evidence: 'Manually marked not delivered', source: 'invoice' };
+  return { status: 'untracked', evidence: 'No linked job or delivery confirmation', source: 'invoice' };
+}
 
 // Helper function to get company info from settings with validation
 async function getCompanyInfo(user) {
@@ -154,7 +205,7 @@ const lineValidation = [
   body('items.*.unit').optional({ values: 'falsy' }).isIn(INVOICE_UNITS).withMessage('Invalid unit'),
   body('items.*.length').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Length cannot be negative'),
   body('items.*.width').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Width cannot be negative'),
-  body('items.*.gstRate').optional({ values: 'null' }).custom((v) => parseGstRate(v) !== null).withMessage('GST rate must be from 0 to 100%'),
+  body('items.*.gstRate').optional({ values: 'null' }).custom((v) => v !== '' && parseGstRate(v) !== null).withMessage('Enter a GST rate from 0 to 100% (0 if the item carries no GST); a blank rate is not treated as 0'),
   body('designCharge').optional({ values: 'falsy' }).custom((v) => parseDesignCharge(v) !== null).withMessage('Design charge must be an amount of 0 or more'),
   body('designCharge.gstRate').optional({ values: 'null' }).custom((v) => parseGstRate(v) !== null).withMessage('The design charge GST rate must be from 0 to 100%'),
   body('designChargeGstRate').optional({ values: 'null' }).custom((v) => parseGstRate(v) !== null).withMessage('The design charge GST rate must be from 0 to 100%'),
@@ -166,7 +217,7 @@ const invoiceValidation = [
   // Without a due date the invoice is due 30 days after its date (set in the handler).
   body('dueDate').optional({ values: 'falsy' }).isISO8601().withMessage('Due date must be a valid date'),
   body('status').optional({ values: 'falsy' }).isIn(['draft', 'sent']).withMessage('A new invoice is a draft or sent'),
-  body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
+  body('items').isArray().withMessage('Items must be an array'),
   ...lineValidation
 ];
 
@@ -338,8 +389,13 @@ router.get('/', protect, [
     const skip = (page - 1) * limit;
     
     // Build sort object
+    // Newest first. Ties (several invoices on one date) fall back to when they
+    // were created, then to the id, so the latest invoice is always on top and
+    // paging never repeats or skips a row.
     const sort = {};
     sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
+    if (sortBy !== 'createdAt') sort.createdAt = sortOrder === 'desc' ? -1 : 1;
+    sort._id = sortOrder === 'desc' ? -1 : 1;
     
     // Execute query
     const invoices = await Invoice.find(query)
@@ -348,6 +404,32 @@ router.get('/', protect, [
       .sort(sort)
       .skip(skip)
       .limit(parseInt(limit));
+
+    let invoiceRows = invoices;
+    if (req.query.view === 'unpaid' && invoices.length) {
+      const jobIds = invoices.map((i) => i.jobId?._id).filter(Boolean);
+      const invoiceIds = invoices.map((i) => i._id);
+      const members = jobIds.length && req.user.dataScope ? await orgMemberIds(req.user) : [];
+      const deliveryScope = req.user.dataScope
+        ? { $or: [{ dataScope: req.user.dataScope }, { userId: { $in: members } }] }
+        : { userId: req.user._id };
+      const [deliveries, counterJobs] = await Promise.all([
+        jobIds.length ? Delivery.find({ ...deliveryScope, jobId: { $in: jobIds } }).select('jobId status').lean() : [],
+        WalkInJob.find({ ...orgScope(req.user), 'billing.invoice': { $in: invoiceIds } }).select('billing.invoice status').lean()
+      ]);
+      const byJob = new Map();
+      for (const delivery of deliveries) {
+        const key = String(delivery.jobId);
+        if (!byJob.has(key)) byJob.set(key, []);
+        byJob.get(key).push(delivery);
+      }
+      const byInvoice = new Map(counterJobs.map((job) => [String(job.billing.invoice), job]));
+      invoiceRows = invoices.map((invoice) => {
+        const job = invoice.jobId;
+        const state = deliveryState(job, byJob.get(String(job?._id)) || [], byInvoice.get(String(invoice._id)), invoice);
+        return { ...invoice.toObject(), deliveryStatus: state.status, deliveryEvidence: state.evidence, deliverySource: state.source };
+      });
+    }
     
     // Get total count
     const totalInvoices = await Invoice.countDocuments(query);
@@ -355,7 +437,7 @@ router.get('/', protect, [
     res.status(200).json({
       status: 'success',
       data: {
-        invoices,
+        invoices: invoiceRows,
         pagination: {
           current: parseInt(page),
           total: Math.ceil(totalInvoices / limit),
@@ -371,6 +453,52 @@ router.get('/', protect, [
       status: 'error',
       message: 'Server error while fetching invoices'
     });
+  }
+});
+
+// A standalone invoice has no job delivery record. Staff with delivery status
+// permission can record its handover without changing any tax or payment data.
+router.patch('/:id/fulfillment', protect, requirePermission('Delivery: Update Status'), [
+  body('status').isIn(['delivered', 'not_delivered']).withMessage('Choose Delivered or Not delivered')
+], validate, async (req, res) => {
+  try {
+    const invoice = mongoose.isValidObjectId(req.params.id)
+      ? await Invoice.findOne({ _id: req.params.id, ...staffScopeQuery(req.user), ...noGstVisibility(req.user) })
+      : null;
+    if (!invoice) return res.status(404).json({ status: 'error', message: 'Invoice not found' });
+    if (['draft', 'cancelled'].includes(invoice.status)) {
+      return res.status(409).json({ status: 'error', message: 'Only issued invoices can have a delivery confirmation' });
+    }
+    const [linkedJob, counterJob] = await Promise.all([
+      invoice.jobId ? Job.exists({ _id: invoice.jobId, ...orgScope(req.user) }) : null,
+      WalkInJob.exists({ ...orgScope(req.user), 'billing.invoice': invoice._id })
+    ]);
+    if (linkedJob || counterJob) {
+      return res.status(409).json({ status: 'error', message: 'Update delivery on the linked job instead' });
+    }
+
+    const delivered = req.body.status === 'delivered';
+    await Invoice.updateOne({ _id: invoice._id, ...staffScopeQuery(req.user) }, {
+      $set: {
+        fulfillmentStatus: req.body.status,
+        fulfilledBy: req.user._id,
+        fulfilledByName: req.user.fullName,
+        ...(delivered ? { fulfilledAt: new Date() } : {})
+      },
+      ...(!delivered ? { $unset: { fulfilledAt: 1 } } : {})
+    });
+    ActivityLog.logActivity({
+      action: 'Invoice Delivery Status Updated',
+      description: `${invoice.invoiceNumber} marked ${delivered ? 'delivered' : 'not delivered'}`,
+      entityType: 'invoice', entityId: invoice._id, entityName: invoice.invoiceNumber,
+      performedBy: req.user._id, performedByName: req.user.fullName,
+      actionType: 'update', changes: { fulfillmentStatus: req.body.status },
+      severity: 'medium', userId: req.user._id, dataScope: req.user.dataScope
+    }).catch((error) => console.error('Invoice delivery audit log failed:', error.message));
+    return res.status(200).json({ status: 'success', data: { fulfillmentStatus: req.body.status } });
+  } catch (error) {
+    console.error('Invoice delivery status update failed:', error);
+    return res.status(500).json({ status: 'error', message: 'Could not update delivery status' });
   }
 });
 
@@ -429,7 +557,7 @@ router.get('/:id', protect, async (req, res) => {
 // @route   POST /api/invoices
 // @desc    Create new invoice
 // @access  Private
-router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoiceValidation, validate, async (req, res) => {
+router.post('/', protect, requirePermission('Invoicing: Create & Edit'), idempotent, invoiceValidation, validate, async (req, res) => {
   try {
     // Set default due date if not provided (30 days from invoice date)
     if (!req.body.dueDate || req.body.dueDate === '') {
@@ -443,8 +571,15 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
     // display, but they are never trusted. Line prices are before tax — a job
     // ticket's GST-inclusive item totals are never taken, so GST is added once.
     const isInterState = req.body.isInterState === true;
+    let pricedItems;
+    try {
+      pricedItems = await resolveLinePrices(req.body.items, { user: req.user, customerId: req.body.customerId, canOverride: userCan(req.user, 'Pricing Master: Override Price') });
+    } catch (e) {
+      if (e instanceof PricingError) return res.status(e.status).json({ status: 'error', code: e.code, message: e.message });
+      throw e;
+    }
     const priced = priceInvoice({
-      items: req.body.items,
+      items: pricedItems,
       designCharge: req.body.designCharge,
       designChargeGstRate: req.body.designChargeGstRate,
       discount: req.body.discountAmount,
@@ -454,6 +589,9 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
       return res.status(400).json({ status: 'error', message: priced.error });
     }
     const { lines, totals, design } = priced;
+    if (lines.length === 0 && design.designCharge <= 0) {
+      return res.status(400).json({ status: 'error', message: 'Add an item or a design charge above 0' });
+    }
 
     // Check stock for the priced lines (an area line needs its total area).
     const stockCheck = await InventoryService.checkStockAvailability(lines, req.user);
@@ -540,6 +678,18 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
       userId: req.user._id
     };
     if (req.body.status) invoiceData.status = req.body.status;
+    // Place of supply: chosen, else from the customer's GSTIN, else (intra-state)
+    // the business's own state from its GSTIN or address.
+    {
+      const { stateCodeOf } = require('../utils/gstStates');
+      let pos = stateCodeOf(req.body.placeOfSupply) || stateCodeOf(customer.gstNumber);
+      if (!pos && !isInterState) {
+        const settings = await businessSettings(req.user);
+        pos = stateCodeOf(settings.gstNumber) || stateCodeOf(settings.companyAddress?.state);
+      }
+      if (pos) invoiceData.placeOfSupply = pos;
+      if (req.body.reverseCharge === true) invoiceData.reverseCharge = true;
+    }
 
     // The job ticket's title is stored with the invoice, so the invoice keeps
     // its job description in lists, search and history even if the job ticket
@@ -623,7 +773,7 @@ router.post('/', protect, requirePermission('Invoicing: Create & Edit'), invoice
 // Lines, design charge, discount and GST are priced again on the server,
 // exactly as on create; totals sent by the client are ignored.
 router.put('/:id', protect, requirePermission('Invoicing: Create & Edit'), [
-  body('items').optional().isArray({ min: 1 }).withMessage('At least one item is required'),
+  body('items').optional().isArray().withMessage('Items must be an array'),
   body('invoiceDate').optional({ values: 'falsy' }).isISO8601().withMessage('Invoice date must be a valid date'),
   body('dueDate').optional({ values: 'falsy' }).isISO8601().withMessage('Due date must be a valid date'),
   ...lineValidation
@@ -641,6 +791,12 @@ router.put('/:id', protect, requirePermission('Invoicing: Create & Edit'), [
       });
     }
 
+    if (invoice.status !== 'draft') {
+      const sameCustomer = (v) => String(idOf(v) || '') === String(invoice.customerId || '');
+      const attempted = LOCKED_WHEN_ISSUED.filter((field) => req.body[field] !== undefined && !(field === 'customerId' && sameCustomer(req.body[field])));
+      if (attempted.length) return res.status(409).json(ISSUED_LOCKED(invoice, attempted));
+    }
+
     const pricingChanged = ['items', 'designCharge', 'designChargeGstRate', 'discountAmount', 'isInterState']
       .some((field) => req.body[field] !== undefined);
     let newTotal = null;
@@ -654,9 +810,19 @@ router.put('/:id', protect, requirePermission('Invoicing: Create & Edit'), [
         : (req.body.designCharge && typeof req.body.designCharge === 'object' ? undefined : invoice.designChargeGstRate);
       const discount = req.body.discountAmount !== undefined ? req.body.discountAmount : invoice.discountAmount;
       const isInterState = req.body.isInterState !== undefined ? req.body.isInterState === true : invoice.isInterState === true;
-      const priced = priceInvoice({ items, designCharge, designChargeGstRate, discount, isInterState, noGst: invoice.noGst === true });
+      let pricedItems;
+      try {
+        pricedItems = await resolveLinePrices(items, { user: req.user, customerId: invoice.customerId, canOverride: userCan(req.user, 'Pricing Master: Override Price'), existing: invoice.items.map((i) => i.toObject()) });
+      } catch (e) {
+        if (e instanceof PricingError) return res.status(e.status).json({ status: 'error', code: e.code, message: e.message });
+        throw e;
+      }
+      const priced = priceInvoice({ items: pricedItems, designCharge, designChargeGstRate, discount, isInterState, noGst: invoice.noGst === true });
       if (priced.error) {
         return res.status(400).json({ status: 'error', message: priced.error });
+      }
+      if (priced.lines.length === 0 && priced.design.designCharge <= 0) {
+        return res.status(400).json({ status: 'error', message: 'Add an item or a design charge above 0' });
       }
       newTotal = invoice.noGst ? priced.totals.taxableAmount : priced.totals.total;
       if (newTotal + 0.001 < (invoice.paidAmount || 0)) {
@@ -707,6 +873,13 @@ router.put('/:id', protect, requirePermission('Invoicing: Create & Edit'), [
     }
     if (req.body.invoiceDate) invoice.invoiceDate = req.body.invoiceDate;
     if (req.body.dueDate) invoice.dueDate = req.body.dueDate;
+    if (req.body.placeOfSupply !== undefined) {
+      const { stateCodeOf } = require('../utils/gstStates');
+      const pos = stateCodeOf(req.body.placeOfSupply);
+      if (req.body.placeOfSupply && !pos) return res.status(400).json({ status: 'error', message: 'Place of supply must be a GST state code or state name.' });
+      invoice.placeOfSupply = pos || undefined;
+    }
+    if (req.body.reverseCharge !== undefined) invoice.reverseCharge = req.body.reverseCharge === true;
     for (const field of ['notes', 'termsAndConditions', 'paymentTerms']) {
       if (req.body[field] !== undefined) invoice[field] = req.body[field];
     }
@@ -781,14 +954,29 @@ router.delete('/:id', protect, requirePermission('Invoicing: Delete'), async (re
       });
     }
     
-    const blocked = await paymentsBlock(invoice, 'delete');
-    if (blocked) return res.status(409).json(blocked);
+    // Payments applied must be taken off first, whatever the status.
+    const paymentsFirst = await paymentsBlock(invoice, 'delete');
+    if (paymentsFirst) return res.status(409).json(paymentsFirst);
+
+    // An issued invoice is a tax document: it is cancelled (keeping its
+    // number), never deleted. Only drafts can be removed.
+    if (invoice.status !== 'draft') {
+      return res.status(409).json({
+        status: 'error',
+        code: 'INVOICE_ISSUED_NOT_DELETABLE',
+        message: `Invoice ${invoice.invoiceNumber} has been issued and cannot be deleted. Cancel it instead — it keeps its number — or raise a credit note.`
+      });
+    }
 
     // Delete the invoice completely — the version read above, so a payment
     // applied to it in the meantime stops the delete.
     const versionFilter = invoice.__v === undefined ? { __v: { $exists: false } } : { __v: invoice.__v };
-    const { deletedCount } = await Invoice.deleteOne({ _id: invoice._id, ...versionFilter });
+    const { deletedCount } = await Invoice.deleteOne({ _id: invoice._id, status: 'draft', ...versionFilter });
     if (!deletedCount) return res.status(409).json(INVOICE_CHANGED);
+    await releaseQuotationForInvoice(invoice, 'invoice_deleted');
+    // Stock taken when the draft was saved goes back (same as cancelling).
+    await InventoryService.restoreInventoryForCancelledInvoice(invoice._id, req.user).catch((error) =>
+      console.error(`Stock of deleted draft ${invoice.invoiceNumber} was not restored:`, error.message));
 
     ActivityLog.logActivity({
       action: 'Invoice Deleted',
@@ -923,6 +1111,7 @@ router.patch('/:id/cancel', protect, async (req, res) => {
     const findQuery = { _id: req.params.id, ...staffScopeQuery(req.user) };
 
     const invoice = await Invoice.findOne(findQuery);
+    const priorStatus = invoice?.status;
     
     if (!invoice) {
       return res.status(404).json({
@@ -945,7 +1134,8 @@ router.patch('/:id/cancel', protect, async (req, res) => {
     // applied in the meantime stops the cancellation.
     invoice.status = 'cancelled';
     invoice.cancelledAt = new Date();
-    invoice.cancellationReason = req.body.reason || 'Invoice cancelled';
+    invoice.cancelledBy = req.user._id;
+    invoice.cancellationReason = (typeof req.body.reason === 'string' && req.body.reason.trim()) || 'Invoice cancelled';
     invoice.increment();
     try {
       await invoice.save();
@@ -953,6 +1143,8 @@ router.patch('/:id/cancel', protect, async (req, res) => {
       if (error.name === 'VersionError') return res.status(409).json(INVOICE_CHANGED);
       throw error;
     }
+
+    await releaseQuotationForInvoice(invoice, 'invoice_cancelled');
 
     ActivityLog.logActivity({
       action: 'Invoice Cancelled',
@@ -964,6 +1156,8 @@ router.patch('/:id/cancel', protect, async (req, res) => {
       performedByName: req.user.fullName,
       actionType: 'cancel',
       severity: 'medium',
+      reason: invoice.cancellationReason,
+      changes: { before: { status: priorStatus }, after: { status: 'cancelled' } },
       userId: req.user._id,
       dataScope: req.user.dataScope
     }).catch(err => console.error('Activity log (cancel invoice) failed:', err.message));
@@ -974,6 +1168,7 @@ router.patch('/:id/cancel', protect, async (req, res) => {
         invoice._id,
         req.user
       );
+      if (!restoreResult.success) throw new Error(restoreResult.message);
       
       res.status(200).json({
         status: 'success',
@@ -986,6 +1181,11 @@ router.patch('/:id/cancel', protect, async (req, res) => {
       
     } catch (inventoryError) {
       console.error('Error restoring inventory:', inventoryError);
+      // Durable record + alert: the invoice is cancelled but its stock is not back.
+      await require('../utils/transactions').compensation.recordCompensationFailure({
+        label: `Invoice ${invoice.invoiceNumber} cancelled but stock not restored`,
+        error: inventoryError, undoErrors: [{ step: 1, message: inventoryError.message }], total: 1
+      });
       
       res.status(200).json({
         status: 'success',
@@ -1016,17 +1216,14 @@ router.patch('/:id/issue', protect, requirePermission('Invoicing: Create & Edit'
       return res.status(404).json({ status: 'error', message: 'Invoice not found' });
     }
     const scope = { _id: req.params.id, ...staffScopeQuery(req.user), ...noGstVisibility(req.user) };
-    const invoice = await Invoice.findOneAndUpdate(
-      { ...scope, status: 'draft' },
-      { $set: { status: 'sent' } },
-      { new: true, runValidators: true }
-    );
-    if (!invoice) {
-      const existing = await Invoice.findOne(scope).select('status');
-      return res.status(existing ? 409 : 404).json({
-        status: 'error',
-        message: existing ? 'Only a draft invoice can be issued.' : 'Invoice not found'
-      });
+    let invoice;
+    try {
+      invoice = await issueInvoice(scope);
+    } catch (error) {
+      if (error instanceof IssueError) {
+        return res.status(error.status).json({ status: 'error', message: error.message, code: error.code });
+      }
+      throw error;
     }
 
     ActivityLog.logActivity({
@@ -1244,7 +1441,7 @@ router.post('/:id/send-email', protect, requirePermission('Invoicing: Send Email
 
     const query = { _id: invoiceId, ...staffScopeQuery(req.user) };
 
-    const invoice = await Invoice.findOne(query)
+    let invoice = await Invoice.findOne(query)
       .populate('customerId', 'name email phone address gstNumber')
       .populate('jobId', 'title');
 
@@ -1264,6 +1461,14 @@ router.post('/:id/send-email', protect, requirePermission('Invoicing: Send Email
         message: companyInfoResult.error,
         code: 'COMPANY_NOT_CONFIGURED'
       });
+    }
+
+    // A draft is issued before it is sent: the customer's copy carries the official number.
+    try {
+      ({ invoice } = await issueBeforeSending(invoice, SEND_POPULATE));
+    } catch (error) {
+      if (error instanceof IssueError) return res.status(error.status).json({ status: 'error', message: error.message, code: error.code });
+      throw error;
     }
 
     // Generate PDF using HTML template
@@ -1325,7 +1530,7 @@ router.post('/:id/send-whatsapp', protect, requirePermission('WhatsApp: Send Mes
 
     const query = { _id: invoiceId, ...staffScopeQuery(req.user) };
 
-    const invoice = await Invoice.findOne(query)
+    let invoice = await Invoice.findOne(query)
       .populate('customerId', 'name email phone address gstNumber')
       .populate('jobId', 'title');
 
@@ -1356,6 +1561,14 @@ router.post('/:id/send-whatsapp', protect, requirePermission('WhatsApp: Send Mes
         message: 'WhatsApp Business API is not configured. Connect it in Settings > WhatsApp before sending invoices.',
         code: 'WHATSAPP_NOT_CONFIGURED'
       });
+    }
+
+    // A draft is issued before it is sent: the customer's copy carries the official number.
+    try {
+      ({ invoice } = await issueBeforeSending(invoice, SEND_POPULATE));
+    } catch (error) {
+      if (error instanceof IssueError) return res.status(error.status).json({ status: 'error', message: error.message, code: error.code });
+      throw error;
     }
 
     // Generate PDF and save to a temporary public URL so it can be offered as a linked variable

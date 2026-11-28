@@ -6,6 +6,7 @@ import { PageShell } from "@/components/layout/PageShell";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { PlanPackCards } from "@/components/subscription/PlanPackCards";
 import { usePlanCheckout } from "@/components/subscription/usePlanCheckout";
+import { ErrorState } from "@/components/common/LoadState";
 import { formatPaise, type PurchaseRecord, type SubscriptionStatus } from "@/lib/razorpay";
 
 const IST = { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" } as const;
@@ -25,7 +26,7 @@ const planSummary = (s?: SubscriptionStatus) => {
 };
 
 export default function Subscription() {
-  const { packs, status, purchases, canPurchase, loading, busyPack, confirming, buy, checkOrder } = usePlanCheckout();
+  const { packs, status, purchases, canPurchase, loading, error, retry, busyPack, confirming, buy, checkOrder } = usePlanCheckout();
 
   return (
     <PageShell width="narrow">
@@ -40,7 +41,9 @@ export default function Subscription() {
           <CardDescription>Applies to every login in your business.</CardDescription>
         </CardHeader>
         <CardContent>
-          {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : (
+          {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : error && !status ? (
+            <ErrorState compact error={error} what="your plan" onRetry={retry} />
+          ) : (
             <div className="flex flex-wrap items-center gap-x-8 gap-y-2">
               <div>
                 <div className="text-lg font-semibold">{planSummary(status)}</div>
@@ -70,7 +73,7 @@ export default function Subscription() {
       <Card>
         <CardHeader><CardTitle>Purchase history</CardTitle></CardHeader>
         <CardContent>
-          {purchases.length === 0 ? <p className="text-sm text-muted-foreground">No purchases yet.</p> : (
+          {error && !purchases.length ? <ErrorState compact error={error} what="purchase history" onRetry={retry} /> : purchases.length === 0 ? <p className="text-sm text-muted-foreground">No purchases yet.</p> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead><tr className="border-b text-left text-muted-foreground">

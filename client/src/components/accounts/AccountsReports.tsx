@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { fmtDate } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -168,7 +169,7 @@ export function AccountsReports() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">₹{reportData?.totalIncome.toLocaleString() || 0}</div>
+            <div className="text-2xl font-bold">₹{reportData?.totalIncome.toLocaleString('en-IN') || 0}</div>
             <p className="text-xs text-muted-foreground">this {selectedPeriod}</p>
           </CardContent>
         </Card>
@@ -181,7 +182,7 @@ export function AccountsReports() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">₹{reportData?.totalExpenses.toLocaleString() || 0}</div>
+            <div className="text-2xl font-bold">₹{reportData?.totalExpenses.toLocaleString('en-IN') || 0}</div>
             <p className="text-xs text-muted-foreground">this {selectedPeriod}</p>
           </CardContent>
         </Card>
@@ -194,7 +195,7 @@ export function AccountsReports() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">₹{reportData?.netProfit.toLocaleString() || 0}</div>
+            <div className="text-2xl font-bold">₹{reportData?.netProfit.toLocaleString('en-IN') || 0}</div>
             <p className="text-xs text-muted-foreground">profit margin</p>
           </CardContent>
       </Card>
@@ -207,7 +208,7 @@ export function AccountsReports() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">₹{reportData?.cashFlow.toLocaleString() || 0}</div>
+            <div className="text-2xl font-bold">₹{reportData?.cashFlow.toLocaleString('en-IN') || 0}</div>
             <p className="text-xs text-muted-foreground">operating cash flow</p>
           </CardContent>
         </Card>
@@ -223,7 +224,7 @@ export function AccountsReports() {
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium">Total Balance</span>
               <span className="text-xl font-bold">
-                ₹{((reportData?.cashBalance || 0) + (reportData?.bankBalance || 0)).toLocaleString()}
+                ₹{((reportData?.cashBalance || 0) + (reportData?.bankBalance || 0)).toLocaleString('en-IN')}
               </span>
             </div>
           </CardContent>
@@ -237,20 +238,20 @@ export function AccountsReports() {
               <div className="flex items-center justify-between">
               <span className="text-sm font-medium">Income</span>
               <span className="text-lg font-bold text-success-strong">
-                ₹{reportData?.totalIncome.toLocaleString() || 0}
+                ₹{reportData?.totalIncome.toLocaleString('en-IN') || 0}
               </span>
                 </div>
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium">Expenses</span>
               <span className="text-lg font-bold text-destructive-strong">
-                ₹{reportData?.totalExpenses.toLocaleString() || 0}
+                ₹{reportData?.totalExpenses.toLocaleString('en-IN') || 0}
               </span>
               </div>
             <div className="border-t pt-4">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium">Net Profit</span>
                 <span className="text-xl font-bold text-info-strong">
-                  ₹{reportData?.netProfit.toLocaleString() || 0}
+                  ₹{reportData?.netProfit.toLocaleString('en-IN') || 0}
                 </span>
               </div>
                 </div>
@@ -289,7 +290,7 @@ export function AccountsReports() {
                   {recentTransactions.map((transaction) => (
                     <tr key={transaction._id} className="border-b hover:bg-muted">
                       <td className="py-3 px-4 text-sm text-muted-foreground">
-                        {new Date(transaction.postedAt || transaction.createdAt).toLocaleDateString()}
+                        {fmtDate(transaction.postedAt || transaction.createdAt)}
                       </td>
                       <td className="py-3 px-4">
                         <span className="text-sm font-medium text-info-strong">
@@ -310,7 +311,7 @@ export function AccountsReports() {
                         <span className={`text-sm font-semibold ${
                           transaction.transactionType === 'income' ? 'text-success-strong' : transaction.transactionType === 'expense' ? 'text-destructive-strong' : 'text-muted-foreground'
                         }`}>
-                          {SIGN[transaction.transactionType] || ''}₹{transaction.amount.toLocaleString()}
+                          {SIGN[transaction.transactionType] || ''}₹{transaction.amount.toLocaleString('en-IN')}
                         </span>
                       </td>
                     </tr>

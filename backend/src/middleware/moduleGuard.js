@@ -35,7 +35,7 @@ const describe = (requirement) =>
   Array.isArray(requirement) ? requirement.join(' or ') : typeof requirement === 'string' ? requirement : 'access';
 
 function moduleGuard({ read, write, remove, rules = [] }) {
-  return (req, res, next) => {
+  const guard = (req, res, next) => {
     const method = req.method.toUpperCase();
     if (method === 'OPTIONS') return next();
 
@@ -58,6 +58,9 @@ function moduleGuard({ read, write, remove, rules = [] }) {
       required: describe(requirement)
     });
   };
+  // Exposed so scripts/audit/endpoint-matrix.js can document what each mount requires.
+  guard.guardConfig = { read, write, remove, rules };
+  return guard;
 }
 
-module.exports = { moduleGuard, AUTHENTICATED };
+module.exports = { moduleGuard, AUTHENTICATED, describeRequirement: describe };

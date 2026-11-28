@@ -89,6 +89,8 @@ export default function Payroll() {
   const canProcess = hasPermission("Payroll: Process Payroll");
   const now = new Date();
   const [period, setPeriod] = useState({ month: now.getMonth() + 1, year: now.getFullYear() });
+  // A failed load shows as an error with Retry, never as an empty list.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [payslips, setPayslips] = useState<Payslip[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -106,6 +108,7 @@ export default function Payroll() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      setLoadError(null);
       const [list, sum] = (await Promise.all([apiClient.getPayroll({ month: period.month, year: period.year }), apiClient.getPayrollSummary(period.month, period.year)])) as [
         { payslips?: Payslip[] },
         Summary
@@ -113,7 +116,7 @@ export default function Payroll() {
       setPayslips(list?.payslips || []);
       setSummary(sum || null);
     } catch (error) {
-      toast({ title: "Payroll could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -129,9 +132,27 @@ export default function Payroll() {
       return { month: d.getMonth() + 1, year: d.getFullYear() };
     });
 
+  // Who payroll is generated for: everyone, or the ticked employees.
+  const [staff, setStaff] = useState<{ _id: string; name: string; employeeCode?: string }[]>([]);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [everyone, setEveryone] = useState(true);
+  useEffect(() => {
+    if (!generateOpen) return;
+    setEveryone(true);
+    setPicked(new Set());
+    apiClient.getEmployees({ status: "active", limit: 500 }).then((r) => {
+      const list = (r as { employees?: { _id: string; name: string; employeeCode?: string }[] })?.employees || [];
+      setStaff(list);
+    }).catch(() => setStaff([]));
+  }, [generateOpen]);
+
   const generate = async () => {
+    if (!everyone && picked.size === 0) {
+      toast({ title: "Choose at least one employee", variant: "destructive" });
+      throw new Error("no employee chosen");
+    }
     try {
-      const res = (await apiClient.generatePayroll(period.month, period.year)) as { generated?: number; skipped?: number; noSalary?: string[] };
+      const res = (await apiClient.generatePayroll(period.month, period.year, everyone ? undefined : [...picked])) as { generated?: number; skipped?: number; noSalary?: string[] };
       const noSalary = res?.noSalary || [];
       toast({
         title: `Payroll ready for ${label}`,
@@ -366,6 +387,8 @@ export default function Payroll() {
           }
         >
           <DataTable
+            error={loadError}
+            onRetry={() => load()}
             columns={columns}
             rows={rows}
             rowKey={(p) => p._id}
@@ -513,20 +536,46 @@ export default function Payroll() {
         </DialogContent>
       </Dialog>
 
-      <ConfirmDialog
-        open={generateOpen}
-        onOpenChange={setGenerateOpen}
-        title={`${payslips.length ? "Regenerate" : "Generate"} payroll for ${label}?`}
-        description={
-          payslips.length
-            ? "Unpaid payslips are worked out again from current salaries and attendance. Paid payslips are left as they are."
-            : "A payslip is worked out for every active employee from their salary structure and the attendance marked this month."
-        }
-        confirmLabel={payslips.length ? "Regenerate" : "Generate"}
-        cancelLabel="Cancel"
-        destructive={false}
-        onConfirm={generate}
-      />
+      <Dialog open={generateOpen} onOpenChange={setGenerateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{payslips.length ? "Regenerate" : "Generate"} payroll for {label}</DialogTitle>
+            <DialogDescription>
+              {payslips.length
+                ? "Unpaid payslips are worked out again from current salaries and attendance. Paid payslips are left as they are. A payslip is never duplicated for the same employee and month."
+                : "A payslip is worked out from each employee's salary structure and the attendance marked this month."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input type="checkbox" className="h-4 w-4" checked={everyone} onChange={(e) => setEveryone(e.target.checked)} />
+              All active employees
+            </label>
+            {!everyone && (
+              <div className="max-h-64 space-y-1 overflow-y-auto rounded-md border p-2">
+                {staff.length === 0 && <p className="p-2 text-sm text-muted-foreground">No active employees found.</p>}
+                {staff.map((e) => (
+                  <label key={e._id} className="flex items-center gap-2 rounded px-2 py-1 text-sm hover:bg-muted">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4"
+                      checked={picked.has(e._id)}
+                      onChange={(ev) => setPicked((prev) => { const next = new Set(prev); if (ev.target.checked) next.add(e._id); else next.delete(e._id); return next; })}
+                    />
+                    {e.name}{e.employeeCode ? <span className="text-muted-foreground"> · {e.employeeCode}</span> : null}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setGenerateOpen(false)}>Cancel</Button>
+            <Button onClick={() => { generate().catch(() => undefined); }} disabled={!everyone && picked.size === 0}>
+              {payslips.length ? "Regenerate" : "Generate"}{!everyone && picked.size ? ` (${picked.size})` : ""}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <ConfirmDialog
         open={!!deleting}
         onOpenChange={(o) => !o && setDeleting(null)}

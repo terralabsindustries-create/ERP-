@@ -17,7 +17,7 @@ const ALL = true;
  * starter roles get the change once (utils/upgradePresetRoles.js) without
  * undoing edits the owner made since.
  */
-const PRESET_VERSION = 2;
+const PRESET_VERSION = 3;
 
 const PRESETS = [
   {
@@ -71,7 +71,9 @@ const PRESETS = [
       2: {
         add: { Jobs: ['View'], Quotations: ['View', 'Convert to Invoice'], Attendance: ['View'], WhatsApp: ALL },
         remove: ['Cost & Profit']
-      }
+      },
+      // GST credit and debit notes (routes/creditNotes.js) are an accountant's job.
+      3: { add: { Invoicing: ['Credit & Debit Notes'] } }
     }
   },
   {

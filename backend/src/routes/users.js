@@ -328,7 +328,8 @@ router.post('/', protect, requirePermission('User Management: Create Login'), us
       }
       roleAccess = accessFromRole(accessRole);
       role = roleAccess.role;
-      canViewAllData = roleAccess.canViewAllData;
+      // The role sets the starting visibility; an explicit switch on the new login overrides it.
+      canViewAllData = req.body.canViewAllData !== undefined ? req.body.canViewAllData === true : roleAccess.canViewAllData;
     }
 
     let finalPermissions = roleAccess ? roleAccess.permissions : permissions || [];
@@ -635,7 +636,9 @@ router.put('/:id', protect, updateUserValidation, validate, async (req, res) => 
         const accessRole = await findRole(req.user, accessRoleId);
         if (!accessRole) return res.status(400).json({ status: 'error', message: 'That role no longer exists. Choose another one.' });
         const access = accessFromRole(accessRole);
-        const problem = grantProblem(req.user, access);
+        // The role sets the starting visibility; an explicit switch on the login overrides it.
+        if (canViewAllData !== undefined) access.canViewAllData = canViewAllData === true && VIEW_ALL_ROLES.includes(access.role);
+        const problem = grantProblem(req.user, { ...access, canViewAllData: access.canViewAllData && user.canViewAllData !== true });
         if (problem) return res.status(403).json({ status: 'error', message: problem, code: 'PERMISSION_DENIED' });
         Object.assign(updateData, access);
       } else if (Array.isArray(permissions) || hasRoleField) {

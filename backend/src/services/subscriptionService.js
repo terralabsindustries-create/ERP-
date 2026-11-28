@@ -76,16 +76,18 @@ const foldPaid = (purchases) => {
   return { start, end, last };
 };
 
-const getEntitlement = async (user, now = new Date()) => {
+const resolveEntitlement = async (user, now = new Date()) => {
   const key = workspaceKeyFor(user);
-  const purchases = await SubscriptionPurchase.find({ workspaceKey: key, status: 'paid' });
+  // Both lookups are independent; one round trip instead of two.
+  const [purchases, admins] = await Promise.all([
+    SubscriptionPurchase.find({ workspaceKey: key, status: 'paid' }).select('status paidAt months packId').lean(),
+    User.find(user.dataScope ? { dataScope: user.dataScope, role: 'admin' } : { _id: user._id }).select('subscription').lean()
+  ]);
   const { start, end, last } = foldPaid(purchases);
   if (end && end > now) {
     return { isActive: true, status: 'paid', plan: 'prepaid', packId: last.packId, months: last.months, startDate: start, endDate: end, autoRenew: false };
   }
   // No running paid access: fall back to the trial / earlier plan held by the business's admin(s).
-  const admins = await User.find(user.dataScope ? { dataScope: user.dataScope, role: 'admin' } : { _id: user._id })
-    .select('subscription');
   let best = null;
   for (const a of admins) {
     const s = a.subscription;
@@ -95,6 +97,52 @@ const getEntitlement = async (user, now = new Date()) => {
     return { isActive: true, status: best.plan === 'free' || !best.plan ? 'trial' : 'legacy', plan: best.plan || 'free', startDate: best.startDate, endDate: best.endDate, autoRenew: false };
   }
   return { isActive: false, status: 'expired', plan: end ? 'prepaid' : null, startDate: start, endDate: end, autoRenew: false };
+};
+
+/*
+  The entitlement is checked on every ERP request (middleware/requireSubscription)
+  and on /auth/me. Resolving it costs database round trips, which with a remote
+  database dominated small requests. It is cached per business for a short time:
+
+  - an active entitlement for ENTITLEMENT_CACHE_MS (default 60 s), never past its
+    own end date, so access still ends on time;
+  - an inactive one for ENTITLEMENT_NEGATIVE_CACHE_MS (default 10 s), so a plan
+    bought on another server instance is picked up quickly;
+  - any write to a plan purchase in this process clears the cache at once
+    (see invalidateEntitlements, called from the SubscriptionPurchase hooks).
+
+  Concurrent misses for the same business share one lookup. Set
+  ENTITLEMENT_CACHE_MS=0 to turn caching off.
+*/
+const entitlementCache = new Map(); // key -> { value, expiresAt } | { pending }
+const cacheMs = () => Number(process.env.ENTITLEMENT_CACHE_MS ?? (process.env.NODE_ENV === 'test' ? 0 : 60000));
+const negativeCacheMs = () => Number(process.env.ENTITLEMENT_NEGATIVE_CACHE_MS ?? Math.min(10000, cacheMs()));
+
+const invalidateEntitlements = (workspaceKey) => {
+  if (workspaceKey) entitlementCache.delete(workspaceKey);
+  else entitlementCache.clear();
+};
+
+const getEntitlement = async (user, now = new Date()) => {
+  const ttl = cacheMs();
+  if (!(ttl > 0)) return resolveEntitlement(user, now);
+  const key = workspaceKeyFor(user);
+  const hit = entitlementCache.get(key);
+  if (hit && hit.pending) return hit.pending;
+  if (hit && hit.expiresAt > Date.now()) return hit.value;
+
+  const pending = resolveEntitlement(user, now).then((value) => {
+    const life = value.isActive ? ttl : negativeCacheMs();
+    const until = value.isActive && value.endDate ? Math.min(Date.now() + life, new Date(value.endDate).getTime()) : Date.now() + life;
+    if (entitlementCache.get(key)?.pending === pending) entitlementCache.set(key, { value, expiresAt: until });
+    return value;
+  }, (error) => {
+    if (entitlementCache.get(key)?.pending === pending) entitlementCache.delete(key);
+    throw error;
+  });
+  entitlementCache.set(key, { pending });
+  if (entitlementCache.size > 5000) entitlementCache.delete(entitlementCache.keys().next().value);
+  return pending;
 };
 
 /** Attach the business-wide entitlement so generateProfile() reports it for every login. */
@@ -221,8 +269,27 @@ const verifyCheckout = async (user, { razorpay_order_id: orderId, razorpay_payme
 };
 
 /** Reconcile a purchase against Razorpay (covers a lost callback and a lost webhook). */
-const syncPurchase = async (purchase) => {
+/*
+  Each status check is a Razorpay API call. The same order is checked at most
+  once per SYNC_MIN_INTERVAL_MS (default 30 s): repeats inside the window answer
+  from our record. Webhooks and the 15-minute reconciler settle orders anyway.
+*/
+const syncMinIntervalMs = () => Number(process.env.RAZORPAY_SYNC_MIN_INTERVAL_MS ?? (process.env.NODE_ENV === 'test' ? 0 : 30000));
+
+const syncPurchase = async (purchase, { now = Date.now() } = {}) => {
   if (purchase.status !== 'created' && purchase.status !== 'failed' && purchase.status !== 'cancelled') return { state: purchase.status, granted: false, purchase };
+  const minGap = syncMinIntervalMs();
+  if (minGap > 0) {
+    // Claim the check atomically, so two tabs asking at once make one call.
+    const claimed = await SubscriptionPurchase.findOneAndUpdate(
+      { _id: purchase._id, $or: [{ lastSyncedAt: null }, { lastSyncedAt: { $lte: new Date(now - minGap) } }] },
+      { $set: { lastSyncedAt: new Date(now) } },
+      { new: true }
+    );
+    if (!claimed) return { state: 'pending', granted: false, throttled: true, purchase };
+  } else {
+    await SubscriptionPurchase.updateOne({ _id: purchase._id }, { $set: { lastSyncedAt: new Date(now) } });
+  }
   let list;
   try {
     list = await rzp.getClient().orders.fetchPayments(purchase.orderId);
@@ -370,7 +437,7 @@ const applyWebhookEventUnsafe = async (event, eventId) => {
 };
 
 module.exports = {
-  PurchaseError, workspaceKeyFor, publicPurchase, getEntitlement, attachEntitlement, foldPaid,
+  PurchaseError, workspaceKeyFor, publicPurchase, getEntitlement, attachEntitlement, invalidateEntitlements, foldPaid,
   createOrder, verifyCheckout, syncPurchase, reconcileOpenPurchases, markCancelled, settlePayment,
   applyWebhookEvent, verifyCheckoutSignature, verifyWebhookSignature
 };

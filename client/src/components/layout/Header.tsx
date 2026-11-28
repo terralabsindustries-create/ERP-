@@ -12,7 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/contexts/AuthContext";
-import apiClient from "@/lib/apiClient";
+import apiClient, { type ApiError } from "@/lib/apiClient";
 import { useLocation, useNavigate } from "react-router-dom";
 import { findPage } from "./navigation";
 import { ThemeToggle } from "./ThemeToggle";
@@ -20,31 +20,40 @@ import { NotificationBell } from "./NotificationBell";
 import { cn } from "@/lib/utils";
 
 interface CustomerSearchResult {
-  id: string;
+  id?: string;
+  _id?: string;
   name: string;
   email?: string | null;
   phone?: string | null;
 }
 
 interface JobSearchResult {
-  id: string;
+  id?: string;
+  _id?: string;
   title: string;
   customerId?: { name?: string } | null;
 }
 
 interface InvoiceSearchResult {
-  id: string;
+  id?: string;
+  _id?: string;
+  customerName?: string;
   invoiceNumber: string;
   customerId?: { name?: string } | null;
 }
 
+interface QuotationSearchResult { _id: string; quotationNumber: string; status?: string; customer_id?: { name?: string } | null }
+interface PurchaseOrderSearchResult { _id: string; poNumber: string; vendorName?: string; status?: string }
+
 interface SearchResults {
   customers: CustomerSearchResult[];
   jobs: JobSearchResult[];
+  quotations: QuotationSearchResult[];
   invoices: InvoiceSearchResult[];
+  purchaseOrders: PurchaseOrderSearchResult[];
 }
 
-const EMPTY_SEARCH_RESULTS: SearchResults = { customers: [], jobs: [], invoices: [] };
+const EMPTY_SEARCH_RESULTS: SearchResults = { customers: [], jobs: [], quotations: [], invoices: [], purchaseOrders: [] };
 
 export function Header() {
   const { user, signOut, hasPermission } = useAuth();
@@ -54,7 +63,7 @@ export function Header() {
   const canSearchCustomers = hasPermission("Customers");
   const canSearchJobs = hasPermission("Jobs");
   const canSearchInvoices = hasPermission("Invoicing");
-  const canSearch = canSearchCustomers || canSearchJobs || canSearchInvoices;
+  const canSearch = canSearchCustomers || canSearchJobs || canSearchInvoices || hasPermission("Quotations");
   const searchInputRef = useRef<HTMLInputElement>(null);
   const initials = (user?.fullName || user?.email || "?")
     .split(/[\s@.]+/)
@@ -67,6 +76,7 @@ export function Header() {
   const [searchResults, setSearchResults] = useState<SearchResults>(EMPTY_SEARCH_RESULTS);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const searchContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -78,29 +88,31 @@ export function Header() {
       return;
     }
 
+    // One request to /api/search (customers, their jobs, quotations, invoices
+    // and purchase orders, scoped by the server), 300 ms after typing stops.
+    // A newer search cancels the older one; a failure is shown, not "no results".
     setSearchLoading(true);
-    let active = true;
+    setSearchError(null);
+    const controller = new AbortController();
     const timeoutId = setTimeout(async () => {
-      const [customersRes, jobsRes, invoicesRes] = await Promise.allSettled([
-        canSearchCustomers ? apiClient.getCustomer({ search: term, limit: 5 }) as Promise<{ customers: CustomerSearchResult[] }> : Promise.resolve({ customers: [] }),
-        canSearchJobs ? apiClient.getJobs({ search: term, limit: 5 }) as Promise<{ jobs: JobSearchResult[] }> : Promise.resolve({ jobs: [] }),
-        canSearchInvoices ? apiClient.getInvoices({ search: term, limit: 5 }) as Promise<{ invoices: InvoiceSearchResult[] }> : Promise.resolve({ invoices: [] }),
-      ]);
-
-      if (!active) return;
-      setSearchResults({
-        customers: customersRes.status === "fulfilled" ? customersRes.value?.customers || [] : [],
-        jobs: jobsRes.status === "fulfilled" ? jobsRes.value?.jobs || [] : [],
-        invoices: invoicesRes.status === "fulfilled" ? invoicesRes.value?.invoices || [] : [],
-      });
-      setSearchLoading(false);
+      try {
+        const data = await apiClient.getWithSignal<SearchResults>("/search", { q: term, limit: 5 }, controller.signal);
+        setSearchResults({ ...EMPTY_SEARCH_RESULTS, ...data });
+        setSearchLoading(false);
+      } catch (error) {
+        const kind = (error as ApiError)?.kind;
+        if (controller.signal.aborted || kind === "cancelled") return;
+        setSearchResults(EMPTY_SEARCH_RESULTS);
+        setSearchError(kind === "timeout" ? "Search took too long. Try again." : "Search is unavailable right now. Try again.");
+        setSearchLoading(false);
+      }
     }, 300);
 
     return () => {
-      active = false;
+      controller.abort();
       clearTimeout(timeoutId);
     };
-  }, [searchQuery, canSearch, canSearchCustomers, canSearchJobs, canSearchInvoices]);
+  }, [searchQuery, canSearch]);
 
   useEffect(() => {
     if (!canSearch) return;
@@ -128,7 +140,7 @@ export function Header() {
   }, [canSearch]);
 
   const hasSearchResults =
-    searchResults.customers.length > 0 || searchResults.jobs.length > 0 || searchResults.invoices.length > 0;
+    Object.values(searchResults).some((list) => list.length > 0);
 
   const goToSearchResult = (path: string, term: string) => {
     navigate(`${path}?q=${encodeURIComponent(term)}`);
@@ -208,7 +220,7 @@ export function Header() {
                         <p className="section-label px-2 py-1.5">Customers</p>
                         {searchResults.customers.map((customer) => (
                           <button
-                            key={customer.id}
+                            key={customer.id || customer._id}
                             type="button"
                             className="flex w-full items-center gap-2.5 rounded-md px-2 py-2 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
                             onClick={() => goToSearchResult("/customers", customer.name)}
@@ -232,7 +244,7 @@ export function Header() {
                         <p className="section-label px-2 py-1.5">Job Tickets</p>
                         {searchResults.jobs.map((job) => (
                           <button
-                            key={job.id}
+                            key={job.id || job._id}
                             type="button"
                             className="flex w-full items-center gap-2.5 rounded-md px-2 py-2 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
                             onClick={() => goToSearchResult("/jobs", job.title)}
@@ -254,7 +266,7 @@ export function Header() {
                         <p className="section-label px-2 py-1.5">Invoices</p>
                         {searchResults.invoices.map((invoice) => (
                           <button
-                            key={invoice.id}
+                            key={invoice.id || invoice._id}
                             type="button"
                             className="flex w-full items-center gap-2.5 rounded-md px-2 py-2 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
                             onClick={() => goToSearchResult("/invoices", invoice.invoiceNumber)}
@@ -262,15 +274,50 @@ export function Header() {
                             <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                             <div className="min-w-0 flex-1">
                               <div className="truncate font-medium">{invoice.invoiceNumber}</div>
-                              {invoice.customerId?.name && (
-                                <div className="truncate text-xs text-muted-foreground">{invoice.customerId.name}</div>
+                              {(invoice.customerId?.name || invoice.customerName) && (
+                                <div className="truncate text-xs text-muted-foreground">{invoice.customerId?.name || invoice.customerName}</div>
                               )}
                             </div>
                           </button>
                         ))}
                       </div>
                     )}
+                    {searchResults.quotations.length > 0 && (
+                      <div className="px-2 pb-1">
+                        <p className="section-label px-2 py-1.5">Quotations</p>
+                        {searchResults.quotations.map((q) => (
+                          <button key={q._id} type="button"
+                            className="flex w-full items-center gap-2.5 rounded-md px-2 py-2 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+                            onClick={() => goToSearchResult("/quotations", q.quotationNumber)}>
+                            <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate font-medium">{q.quotationNumber}</div>
+                              {q.customer_id?.name && <div className="truncate text-xs text-muted-foreground">{q.customer_id.name}</div>}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {searchResults.purchaseOrders.length > 0 && (
+                      <div className="px-2 pb-1">
+                        <p className="section-label px-2 py-1.5">Purchase orders</p>
+                        {searchResults.purchaseOrders.map((po) => (
+                          <button key={po._id} type="button"
+                            className="flex w-full items-center gap-2.5 rounded-md px-2 py-2 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+                            onClick={() => goToSearchResult("/purchase-orders", po.poNumber)}>
+                            <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate font-medium">{po.poNumber}</div>
+                              {po.vendorName && <div className="truncate text-xs text-muted-foreground">{po.vendorName}</div>}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
+                ) : searchError ? (
+                  <div role="alert" className="p-4 text-center text-sm text-muted-foreground">{searchError}</div>
                 ) : (
                   <div className="p-4 text-center text-sm text-muted-foreground">
                     No results for "{searchQuery}"

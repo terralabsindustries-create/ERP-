@@ -16,8 +16,10 @@ const PERMISSION_TREE = [
 
   { module: 'Customers', actions: ['View', 'Create & Edit', 'Delete', 'Export'] },
   { module: 'Jobs', actions: ['View', 'Create & Edit', 'Delete', 'Change Status'] },
+  { module: 'Sales Orders', actions: ['View', 'Create & Edit', 'Approve', 'Cancel', 'Delete', 'Apply Discount', 'Override Rate', 'Change Stage'] },
+  { module: 'Product Rates', actions: ['View', 'Create & Edit', 'Delete'] },
   { module: 'Quotations', actions: ['View', 'Create & Edit', 'Delete', 'Send Email', 'Change Status', 'Convert to Invoice'] },
-  { module: 'Invoicing', actions: ['View', 'Create & Edit', 'Delete', 'Send Email', 'Record Payment', 'Correct Balance', 'Download PDF'] },
+  { module: 'Invoicing', actions: ['View', 'Create & Edit', 'Delete', 'Send Email', 'Record Payment', 'Correct Balance', 'Download PDF', 'Credit & Debit Notes'] },
   { module: 'Invoicing (View No GST)', actions: [] },
 
   { module: 'Calendar', actions: ['View', 'Create & Edit', 'Delete'] },
@@ -51,6 +53,8 @@ const PERMISSION_TREE = [
   { module: 'Walk-In Jobs', actions: ['View', 'Create & Edit'] },
   { module: 'Customer Portal', actions: ['View', 'Manage Access'] },
 
+  { module: 'Pricing Master', actions: ['View', 'Create & Edit', 'Delete', 'Customer Rates', 'Override Price'] },
+  { module: 'Reconciliation', actions: ['View', 'Resolve'] },
   { module: 'Activity Log', actions: ['View', 'Export'] },
   { module: 'User Management', actions: ['View', 'Create Login', 'Edit Permissions', 'Delete User'] },
   { module: 'Settings', actions: ['View', 'Edit'] }

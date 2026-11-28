@@ -42,6 +42,8 @@ export default function DeliveryPage() {
   const canEdit = hasPermission("Delivery: Create & Edit");
   const canStatus = hasPermission("Delivery: Update Status");
   const [data, setData] = useState<DeliveryList | null>(null);
+  // A failed load shows as an error with Retry, never as an empty list.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<DeliveryView>("today");
   const [search, setSearch] = useState("");
@@ -59,6 +61,7 @@ export default function DeliveryPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      setLoadError(null);
       setData(
         await deliveriesApi.list({
           view,
@@ -71,7 +74,7 @@ export default function DeliveryPage() {
         })
       );
     } catch (error) {
-      toast({ title: "Deliveries could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -299,6 +302,8 @@ export default function DeliveryPage() {
           footer={!loading && total > 0 && <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} noun="deliveries" />}
         >
           <DataTable
+            error={loadError}
+            onRetry={() => load()}
             columns={columns}
             rows={rows}
             rowKey={(d) => d._id}

@@ -11,6 +11,7 @@ const mailer = require('../utils/mailer');
 const { createTransporter, getFromAddress, sendMailErrorResponse } = mailer;
 const { hashInvitationToken, isLive } = require('../utils/invitationUtils');
 const { syncEmployeeForUser } = require('../utils/employeeSync');
+const { markPresentOnLogin, markCheckOutOnLogout } = require('../utils/autoAttendance');
 const { loginRateLimit, forgotPasswordRateLimit, resetPasswordRateLimit } = require('../middleware/loginRateLimit');
 
 const router = express.Router();
@@ -433,6 +434,7 @@ router.post('/invitation/:token/accept', [
     // one-time link and just chose the password, so making them retype it adds
     // nothing — and the token replaces whatever session the browser held.
     await user.updateLastLogin();
+    await markPresentOnLogin(user);
     await attachEntitlement(user);
     sendTokenResponse(user, 200, res, 'Your password has been set.');
 
@@ -603,6 +605,8 @@ router.post('/login', loginRateLimit, loginValidation, validate, async (req, res
     
     // Update last login
     await user.updateLastLogin();
+    // Signing in marks the linked employee present for the day.
+    await markPresentOnLogin(user);
     
     // Generate token and send response
     await attachEntitlement(user);
@@ -622,6 +626,9 @@ router.post('/login', loginRateLimit, loginValidation, validate, async (req, res
 // @access  Private
 router.get('/me', protect, async (req, res) => {
   try {
+    // A session can outlast the day it started on, so opening the app on a
+    // new day counts as that day's sign-in.
+    await markPresentOnLogin(req.user);
     await attachEntitlement(req.user);
     res.status(200).json({
       status: 'success',
@@ -643,6 +650,7 @@ router.get('/me', protect, async (req, res) => {
 // @access  Private
 router.post('/logout', protect, async (req, res) => {
   try {
+    await markCheckOutOnLogout(req.user);
     res.cookie('token', 'none', {
       expires: new Date(Date.now() + 10 * 1000),
       httpOnly: true

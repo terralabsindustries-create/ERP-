@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle, CreditCard, Link2, Plus, RotateCcw, Trash2, XCircle } from "lucide-react";
+import { CheckCircle, CreditCard, Download, Eye, Link2, Plus, Printer, RotateCcw, Trash2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -34,9 +34,25 @@ const receivedInto = (p: PaymentRecord) => (p.paymentAccountId && typeof p.payme
 export default function Payments() {
   const { hasPermission } = useAuth();
   const { toast } = useToast();
+  const receiptFailed = (error: unknown) => toast({ title: "Could not get the receipt", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+  // Opens the receipt PDF in a new tab. The tab is opened inside the click so pop-up blockers allow it.
+  const previewReceipt = async (p: { _id: string; paymentId?: string }) => {
+    const tab = window.open("", "_blank");
+    try {
+      const file = await apiClient.getPaymentReceiptPdfFile(p._id, p.paymentId);
+      const url = URL.createObjectURL(file.blob);
+      if (tab) tab.location.href = url; else window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (error) {
+      tab?.close();
+      receiptFailed(error);
+    }
+  };
   const canRecord = hasPermission("Payments: Record Payment");
   const canDelete = hasPermission("Payments: Delete");
   const [data, setData] = useState<PaymentsResponse | null>(null);
+  // A failed load shows as an error with Retry, never as an empty list.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [invoiceBreakdown, setInvoiceBreakdown] = useState<InvoicePaymentBreakdown | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -53,6 +69,7 @@ export default function Payments() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      setLoadError(null);
       const p: Record<string, string> = { page: String(page), limit: String(PAGE_SIZE) };
       if (q) p.search = q;
       if (view !== "all") p.status = view;
@@ -60,7 +77,7 @@ export default function Payments() {
       if (account !== "all") p.paymentAccountId = account;
       setData((await apiClient.getPayments(p)) as PaymentsResponse);
     } catch (error) {
-      toast({ title: "Payments could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -220,11 +237,16 @@ export default function Payments() {
           footer={!loading && total > 0 && <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} noun="payments" />}
         >
           <DataTable
+            error={loadError}
+            onRetry={() => load()}
             columns={columns}
             rows={rows}
             rowKey={(p) => p._id}
             loading={loading}
             actions={(p) => [
+              { label: "Preview receipt", icon: Eye, onClick: () => previewReceipt(p) },
+              { label: "Print receipt", icon: Printer, onClick: () => { apiClient.printPaymentReceiptPDF(p._id, p.paymentId).catch(receiptFailed); } },
+              { label: "Download receipt", icon: Download, onClick: () => { apiClient.downloadPaymentReceiptPDF(p._id, p.paymentId).catch(receiptFailed); } },
               {
                 label: (p.allocations || []).length ? "Change allocation" : "Allocate to invoices",
                 icon: Link2,

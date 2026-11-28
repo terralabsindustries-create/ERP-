@@ -154,7 +154,8 @@ describe('editing a draft quotation', () => {
     const res = await admin().put(`/api/quotations/${q._id}`, edited(q, { notes: 'Too late' }));
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('QUOTATION_LOCKED');
-    expect(res.body.message).toMatch(/invoice INV-/);
+    // Converted into a draft invoice, which carries a draft identifier until issued.
+    expect(res.body.message).toMatch(/invoice (INV|DRAFT)-/);
     expect((await Quotation.findById(q._id)).notes).toBe('Revised after the call');
   });
 });

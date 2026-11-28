@@ -199,6 +199,8 @@ deliverySchema.index({ userId: 1, jobId: 1 });
 deliverySchema.index({ userId: 1, priority: 1 });
 deliverySchema.index({ dataScope: 1, status: 1, deliveryDate: 1 });
 deliverySchema.index({ customerId: 1, deliveryDate: -1 });
+// The Job Tickets list looks up each job's latest delivery.
+deliverySchema.index({ jobId: 1, createdAt: -1 });
 
 // Virtual for full address
 deliverySchema.virtual('fullAddress').get(function () {

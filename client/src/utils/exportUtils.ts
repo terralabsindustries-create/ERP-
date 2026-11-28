@@ -1,4 +1,4 @@
-import { localDate } from "@/lib/format";
+import { fmtDate, localDate } from "@/lib/format";
 // Export utilities for CSV and PDF generation
 export const exportToCSV = (data: any[], filename: string, headers?: string[]) => {
   if (!data || data.length === 0) {
@@ -57,9 +57,9 @@ export const formatCustomersForExport = (customers: any[]) => {
     'Status': customer.status,
     'Tags': Array.isArray(customer.tags) ? customer.tags.join('; ') : '',
     'Address': customer.address || '',
-    'Created Date': new Date(customer.created_at).toLocaleDateString(),
-    'Last Order Date': customer.last_order_date ? new Date(customer.last_order_date).toLocaleDateString() : '',
-    'Last Payment Date': customer.last_payment_date ? new Date(customer.last_payment_date).toLocaleDateString() : '',
+    'Created Date': fmtDate(customer.created_at, ''),
+    'Last Order Date': customer.last_order_date ? fmtDate(customer.last_order_date, '') : '',
+    'Last Payment Date': customer.last_payment_date ? fmtDate(customer.last_payment_date, '') : '',
     'Notes': customer.notes || ''
   }));
 };
@@ -69,8 +69,8 @@ export const formatInvoicesForExport = (invoices: any[]) => {
   return invoices.map(invoice => ({
     'Invoice Number': invoice.invoice_number,
     'Customer Name': invoice.customer_name || invoice.customers?.name || '',
-    'Date': new Date(invoice.created_at).toLocaleDateString(),
-    'Due Date': invoice.due_date ? new Date(invoice.due_date).toLocaleDateString() : '',
+    'Date': fmtDate(invoice.created_at, ''),
+    'Due Date': invoice.due_date ? fmtDate(invoice.due_date, '') : '',
     'Subtotal': invoice.subtotal || 0,
     'CGST Rate': invoice.cgst_rate || 0,
     'SGST Rate': invoice.sgst_rate || 0,
@@ -86,7 +86,7 @@ export const formatInvoicesForExport = (invoices: any[]) => {
     'Payment Terms': invoice.payment_terms || '',
     'Is Interstate': invoice.is_interstate ? 'Yes' : 'No',
     'Customer GSTIN': invoice.customer_gstin || '',
-    'Paid Date': invoice.paid_date ? new Date(invoice.paid_date).toLocaleDateString() : '',
+    'Paid Date': invoice.paid_date ? fmtDate(invoice.paid_date, '') : '',
     'Notes': invoice.notes || ''
   }));
 };
@@ -107,8 +107,8 @@ export const formatInventoryForExport = (inventory: any[]) => {
     'Supplier': item.supplier || '',
     'Stock Status': (item.quantity || 0) <= (item.min_stock_level || 0) ? 'Low Stock' : 'In Stock',
     'Stock Alert Sent': item.stock_alert_sent ? 'Yes' : 'No',
-    'Created Date': new Date(item.created_at).toLocaleDateString(),
-    'Last Updated': new Date(item.updated_at).toLocaleDateString()
+    'Created Date': fmtDate(item.created_at, ''),
+    'Last Updated': fmtDate(item.updated_at, '')
   }));
 };
 
@@ -124,9 +124,9 @@ export const formatJobsForExport = (jobs: any[]) => {
     'Estimated Cost': job.estimated_cost || 0,
     'Actual Cost': job.actual_cost || 0,
     'Profit Margin': job.profit_percentage ? `${job.profit_percentage.toFixed(2)}%` : '',
-    'Created Date': new Date(job.created_at).toLocaleDateString(),
-    'Due Date': job.due_date ? new Date(job.due_date).toLocaleDateString() : '',
-    'Completed Date': job.completed_at ? new Date(job.completed_at).toLocaleDateString() : ''
+    'Created Date': fmtDate(job.created_at, ''),
+    'Due Date': job.due_date ? fmtDate(job.due_date, '') : '',
+    'Completed Date': job.completed_at ? fmtDate(job.completed_at, '') : ''
   }));
 };
 
@@ -145,8 +145,8 @@ export const formatVendorsForExport = (vendors: any[]) => {
     'GST Number': vendor.gst_number || '',
     'Address': vendor.address || '',
     'Status': vendor.status,
-    'Last Purchase Date': vendor.last_purchase_date ? new Date(vendor.last_purchase_date).toLocaleDateString() : '',
-    'Created Date': new Date(vendor.created_at).toLocaleDateString(),
+    'Last Purchase Date': vendor.last_purchase_date ? fmtDate(vendor.last_purchase_date, '') : '',
+    'Created Date': fmtDate(vendor.created_at, ''),
     'Notes': vendor.notes || ''
   }));
 };

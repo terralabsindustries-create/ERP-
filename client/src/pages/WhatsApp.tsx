@@ -557,6 +557,9 @@ export default function WhatsApp() {
                           </div>
                         );
                       }}
+                      error={templatesError && templates.length === 0 ? new Error(templatesError) : null}
+                      errorWhat="WhatsApp templates"
+                      onRetry={() => fetchTemplates()}
                       empty={
                         templates.length === 0 ? (
                           <EmptyState

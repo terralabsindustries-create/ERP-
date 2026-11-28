@@ -57,9 +57,12 @@ export default function ActivityLog() {
   const { user, hasPermission } = useAuth();
   const { toast } = useToast();
   const canExport = hasPermission("Activity Log: Export");
-  const canDelete = user?.role === "admin";
+  // The audit trail is append-only: the API refuses deletion for everyone, so the UI offers none.
+  const canDelete = false;
 
   const [rows, setRows] = useState<ActivityEntry[]>([]);
+  // A failed load shows as an error with Retry, never as an empty list.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<ActivityStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -90,11 +93,12 @@ export default function ActivityLog() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      setLoadError(null);
       const res = (await apiClient.get("/activity-log", { ...filters(), page, limit: PAGE_SIZE })) as { activities?: ActivityEntry[]; pagination?: { totalActivities?: number } };
       setRows(res?.activities || []);
       setTotal(res?.pagination?.totalActivities ?? 0);
     } catch (error) {
-      toast({ title: "The activity log could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -256,6 +260,8 @@ export default function ActivityLog() {
         footer={!loading && total > 0 && <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} noun="entries" />}
       >
         <DataTable
+          error={loadError}
+          onRetry={() => load()}
           columns={columns}
           rows={rows}
           rowKey={(a) => a._id}

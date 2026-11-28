@@ -102,6 +102,7 @@ export default function DesignerTimer() {
   );
 
   const listSeq = useRef(0);
+  const [listError, setListError] = useState<unknown>(null);
   const loadList = useCallback(
     async (silent = false) => {
       const seq = ++listSeq.current;
@@ -125,9 +126,11 @@ export default function DesignerTimer() {
         const res = await timeEntriesApi.list(params);
         if (seq !== listSeq.current) return;
         setList(res);
+        setListError(null);
         syncClock(res.serverTime);
       } catch (error) {
-        if (seq === listSeq.current && !silent) toast({ title: "Time entries could not be loaded", description: errText(error), variant: "destructive" });
+        // Shown in the table (with Retry), never as "no time entries".
+        if (seq === listSeq.current) setListError(error);
       } finally {
         if (seq === listSeq.current) setLoading(false);
       }
@@ -484,6 +487,9 @@ export default function DesignerTimer() {
           }
         >
           <DataTable
+            error={listError}
+            errorWhat="time entries"
+            onRetry={() => loadList()}
             columns={columns}
             rows={rows}
             rowKey={(e) => e._id}

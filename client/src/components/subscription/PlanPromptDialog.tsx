@@ -21,17 +21,19 @@ export function PlanPromptDialog() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const isAdmin = user?.role === "admin";
-  const plan = usePlanCheckout(!!user && !seenThisSession());
-  const { status, loading, onPaid } = plan;
+  // Whether the business needs a plan is already known from the signed-in
+  // profile (/auth/me carries the entitlement), so nothing is fetched for a
+  // business with a paid plan. Pack prices load only when the prompt opens.
+  const sub = user?.subscription;
+  const needsPrompt = !!user && !!sub && sub.status !== "paid" && (isAdmin || sub.isActive === false) && !seenThisSession();
+  useEffect(() => {
+    if (needsPrompt) setOpen(true);
+  }, [needsPrompt]);
+  const plan = usePlanCheckout(open && isAdmin);
+  const { onPaid } = plan;
+  const status = plan.status || sub;
 
   useEffect(() => onPaid(() => setOpen(false)), [onPaid]);
-
-  useEffect(() => {
-    if (loading || !status || seenThisSession()) return;
-    const needsPlan = status.status !== "paid";
-    const expired = !status.isActive;
-    if (needsPlan && (isAdmin || expired)) setOpen(true);
-  }, [loading, status, isAdmin]);
 
   const close = () => { markSeen(); setOpen(false); };
   const expired = status && !status.isActive;

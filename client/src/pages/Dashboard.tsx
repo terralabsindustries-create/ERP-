@@ -10,6 +10,7 @@ import {
   FileWarning,
   Landmark,
   Truck,
+  Package,
   Layers,
   Users,
   Wallet,
@@ -41,7 +42,7 @@ import { PaymentCollectionPanel } from "@/components/payments/PaymentCollectionP
 import { JobStatusBadge } from "@/components/jobs/JobStatusBadge";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { PageShell } from "@/components/layout/PageShell";
-import { dueState, formatINR, SHOP_FLOOR_STATUSES } from "@/lib/printWorkflow";
+import { dueState, formatINR } from "@/lib/printWorkflow";
 import { cn } from "@/lib/utils";
 
 const greeting = (d: Date) => {
@@ -68,6 +69,7 @@ interface DashboardStats {
   bankBalance: number | null;
   lowStockItems: number | null;
   pendingDeliveries: number | null;
+  readyForDispatch?: number | null;
 }
 
 const has = (n: number | null | undefined): n is number => typeof n === "number";
@@ -84,6 +86,8 @@ export default function Dashboard() {
   const [jobsLoading, setJobsLoading] = useState(true);
   const [statsError, setStatsError] = useState(false);
   const [jobsError, setJobsError] = useState(false);
+  const [boardCounts, setBoardCounts] = useState<Record<string, number>>({});
+  const [boardTotals, setBoardTotals] = useState<{ inProduction: number; readyForDispatch: number } | null>(null);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [sources, setSources] = useState<Record<string, string>>({});
   const { toast } = useToast();
@@ -110,8 +114,12 @@ export default function Dashboard() {
       return;
     }
     try {
-      const response: any = await apiClient.getJobs({ limit: 500 });
-      setJobs(response?.jobs || (Array.isArray(response) ? response : []));
+      // One light request: stage counts and totals from the server (the same
+      // rules the production board uses) plus the open jobs for the due list.
+      const board = await apiClient.getJobBoard();
+      setJobs(board.jobs || []);
+      setBoardCounts(board.counts || {});
+      setBoardTotals(board.totals);
       setJobsError(false);
     } catch (error) {
       console.error('Error fetching jobs for dashboard:', error);
@@ -135,16 +143,8 @@ export default function Dashboard() {
     }
   }, [user, authLoading, refresh]);
 
-  const stageCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const job of jobs) counts[job.status] = (counts[job.status] || 0) + 1;
-    return counts;
-  }, [jobs]);
-
-  const inProduction = useMemo(
-    () => jobs.filter((j) => SHOP_FLOOR_STATUSES.includes(j.status) && j.status !== "completed").length,
-    [jobs]
-  );
+  const stageCounts = boardCounts;
+  const inProduction = boardTotals?.inProduction ?? 0;
 
   const dueJobs = useMemo(() => {
     return jobs
@@ -213,7 +213,9 @@ export default function Dashboard() {
   ].filter(Boolean) as AttentionItem[];
 
   const shopRows = [
-    has(s?.pendingDeliveries) && { label: "Awaiting dispatch", value: String(s.pendingDeliveries), icon: Truck, href: "/delivery", warn: false, source: sources.pendingDeliveries },
+    // Ready to Dispatch on the production board — the same count, from the same rule.
+    has(s?.readyForDispatch) && { label: "Awaiting dispatch", value: String(s.readyForDispatch), icon: Package, href: "/production?stage=completed", warn: false, source: sources.readyForDispatch },
+    has(s?.pendingDeliveries) && { label: "Deliveries in progress", value: String(s.pendingDeliveries), icon: Truck, href: "/delivery", warn: false, source: sources.pendingDeliveries },
     has(s?.lowStockItems) && { label: "Low-stock materials", value: String(s.lowStockItems), icon: Layers, href: "/inventory", warn: s.lowStockItems > 0, source: sources.lowStockItems },
     has(s?.totalCustomers) && { label: "Customers", value: String(s.totalCustomers), icon: Users, href: "/customers", warn: false, source: undefined },
     has(s?.cashBalance) && { label: "Cash balance now", value: formatINR(s.cashBalance), icon: Wallet, href: "/accounts", warn: false, source: sources.cashBalance },

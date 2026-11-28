@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { format } from "date-fns";
-import { Download, Mail, Calendar, FileText, Info } from "lucide-react";
+import { Download, Mail, Calendar, FileText, Info, ChevronDown, FileSpreadsheet, Sheet } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { StatCard } from "@/components/common/StatTile";
 import { EmptyState } from "@/components/common/EmptyState";
 import { Button } from "@/components/ui/button";
@@ -192,6 +193,23 @@ export default function Reports() {
     window.URL.revokeObjectURL(url);
   };
 
+  // PDF and Excel are built on the server from the same figures as the page.
+  const [downloading, setDownloading] = useState<"pdf" | "xlsx" | null>(null);
+  const downloadReport = async (fileFormat: "pdf" | "xlsx") => {
+    setDownloading(fileFormat);
+    try {
+      await apiClient.downloadExport("/reports/revenue/download", `monthly-report-${selectedMonth}.${fileFormat}`, {
+        month: selectedMonth,
+        format: fileFormat,
+        notes: accountantNotes
+      });
+    } catch (error) {
+      toast({ title: "Download failed", description: error instanceof Error ? error.message : "The report file could not be prepared.", variant: "destructive" });
+    } finally {
+      setDownloading(null);
+    }
+  };
+
   const openEmailDialog = () => {
     if (!reportData) return;
     setEmailError(null);
@@ -220,7 +238,7 @@ export default function Reports() {
       const err = error as Error & { code?: string };
       setEmailError(
         err.code === "EMAIL_NOT_CONFIGURED" || err.code === "EMAIL_AUTH_FAILED"
-          ? "Email isn't set up on the server yet, so nothing was sent. Ask your admin to configure email, or use Export CSV and send the file yourself."
+          ? "Email isn't set up on the server yet, so nothing was sent. Ask your admin to configure email, or use Download and send the file yourself."
           : err.message || "The report could not be sent."
       );
     } finally {
@@ -243,10 +261,30 @@ export default function Reports() {
         </div>
         {canExport && activeReport === "monthly" && (
           <div>
-            <Button onClick={exportToCSV} disabled={!reportData} variant="outline">
-              <Download />
-              Export CSV
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" disabled={!reportData} loading={!!downloading}>
+                  <Download />
+                  {downloading ? "Preparing…" : "Download"}
+                  <ChevronDown className="opacity-60" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => downloadReport("pdf")}>
+                  <FileText />
+                  PDF
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => downloadReport("xlsx")}>
+                  <FileSpreadsheet />
+                  Excel (.xlsx)
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={exportToCSV}>
+                  <Sheet />
+                  CSV
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button onClick={openEmailDialog} disabled={!reportData}>
               <Mail />
               Email to Accountant
@@ -285,7 +323,7 @@ export default function Reports() {
 
       {loadError && !loading && (
         <Card>
-          <EmptyState icon={FileText} title="The report could not be loaded" description={loadError} />
+          <EmptyState icon={FileText} title="The report could not be loaded" description={loadError} action={<Button variant="outline" size="sm" onClick={generateReport}>Retry</Button>} />
         </Card>
       )}
 
@@ -481,7 +519,7 @@ export default function Reports() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Notes to accountant</CardTitle>
-              <p className="text-sm text-muted-foreground">Included in the CSV and the email</p>
+              <p className="text-sm text-muted-foreground">Included in the downloads and the email</p>
             </CardHeader>
             <CardContent>
               <Textarea

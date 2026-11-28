@@ -8,6 +8,7 @@ const request = require('supertest');
 const app = require('../src/app');
 const Invoice = require('../src/models/Invoice');
 const Job = require('../src/models/Job');
+const Delivery = require('../src/models/Delivery');
 const WalkInJob = require('../src/models/WalkInJob');
 const PDFService = require('../src/services/PDFService');
 const { backfillInvoiceJobTitles } = require('../src/scripts/backfillInvoiceJobTitles');
@@ -22,6 +23,7 @@ const api = (token) => ({
   get: (url) => request(app).get(url).set(auth(token)),
   post: (url, body) => request(app).post(url).set(auth(token)).send(body),
   put: (url, body) => request(app).put(url).set(auth(token)).send(body),
+  patch: (url, body) => request(app).patch(url).set(auth(token)).send(body),
   del: (url) => request(app).delete(url).set(auth(token))
 });
 const admin = () => api(org.tokens.admin);
@@ -126,6 +128,48 @@ test('a standalone invoice has no job and keeps a title the request gives it', a
   expect(labelled.body.data.invoice.jobTitle).toBe('Office stationery');
 });
 
+test('the unpaid list shows the recorded delivery state without crossing businesses', async () => {
+  const job = await make.job(org.admin, cust, { title: 'Unpaid delivery status job' });
+  const invoice = await make.invoice(org.admin, cust, { jobId: job._id });
+  const statusOf = async () => {
+    const res = await admin().get('/api/invoices?view=unpaid&limit=100');
+    expect(res.status).toBe(200);
+    return res.body.data.invoices.find((row) => row._id === String(invoice._id));
+  };
+
+  expect((await statusOf()).deliveryStatus).toBe('not_delivered');
+  await make.delivery(other.admin, cust, job, { status: 'delivered' });
+  expect((await statusOf()).deliveryStatus).toBe('not_delivered');
+
+  const first = await make.delivery(org.admin, cust, job);
+  expect((await statusOf()).deliveryStatus).toBe('scheduled');
+  await Delivery.updateOne({ _id: first._id }, { $set: { status: 'delivered' } });
+  expect((await statusOf()).deliveryStatus).toBe('delivered');
+  await make.delivery(org.admin, cust, job);
+  expect((await statusOf()).deliveryStatus).toBe('part_delivered');
+  await Job.updateOne({ _id: job._id }, { $set: { status: 'delivered' } });
+  expect((await statusOf()).deliveryStatus).toBe('delivered');
+
+  const standalone = await make.invoice(org.admin, cust);
+  const rows = (await admin().get('/api/invoices?view=unpaid&limit=100')).body.data.invoices;
+  expect(rows.find((row) => row._id === String(standalone._id)).deliveryStatus).toBe('untracked');
+
+  const endpoint = `/api/invoices/${standalone._id}/fulfillment`;
+  expect((await api(other.tokens.admin).patch(endpoint, { status: 'delivered' })).status).toBe(404);
+  expect((await api(org.tokens.manager).patch(endpoint, { status: 'delivered' })).status).toBe(403);
+  expect((await admin().patch(endpoint, { status: 'unknown' })).status).toBe(400);
+  expect((await admin().patch(`/api/invoices/${invoice._id}/fulfillment`, { status: 'delivered' })).status).toBe(409);
+
+  const before = await Invoice.findById(standalone._id);
+  expect((await admin().patch(endpoint, { status: 'delivered' })).status).toBe(200);
+  const marked = (await admin().get('/api/invoices?view=unpaid&limit=100')).body.data.invoices.find((row) => row._id === String(standalone._id));
+  expect(marked).toMatchObject({ deliveryStatus: 'delivered', deliverySource: 'invoice' });
+  expect((await Invoice.findById(standalone._id)).totalAmount).toBe(before.totalAmount);
+  expect((await admin().patch(endpoint, { status: 'not_delivered' })).status).toBe(200);
+  const reset = (await admin().get('/api/invoices?view=unpaid&limit=100')).body.data.invoices.find((row) => row._id === String(standalone._id));
+  expect(reset.deliveryStatus).toBe('not_delivered');
+});
+
 test('a search with regex characters is matched literally instead of failing', async () => {
   for (const q of ['(', 'C++', '[INV', '*']) {
     const res = await admin().get(`/api/invoices?search=${encodeURIComponent(q)}`);
@@ -145,11 +189,18 @@ test('an invoice billed from a counter job shows that job', async () => {
     userId: org.admin._id,
     dataScope: org.dataScope
   });
-  const inv = await admin().post('/api/invoices', { customerId: String(cust._id), items: [line], notes: `Counter job ${counter.jobNumber}` });
+  const inv = await admin().post('/api/invoices', { customerId: String(cust._id), items: [line], notes: `Counter job ${counter.jobNumber}`, status: 'sent' });
   expect(inv.status).toBe(201);
   const linked = await admin().put(`/api/walk-in-jobs/${counter._id}/invoice`, { invoiceId: inv.body.data.invoice._id });
   expect(linked.status).toBe(200);
   expect((await Invoice.findById(inv.body.data.invoice._id)).jobTitle).toBe(`${counter.jobNumber} · Wedding invitation inserts`);
+  const unpaidStatus = async () => {
+    const res = await admin().get('/api/invoices?view=unpaid&limit=100');
+    return res.body.data.invoices.find((row) => row._id === inv.body.data.invoice._id).deliveryStatus;
+  };
+  expect(await unpaidStatus()).toBe('ready');
+  expect((await admin().put(`/api/walk-in-jobs/${counter._id}/status`, { status: 'collected' })).status).toBe(200);
+  expect(await unpaidStatus()).toBe('collected');
 });
 
 test('amounts agree in the list, the invoice and its print data, with the design charge counted once', async () => {

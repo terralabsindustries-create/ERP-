@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { AlertTriangle, BadgeCheck, Briefcase, Download, FileText, Pencil, Plus, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -6,10 +6,13 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { PageShell } from "@/components/layout/PageShell";
-import { DataCard, DataTable, EntityCell, FilterSelect, MetricBar, SearchField, Stack, StatusPill, Tag, Toolbar, ViewTabs, type Column, type Metric } from "@/components/data";
+import { DataCard, DataTable, EntityCell, FilterSelect, MetricBar, Pagination, SearchField, Stack, StatusPill, Tag, Toolbar, ViewTabs, type Column, type Metric } from "@/components/data";
+import { useLoader } from "@/hooks/useLoader";
+import { useDebounced } from "@/hooks/useDebounced";
 import { CreateCustomerDialog } from "@/components/customers/CreateCustomerDialog";
 import { EditCustomerDialog } from "@/components/customers/EditCustomerDialog";
 import { CreateJobDialog } from "@/components/jobs/CreateJobDialog";
+import { StatementDialog } from "@/components/customers/StatementDialog";
 import apiClient from "@/lib/apiClient";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -53,25 +56,26 @@ const inView = (c: Customer, v: View) =>
               ? c.customerType === "Agency"
               : !isBusiness(c) && c.customerType !== "Walk-in" && c.customerType !== "Agency");
 
-/** Fetches every customer, a hundred at a time (the API's page limit). */
-async function fetchAllCustomers(): Promise<Customer[]> {
-  const all: Customer[] = [];
-  for (let page = 1; page <= 20; page++) {
-    const res = (await apiClient.getCustomer({ status: "all", limit: 100, page })) as { customers?: Customer[]; pagination?: { total?: number } };
-    const batch = res?.customers || [];
-    all.push(...batch.map((c) => ({ ...c, id: c.id || (c._id as string) })));
-    if (batch.length < 100 || page >= (res?.pagination?.total || 1)) break;
-  }
-  return all;
+const PAGE_SIZE = 50;
+const SORT_KEYS: Record<string, string> = { name: "name", type: "customerType", status: "status" };
+
+interface Summary {
+  counts: Record<View, number>;
+  active: number;
+  withGstin: number;
+  tags: string[];
+  billing: { invoiced: number; outstanding: number; owing: number } | null;
 }
+
+/** Every customer matching the filters, for exports (fetched a few pages at a time). */
+const fetchMatching = (params: Record<string, string | undefined>) =>
+  apiClient.listAll<Customer>("/customers", "customers", { status: "all", ...params }, 10000).then((all) => all.map((c) => ({ ...c, id: c.id || (c._id as string) })));
 
 export default function Customers() {
   const { user, hasPermission } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState(() => searchParams.get("q") || "");
   // A search from the header while already on this page arrives as a new ?q.
   const qParam = searchParams.get("q");
@@ -81,58 +85,64 @@ export default function Customers() {
   const [view, setView] = useState<View>("all");
   const [gst, setGst] = useState("all");
   const [tag, setTag] = useState("all");
+  const [page, setPage] = useState(1);
+  const [sort, setSort] = useState<{ id: string; dir: "asc" | "desc" } | null>({ id: "name", dir: "asc" });
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState<Customer | null>(null);
   const [jobFor, setJobFor] = useState<Customer | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [statementFor, setStatementFor] = useState<Customer | null>(null);
+  const canStatement = hasPermission("Invoicing") || hasPermission("Payments") || hasPermission("Accounts");
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const canEdit = hasPermission("Customers: Create & Edit");
   const canCreateJob = hasPermission("Jobs: Create & Edit");
   const canExport = hasPermission("Customers: Export");
+  const q = useDebounced(search.trim(), 300);
 
-  const load = useCallback(async () => {
-    if (!user) return;
-    try {
-      setCustomers(await fetchAllCustomers());
-    } catch (error) {
-      toast({ title: "Customers could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
-    } finally {
-      setLoading(false);
-    }
-  }, [user, toast]);
+  // Search, filters, sort and pages run on the server over every customer; a
+  // newer request cancels the one in flight (useLoader), and a failed one keeps
+  // the rows already shown under a "may be out of date" notice.
+  const filters = useMemo(
+    () => ({ view, gst: gst === "all" ? undefined : gst, tag: tag === "all" ? undefined : tag, search: q || undefined }),
+    [view, gst, tag, q]
+  );
+  useEffect(() => { setPage(1); setSelected(new Set()); }, [filters]);
+  const list = useLoader(
+    (signal) =>
+      apiClient.getWithSignal<{ customers: Customer[]; pagination: { totalCustomers: number } }>(
+        "/customers",
+        {
+          status: "all",
+          ...filters,
+          page,
+          limit: PAGE_SIZE,
+          ...(sort && SORT_KEYS[sort.id] ? { sortBy: SORT_KEYS[sort.id], sortOrder: sort.dir } : {}),
+        },
+        signal
+      ),
+    [filters, page, sort],
+    { enabled: !!user }
+  );
+  const summaryQ = useLoader((signal) => apiClient.getWithSignal<Summary>("/customers/stats/summary", undefined, signal), [], { enabled: !!user });
+  const customers = useMemo(() => (list.data?.customers || []).map((c) => ({ ...c, id: c.id || (c._id as string) })), [list.data]);
+  const total = list.data?.pagination?.totalCustomers ?? 0;
+  const summary = summaryQ.data;
+  const load = () => { list.reload(); summaryQ.reload(); };
+  const loading = list.isLoading;
+  const loadError = list.error;
 
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const showBilling = customers.some((c) => c.billing !== undefined && c.billing !== null) || hasPermission("Invoicing");
-  const allTags = useMemo(() => Array.from(new Set(customers.flatMap((c) => c.tags || []))).sort(), [customers]);
-
-  const rows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const digits = q.replace(/\D/g, "");
-    return customers.filter((c) => {
-      const matches =
-        !q ||
-        c.name.toLowerCase().includes(q) ||
-        (c.company || "").toLowerCase().includes(q) ||
-        (c.email || "").toLowerCase().includes(q) ||
-        (c.gstNumber || "").toLowerCase().includes(q) ||
-        (!!digits && (c.phone || "").replace(/\D/g, "").includes(digits));
-      const gstOk =
-        gst === "all" || (gst === "verified" ? !!c.gstVerified : gst === "unverified" ? !!c.gstNumber && !c.gstVerified : !c.gstNumber);
-      return matches && inView(c, view) && gstOk && (tag === "all" || (c.tags || []).includes(tag));
-    });
-  }, [customers, search, view, gst, tag]);
-
-  const count = (v: View) => customers.filter((c) => inView(c, v)).length;
-  const billed = customers.reduce((s, c) => s + (c.billing?.invoiced || 0), 0);
-  const outstanding = customers.reduce((s, c) => s + (c.billing?.outstanding || 0), 0);
-  const owing = customers.filter((c) => (c.billing?.outstanding || 0) > 0.5).length;
-  const active = customers.filter((c) => c.status === "active").length;
+  const showBilling = !!summary?.billing || hasPermission("Invoicing");
+  const allTags = summary?.tags || [];
+  const rows = customers;
+  const count = (v: View) => summary?.counts?.[v] ?? 0;
+  const billed = summary?.billing?.invoiced ?? 0;
+  const outstanding = summary?.billing?.outstanding ?? 0;
+  const owing = summary?.billing?.owing ?? 0;
 
   const metrics: Metric[] = [
-    { label: "Customers", value: customers.length, hint: `${active} active` },
-    { label: "Businesses", value: customers.filter(isBusiness).length, hint: `${customers.filter((c) => c.gstNumber).length} with a GSTIN`, onClick: () => setView("business"), active: view === "business" },
+    { label: "Customers", value: count("all"), hint: `${summary?.active ?? 0} active` },
+    { label: "Businesses", value: count("business"), hint: `${summary?.withGstin ?? 0} with a GSTIN`, onClick: () => setView("business"), active: view === "business" },
     ...(showBilling
       ? [
           { label: "Billed", value: formatINR(billed, { compact: billed >= 1e5 }), hint: "Issued invoices, all time" },
@@ -140,6 +150,36 @@ export default function Customers() {
         ]
       : [{ label: "Walk-in", value: count("walkin"), hint: "Counter customers" }])
   ];
+
+  const exportMatching = async (all: boolean) => {
+    try {
+      const list = await fetchMatching(all ? {} : filters);
+      exportRows(list, all ? "all_customers" : "customers");
+    } catch (error) {
+      toast({ title: "Export failed", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+    }
+  };
+
+  // Bulk actions: each selected customer is checked by the server (business,
+  // permission); the answer lists what succeeded and what did not, and why.
+  const runBulk = async (action: "deactivate" | "reactivate") => {
+    if (!selected.size || bulkBusy) return;
+    setBulkBusy(true);
+    try {
+      const res = await apiClient.post<{ succeeded: string[]; failed: { id: string; reason: string }[] }>("/customers/bulk", { action, ids: [...selected] });
+      toast({
+        title: `${res.succeeded.length} customer${res.succeeded.length === 1 ? "" : "s"} ${action === "deactivate" ? "deactivated" : "reactivated"}`,
+        description: res.failed.length ? `${res.failed.length} not changed: ${res.failed.slice(0, 3).map((f) => f.reason).join("; ")}` : undefined,
+        variant: res.failed.length ? "destructive" : undefined
+      });
+      setSelected(new Set());
+      load();
+    } catch (error) {
+      toast({ title: "Not changed", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   const exportRows = (list: Customer[], name: string) => {
     try {
@@ -216,7 +256,6 @@ export default function Customers() {
                 bottom={c.billing ? `${c.billing.invoices} invoice${c.billing.invoices === 1 ? "" : "s"}` : undefined}
               />
             ),
-            sortValue: (c) => c.billing?.invoiced || 0,
             hideBelow: "lg"
           },
           {
@@ -229,7 +268,6 @@ export default function Customers() {
               ) : (
                 <span className="text-muted-foreground">—</span>
               ),
-            sortValue: (c) => c.billing?.outstanding || 0
           }
         ] as Column<Customer>[])
       : []),
@@ -266,13 +304,13 @@ export default function Customers() {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56">
                   <DropdownMenuLabel>Export to CSV</DropdownMenuLabel>
-                  <DropdownMenuItem onClick={() => exportRows(rows, "customers")} disabled={rows.length === 0}>
+                  <DropdownMenuItem onClick={() => exportMatching(false)} disabled={total === 0}>
                     <Download />
-                    This view ({rows.length})
+                    This view ({total})
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => exportRows(customers, "all_customers")} disabled={customers.length === 0}>
+                  <DropdownMenuItem onClick={() => exportMatching(true)} disabled={count("all") === 0}>
                     <FileText />
-                    All customers ({customers.length})
+                    All customers ({count("all")})
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -287,14 +325,14 @@ export default function Customers() {
         }
       />
 
-      <MetricBar metrics={metrics} loading={loading} />
+      <MetricBar metrics={metrics} loading={summaryQ.isLoading || (!!summaryQ.error && !summary)} />
 
       <div className="space-y-4">
         <ViewTabs<View>
           value={view}
           onChange={setView}
           tabs={[
-            { value: "all", label: "All", count: customers.length },
+            { value: "all", label: "All", count: count("all") },
             { value: "walkin", label: "Walk-in", count: count("walkin") },
             { value: "agency", label: "Agencies", count: count("agency") },
             { value: "business", label: "Businesses", count: count("business") },
@@ -306,6 +344,15 @@ export default function Customers() {
         <DataCard
           toolbar={
             <Toolbar search={<SearchField value={search} onChange={setSearch} placeholder="Search name, phone, company or GSTIN" />}>
+              {selected.size > 0 && (
+                <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-2 py-1 text-xs" role="region" aria-label="Bulk actions">
+                  <span className="font-medium">{selected.size} selected</span>
+                  <Button size="sm" variant="outline" className="h-7" disabled={bulkBusy} onClick={() => exportRows(customers.filter((c) => selected.has(c.id)), "selected_customers")}>Export</Button>
+                  <Button size="sm" variant="outline" className="h-7" disabled={bulkBusy} onClick={() => runBulk("deactivate")}>Deactivate</Button>
+                  <Button size="sm" variant="outline" className="h-7" disabled={bulkBusy} onClick={() => runBulk("reactivate")}>Reactivate</Button>
+                  <Button size="sm" variant="ghost" className="h-7" onClick={() => setSelected(new Set())}>Clear</Button>
+                </div>
+              )}
               <FilterSelect
                 label="GST"
                 value={gst}
@@ -319,9 +366,22 @@ export default function Customers() {
               {allTags.length > 0 && <FilterSelect label="Tag" value={tag} onChange={setTag} options={allTags.map((t) => ({ value: t, label: t }))} />}
             </Toolbar>
           }
-          footer={!loading && rows.length > 0 && `${rows.length} of ${customers.length} customers`}
+          footer={!loading && total > 0 && (
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <span>{total.toLocaleString("en-IN")} customer{total === 1 ? "" : "s"}{list.isRefreshing ? " · updating…" : ""}</span>
+              <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} noun="customers" />
+            </div>
+          )}
         >
           <DataTable
+            error={loadError}
+            errorWhat="customers"
+            onRetry={() => list.reload()}
+            sort={sort}
+            onSortChange={(s) => { setSort(s); setPage(1); }}
+            selectable={canEdit}
+            selected={selected}
+            onSelectedChange={setSelected}
             columns={columns}
             rows={rows}
             rowKey={(c) => c.id}
@@ -329,10 +389,10 @@ export default function Customers() {
             onRowClick={canEdit ? edit : undefined}
             actions={(c) => [
               { label: "Edit customer", icon: Pencil, onClick: () => edit(c), hidden: !canEdit },
-              { label: "New job ticket", icon: Briefcase, onClick: () => setJobFor(c), hidden: !canCreateJob }
+              { label: "New job ticket", icon: Briefcase, onClick: () => setJobFor(c), hidden: !canCreateJob },
+              { label: "Statement of account", icon: FileText, onClick: () => setStatementFor(c), hidden: !canStatement }
             ]}
             actionsLabel={(c) => `Actions for ${c.name}`}
-            defaultSort={{ id: "name", dir: "asc" }}
             mobile={(c) => (
               <div className="flex items-start justify-between gap-3">
                 <EntityCell avatar={c.name} title={c.name} subtitle={c.company || c.phone || c.customerType} />
@@ -350,7 +410,7 @@ export default function Customers() {
             )}
             rowClassName={(c) => (c.status !== "active" ? "text-muted-foreground" : undefined)}
             empty={
-              customers.length === 0 ? (
+              count("all") === 0 && !filtered ? (
                 <EmptyState
                   icon={Users}
                   title="No customers yet"
@@ -392,6 +452,7 @@ export default function Customers() {
         </DataCard>
       </div>
 
+      <StatementDialog party={statementFor ? { id: statementFor.id, name: statementFor.name, kind: "customer" } : null} onOpenChange={(o) => !o && setStatementFor(null)} />
       <CreateCustomerDialog open={showCreate} onOpenChange={setShowCreate} onCustomerCreated={load} />
       <EditCustomerDialog customer={editing as never} onCustomerUpdated={load} onCustomerDeleted={load} />
       <CreateJobDialog
@@ -402,7 +463,6 @@ export default function Customers() {
           setJobFor(null);
           navigate("/jobs");
         }}
-        customers={customers}
         preselectedCustomer={jobFor}
       />
     </PageShell>

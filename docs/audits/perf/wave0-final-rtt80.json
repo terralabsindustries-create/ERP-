@@ -1,0 +1,145 @@
+{
+  "rttMs": 80,
+  "samples": 15,
+  "node": "v26.7.0",
+  "at": "2026-11-27T06:58:12.474Z",
+  "results": [
+    {
+      "endpoint": "auth/me",
+      "path": "/api/auth/me",
+      "status": 200,
+      "p50": 85.3,
+      "p95": 185.6,
+      "p99": 185.6,
+      "dbCommandsPerRequest": 5.3,
+      "payloadKB": 3.3
+    },
+    {
+      "endpoint": "customers list (100)",
+      "path": "/api/customers?status=all&limit=100",
+      "status": 200,
+      "p50": 380,
+      "p95": 429.7,
+      "p99": 429.7,
+      "dbCommandsPerRequest": 15.6,
+      "payloadKB": 103.6
+    },
+    {
+      "endpoint": "customers search",
+      "path": "/api/customers?status=all&limit=20&search=Bench%20Customer%2012",
+      "status": 200,
+      "p50": 459.1,
+      "p95": 508.5,
+      "p99": 508.5,
+      "dbCommandsPerRequest": 9,
+      "payloadKB": 20.8
+    },
+    {
+      "endpoint": "jobs list (limit 500, as Jobs page)",
+      "path": "/api/jobs?limit=500",
+      "status": 200,
+      "p50": 540.3,
+      "p95": 564.6,
+      "p99": 564.6,
+      "dbCommandsPerRequest": 9,
+      "payloadKB": 685.9
+    },
+    {
+      "endpoint": "jobs list (limit 25)",
+      "path": "/api/jobs?limit=25",
+      "status": 200,
+      "p50": 281.5,
+      "p95": 290.2,
+      "p99": 290.2,
+      "dbCommandsPerRequest": 6,
+      "payloadKB": 28.6
+    },
+    {
+      "endpoint": "job board (board + dashboard)",
+      "path": "/api/jobs/board",
+      "status": 200,
+      "p50": 641.1,
+      "p95": 708.4,
+      "p99": 708.4,
+      "dbCommandsPerRequest": 10,
+      "payloadKB": 624.5
+    },
+    {
+      "endpoint": "counter jobs (active)",
+      "path": "/api/walk-in-jobs?view=active&limit=100",
+      "status": 200,
+      "p50": 261.6,
+      "p95": 265.5,
+      "p99": 265.5,
+      "dbCommandsPerRequest": 4,
+      "payloadKB": 78.5
+    },
+    {
+      "endpoint": "notifications",
+      "path": "/api/notifications",
+      "status": 200,
+      "p50": 259.4,
+      "p95": 289.1,
+      "p99": 289.1,
+      "dbCommandsPerRequest": 11,
+      "payloadKB": 8.3
+    },
+    {
+      "endpoint": "razorpay plans",
+      "path": "/api/razorpay/plans",
+      "status": 200,
+      "p50": 89.6,
+      "p95": 95.3,
+      "p99": 95.3,
+      "dbCommandsPerRequest": 1,
+      "payloadKB": 0.7
+    },
+    {
+      "endpoint": "razorpay subscription",
+      "path": "/api/razorpay/subscription",
+      "status": 200,
+      "p50": 175.9,
+      "p95": 185.7,
+      "p99": 185.7,
+      "dbCommandsPerRequest": 2,
+      "payloadKB": 0.2
+    },
+    {
+      "endpoint": "dashboard stats",
+      "path": "/api/dashboard/stats",
+      "status": 200,
+      "p50": 279.6,
+      "p95": 300.6,
+      "p99": 300.6,
+      "dbCommandsPerRequest": 17,
+      "payloadKB": 1.2
+    },
+    {
+      "endpoint": "invoices list (25)",
+      "path": "/api/invoices?limit=25",
+      "status": 200,
+      "p50": 364.3,
+      "p95": 452.9,
+      "p99": 452.9,
+      "dbCommandsPerRequest": 5.1,
+      "payloadKB": 89.1
+    },
+    {
+      "endpoint": "global search",
+      "path": "/api/search?q=Bench%20Customer%2012",
+      "status": 200,
+      "p50": 340.9,
+      "p95": 392.1,
+      "p99": 392.1,
+      "dbCommandsPerRequest": 8,
+      "payloadKB": 3.2
+    }
+  ],
+  "concurrency": {
+    "endpoint": "jobs list (25) x8 concurrent",
+    "p50": 293.7,
+    "p95": 304.9,
+    "p99": 308.2,
+    "wallMs": 1476
+  }
+}

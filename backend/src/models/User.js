@@ -231,4 +231,7 @@ userSchema.methods.updateLastLogin = function () {
   return this.save({ validateBeforeSave: false });
 };
 
+// The business's admins, read for the plan entitlement on every request.
+userSchema.index({ dataScope: 1, role: 1 });
+
 module.exports = mongoose.model('User', userSchema);

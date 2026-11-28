@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 /** Header bell: your unread messages plus live alerts your permissions cover. */
 export function NotificationBell() {
   const navigate = useNavigate();
-  const { items, unreadCount, alerts, loading, markRead, markAllRead } = useNotifications();
+  const { items, unreadCount, alerts, loading, error, refresh, markRead, markAllRead } = useNotifications();
   const recent = items.slice(0, 8);
   const badge = unreadCount > 0 ? (unreadCount > 9 ? "9+" : String(unreadCount)) : null;
 
@@ -73,6 +73,13 @@ export function NotificationBell() {
           <p className="section-label px-2 pb-1 pt-2">Messages</p>
           {loading ? (
             <div className="px-3 py-4 text-sm text-muted-foreground">Loading…</div>
+          ) : error && recent.length === 0 ? (
+            <div role="alert" className="px-3 py-4 text-sm text-muted-foreground">
+              Couldn't load your messages.{" "}
+              <button type="button" className="font-medium text-primary underline-offset-2 hover:underline" onClick={(e) => { e.preventDefault(); refresh(); }}>
+                Retry
+              </button>
+            </div>
           ) : recent.length === 0 ? (
             <div className="px-3 py-4 text-sm text-muted-foreground">No messages yet. Task assignments, comments and status changes show up here.</div>
           ) : (

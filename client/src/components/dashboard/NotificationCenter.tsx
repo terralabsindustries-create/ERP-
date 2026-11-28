@@ -4,6 +4,7 @@ import { AlertTriangle, BellOff, CircleAlert, CheckCheck, ArrowRight } from "luc
 import { Button } from "@/components/ui/button";
 import { Panel } from "@/components/common/Panel";
 import { EmptyState } from "@/components/common/EmptyState";
+import { ErrorState } from "@/components/common/LoadState";
 import { useNotifications } from "@/hooks/useNotifications";
 import { cn } from "@/lib/utils";
 
@@ -14,7 +15,7 @@ import { cn } from "@/lib/utils";
  */
 export function NotificationCenter({ className }: { className?: string }) {
   const navigate = useNavigate();
-  const { items, unreadCount, alerts, loading, markRead, markAllRead } = useNotifications();
+  const { items, unreadCount, alerts, loading, error, refresh, markRead, markAllRead } = useNotifications();
   const recent = items.slice(0, 6);
 
   return (
@@ -37,6 +38,8 @@ export function NotificationCenter({ className }: { className?: string }) {
         <div className="space-y-2 p-4 sm:p-5">
           {[0, 1].map((i) => <div key={i} className="h-12 animate-pulse rounded-md bg-muted" />)}
         </div>
+      ) : error && alerts.length === 0 && recent.length === 0 ? (
+        <ErrorState compact error={error} what="notifications" onRetry={refresh} />
       ) : alerts.length === 0 && recent.length === 0 ? (
         <EmptyState compact icon={BellOff} title="You're all caught up" description="New task assignments, comments and alerts appear here." />
       ) : (

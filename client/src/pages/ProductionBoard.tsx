@@ -24,13 +24,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import apiClient from "@/lib/apiClient";
+import apiClient, { type JobBoard } from "@/lib/apiClient";
+import { ErrorState, StaleDataBanner } from "@/components/common/LoadState";
 import { cn } from "@/lib/utils";
 import {
   dueState,
   getStage,
   nextStage,
   PHASES,
+  PRE_PRODUCTION_COLUMN,
+  PRE_PRODUCTION_STAGE,
+  PRE_PRODUCTION_STATUSES,
   PRIORITY_STYLES,
   SHOP_FLOOR_STATUSES,
   STAGES,
@@ -72,21 +76,37 @@ export default function ProductionBoard() {
   const draggedId = useRef<string | null>(null);
   const columnRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
+  // Totals come from the server (utils/jobMetrics.js), the same numbers the
+  // dashboard shows; a failed refresh keeps the cards and says so.
+  const [totals, setTotals] = useState<JobBoard["totals"] | null>(null);
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const [loadedAt, setLoadedAt] = useState<number | undefined>(undefined);
+  const [truncated, setTruncated] = useState(false);
+  const inFlight = useRef(false);
+
   const fetchJobs = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setLoading(true);
     try {
-      const response: any = await apiClient.getJobs({ limit: 500 });
-      setJobs(response?.jobs || (Array.isArray(response) ? response : []));
+      const board = await apiClient.getJobBoard();
+      setJobs(board.jobs || []);
+      setTotals(board.totals);
+      setTruncated(!!board.truncated);
+      setLoadError(null);
+      setLoadedAt(Date.now());
     } catch (error) {
       console.error("Error fetching jobs:", error);
-      toast({ title: "Error", description: "Failed to load jobs", variant: "destructive" });
+      setLoadError(error);
     } finally {
+      inFlight.current = false;
       setLoading(false);
     }
   };
 
   useEffect(() => {
     fetchJobs();
-    const interval = setInterval(fetchJobs, 60000);
+    const interval = setInterval(() => document.visibilityState !== "hidden" && fetchJobs(), 60000);
     return () => clearInterval(interval);
   }, []);
 
@@ -98,7 +118,7 @@ export default function ProductionBoard() {
   }, [loading, focusStage, view]);
 
   const columns: Stage[] = useMemo(
-    () => (view === "floor" ? STAGES.filter((s) => SHOP_FLOOR_STATUSES.includes(s.status)) : STAGES),
+    () => (view === "floor" ? [PRE_PRODUCTION_STAGE, ...STAGES.filter((s) => SHOP_FLOOR_STATUSES.includes(s.status))] : STAGES),
     [view]
   );
 
@@ -132,13 +152,15 @@ export default function ProductionBoard() {
     }
     // Delivered work piles up forever; the board only needs the latest.
     map.delivered = map.delivered.slice(0, 15);
+    // Enquiries and quotes stay visible on the shop-floor view in one column.
+    map[PRE_PRODUCTION_COLUMN] = PRE_PRODUCTION_STATUSES.flatMap((st) => map[st] || []);
     return map;
   }, [filtered]);
 
-  const openJobs = jobs.filter((j) => !["delivered", "cancelled"].includes(j.status));
-  const overdue = openJobs.filter((j) => dueState(j.dueDate, j.status) === "overdue").length;
-  const dueToday = openJobs.filter((j) => dueState(j.dueDate, j.status) === "today").length;
-  const rush = openJobs.filter((j) => j.priority === "urgent").length;
+  const openCount = totals?.open ?? 0;
+  const overdue = totals?.overdue ?? 0;
+  const dueToday = totals?.dueToday ?? 0;
+  const rush = totals?.rush ?? 0;
 
   const moveJob = async (job: any, status: string) => {
     if (!canMove || job.status === status) return;
@@ -147,6 +169,7 @@ export default function ProductionBoard() {
     try {
       await apiClient.updateJobStatus(jobId(job), status, `Moved to ${getStage(status).label} on the production board`);
       toast({ title: "Job moved", description: `${job.title} → ${getStage(status).label}` });
+      fetchJobs(); // stage totals follow the move
     } catch (error: any) {
       setJobs((list) => list.map((j) => (jobId(j) === jobId(job) ? { ...j, status: previous } : j)));
       toast({
@@ -159,6 +182,8 @@ export default function ProductionBoard() {
 
   const onDrop = (status: string) => {
     setDragOver(null);
+    // Pre-production groups two stages; move a card there with its menu instead.
+    if (status === PRE_PRODUCTION_COLUMN) return;
     const id = draggedId.current;
     draggedId.current = null;
     const job = jobs.find((j) => jobId(j) === id);
@@ -226,19 +251,19 @@ export default function ProductionBoard() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All priorities</SelectItem>
-              <SelectItem value="urgent">Rush</SelectItem>
+              <SelectItem value="urgent">Urgent</SelectItem>
               <SelectItem value="high">High</SelectItem>
-              <SelectItem value="medium">Normal</SelectItem>
+              <SelectItem value="medium">Medium</SelectItem>
               <SelectItem value="low">Low</SelectItem>
             </SelectContent>
           </Select>
 
           <div className="ml-auto flex flex-wrap items-center gap-2 text-xs">
             <span className="rounded-md border bg-card px-2 py-1 text-muted-foreground">
-              <span className="num font-semibold text-foreground">{openJobs.length}</span> open
+              <span className="num font-semibold text-foreground">{openCount}</span> open
             </span>
             <span className="rounded-md border border-amber/50 bg-warning-soft px-2 py-1 text-warning-strong">
-              <span className="num font-semibold">{rush}</span> rush
+              <span className="num font-semibold">{rush}</span> urgent
             </span>
             <span className="rounded-md border border-phase-press/25 bg-phase-press/10 px-2 py-1 font-semibold text-phase-press-text">
               <span className="num font-semibold">{dueToday}</span> due today
@@ -250,7 +275,18 @@ export default function ProductionBoard() {
         </div>
       </div>
 
-      {/* The board */}
+      {loadError && loadedAt !== undefined && (
+        <div className="px-4 pb-3 md:px-6">
+          <StaleDataBanner error={loadError} onRetry={fetchJobs} retrying={loading} updatedAt={loadedAt} />
+        </div>
+      )}
+      {truncated && (
+        <p className="px-4 pb-3 text-xs text-muted-foreground md:px-6">Showing the 2,000 open jobs due soonest. Stage totals count every job.</p>
+      )}
+      {loadError && loadedAt === undefined ? (
+        <ErrorState error={loadError} what="the production board" onRetry={fetchJobs} retrying={loading} />
+      ) : (
+      /* The board */
       <div className="min-h-0 flex-1 overflow-x-auto px-4 pb-4 md:px-6 md:pb-6">
         <div className="flex h-full min-h-[420px] gap-3">
           {columns.map((stage, i) => {
@@ -261,7 +297,7 @@ export default function ProductionBoard() {
                 key={stage.status}
                 ref={(el) => (columnRefs.current[stage.status] = el)}
                 onDragOver={(e) => {
-                  if (!canMove) return;
+                  if (!canMove || stage.status === PRE_PRODUCTION_COLUMN) return;
                   e.preventDefault();
                   setDragOver(stage.status);
                 }}
@@ -292,7 +328,7 @@ export default function ProductionBoard() {
                     [0, 1].map((n) => <div key={n} className="skeleton h-24 rounded-lg" />)
                   ) : items.length === 0 ? (
                     <div className="rounded-lg border border-dashed border-border/80 px-3 py-6 text-center text-xs text-muted-foreground">
-                      {canMove ? "Drop a job here" : "No jobs"}
+                      {canMove && stage.status !== PRE_PRODUCTION_COLUMN ? "Drop a job here" : "No jobs"}
                     </div>
                   ) : (
                     items.map((job) => (
@@ -311,6 +347,7 @@ export default function ProductionBoard() {
           })}
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -390,6 +427,13 @@ function JobCard({
           </DropdownMenu>
         )}
       </div>
+
+      {PRE_PRODUCTION_STATUSES.includes(job.status) && (
+        <div className="mt-1.5 inline-flex items-center gap-1 rounded border px-1.5 py-px text-[10.5px] font-medium text-phase-sales-text">
+          <span className={cn("h-1.5 w-1.5 rounded-full", getStage(job.status).dot)} />
+          {getStage(job.status).label}
+        </div>
+      )}
 
       {specs.length > 0 && (
         <div className="mt-2 truncate rounded bg-muted px-1.5 py-1 font-mono text-[10.5px] text-muted-foreground">

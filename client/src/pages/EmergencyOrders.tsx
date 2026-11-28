@@ -34,6 +34,8 @@ export default function EmergencyOrders() {
   const canEdit = hasPermission("Emergency Orders: Create & Edit");
   const canConvert = canEdit && hasPermission("Jobs: Create & Edit");
   const [data, setData] = useState<RushList | null>(null);
+  // A failed load shows as an error with Retry, never as an empty list.
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<RushView>("open");
   const [search, setSearch] = useState("");
@@ -49,6 +51,7 @@ export default function EmergencyOrders() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      setLoadError(null);
       setData(
         await rushOrdersApi.list({
           view,
@@ -60,7 +63,7 @@ export default function EmergencyOrders() {
         })
       );
     } catch (error) {
-      toast({ title: "Rush orders could not be loaded", description: error instanceof Error ? error.message : undefined, variant: "destructive" });
+      setLoadError(error);
     } finally {
       setLoading(false);
     }
@@ -258,6 +261,8 @@ export default function EmergencyOrders() {
           footer={!loading && total > 0 && <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} noun="orders" />}
         >
           <DataTable
+            error={loadError}
+            onRetry={() => load()}
             columns={columns}
             rows={rows}
             rowKey={(o) => o._id}

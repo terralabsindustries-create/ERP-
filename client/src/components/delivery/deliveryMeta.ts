@@ -10,7 +10,7 @@ export const STATUS_META: Record<DeliveryStatus, { label: string; tone: PillTone
   cancelled: { label: "Cancelled", tone: "neutral" }
 };
 
-export const PRIORITY_LABEL: Record<DeliveryPriority, string> = { low: "Low", medium: "Normal", high: "High", urgent: "Urgent" };
+export const PRIORITY_LABEL: Record<DeliveryPriority, string> = { low: "Low", medium: "Medium", high: "High", urgent: "Urgent" };
 
 export const TIME_SLOTS: { value: TimeSlot; label: string }[] = [
   { value: "Flexible", label: "Any time" },

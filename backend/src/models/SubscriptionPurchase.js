@@ -38,9 +38,22 @@ const schema = new mongoose.Schema({
   settledVia: { type: String, enum: ['checkout', 'webhook', 'sync'] },
   // Provider identifiers kept for audit and deduplication.
   verifiedSignature: { type: Boolean, default: false },
-  webhookEventIds: { type: [String], default: [] }
+  webhookEventIds: { type: [String], default: [] },
+  // Last time this order was checked with Razorpay (status sync). Repeat checks
+  // within a short window answer from our record instead of calling Razorpay.
+  lastSyncedAt: { type: Date }
 }, { timestamps: true });
 
 schema.index({ workspaceKey: 1, createdAt: -1 });
+schema.index({ workspaceKey: 1, status: 1 });
+schema.index({ status: 1, createdAt: 1 });
+
+// Any change to a purchase can change what a business is entitled to: drop the
+// cached entitlement (services/subscriptionService.js) so the next request
+// re-reads it. Required lazily — the service requires this model.
+const invalidate = () => require('../services/subscriptionService').invalidateEntitlements();
+for (const op of ['save', 'findOneAndUpdate', 'updateOne', 'updateMany', 'deleteOne', 'deleteMany', 'insertMany']) {
+  schema.post(op, invalidate);
+}
 
 module.exports = mongoose.model('SubscriptionPurchase', schema);

@@ -287,10 +287,13 @@ settingsSchema.statics.getOrCreateSettings = async function (userId) {
   let settings = await this.findOne({ userId });
 
   if (!settings) {
-    settings = await this.create({
-      userId,
-      companyName: 'My Company'
-    });
+    try {
+      settings = await this.create({ userId, companyName: 'My Company' });
+    } catch (error) {
+      // Two requests made the first settings at the same moment (unique userId): use the winner's.
+      if (error.code !== 11000) throw error;
+      settings = await this.findOne({ userId });
+    }
   }
 
   return settings;

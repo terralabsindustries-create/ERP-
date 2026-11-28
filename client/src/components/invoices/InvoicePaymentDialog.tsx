@@ -26,6 +26,12 @@ export interface PayableInvoice {
   customerName?: string;
 }
 
+export interface RecordedPaymentReceipt {
+  _id: string;
+  paymentId: string;
+  amount: number;
+}
+
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const customerIdOf = (invoice: PayableInvoice | null) =>
   !invoice?.customerId ? "" : typeof invoice.customerId === "string" ? invoice.customerId : invoice.customerId._id;
@@ -47,7 +53,7 @@ export function InvoicePaymentDialog({
 }: {
   invoice: PayableInvoice | null;
   onOpenChange: (open: boolean) => void;
-  onSaved: () => void;
+  onSaved: (payment?: RecordedPaymentReceipt) => void;
   /** Open on the balance correction instead (e.g. a settled invoice, or a login that can only correct). */
   startWith?: "record" | "correct";
 }) {
@@ -115,9 +121,11 @@ export function InvoicePaymentDialog({
     setSaving(true);
     setError(null);
     try {
-      await apiClient.createPayment({ ...payload, idempotencyKey: attempt.current.key });
+      const response = (await apiClient.createPayment({ ...payload, idempotencyKey: attempt.current.key })) as { payment?: RecordedPaymentReceipt };
+      const payment = response.payment;
+      if (!payment?._id || !payment.paymentId) throw new Error("Payment was saved, but its receipt number was not returned. Open Payments to print the receipt.");
       toast({ title: "Payment recorded", description: `${formatINR(payload.amount)} against ${invoice.invoiceNumber}.` });
-      onSaved();
+      onSaved(payment);
       onOpenChange(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "The payment could not be recorded.");

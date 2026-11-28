@@ -532,6 +532,51 @@ router.get('/design-charges', protect, requirePermission('Reports'), [
   }
 });
 
+// @route   POST /api/reports/revenue/download   { month, format: pdf|xlsx, notes? }
+// @desc    The monthly report (with that year's design charges) as a PDF or Excel file.
+//          POST so the accountant notes, which can be long, travel in the body.
+// @access  Private (Reports: Export)
+router.post('/revenue/download', protect, requirePermission('Reports: Export'), [
+  validMonth(body('month')),
+  body('format').isIn(['pdf', 'xlsx']).withMessage('Format must be pdf or xlsx'),
+  body('notes').optional().isString().isLength({ max: 5000 }).withMessage('Notes can be up to 5,000 characters')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ status: 'error', message: errors.array()[0].msg });
+    const { month, format, notes } = req.body;
+    const [report, design] = await Promise.all([
+      buildMonthlyReport(req.user, month),
+      buildDesignChargeReport(req.user, Number(month.slice(0, 4)))
+    ]);
+    const { getCompanyInfo } = require('./invoices');
+    const info = await getCompanyInfo(req.user).catch(() => null);
+    const company = info?.isConfigured ? info : { name: req.user.companyName || '' };
+
+    ActivityLog.logActivity({
+      action: 'Monthly Report Downloaded',
+      description: `Monthly report for ${report.month} was downloaded as ${format.toUpperCase()}`,
+      entityType: 'system',
+      entityId: req.user._id,
+      entityName: `Monthly report ${month}`,
+      performedBy: req.user._id,
+      performedByName: req.user.fullName,
+      actionType: 'export',
+      severity: 'low',
+      userId: req.user._id,
+      dataScope: req.user.dataScope
+    }).catch((err) => console.error('Activity log (report download) failed:', err.message));
+
+    const exporter = require('../services/monthlyReportExport');
+    const args = { report, design, notes: (notes || '').trim(), company, month };
+    if (format === 'xlsx') return await exporter.writeXlsx(res, args);
+    return exporter.writePdf(res, args);
+  } catch (error) {
+    console.error('Monthly report download error:', error);
+    if (!res.headersSent) res.status(500).json({ status: 'error', message: 'Could not prepare the report file.' });
+  }
+});
+
 // @route   POST /api/reports/revenue/email
 // @desc    Email the monthly summary (CSV attached) to an accountant
 // @access  Private (Reports: Export)

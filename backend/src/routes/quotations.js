@@ -11,7 +11,7 @@ const { settingsOwnerId, businessSettings } = require('../utils/businessSettings
 const PDFService = require('../services/PDFService');
 const { AREA_UNITS, HSN_PATTERN, round2, parseDesignCharge, parseGstRate, priceQuotationDocument, priceInvoiceDocument, quotationLineToInvoiceLine, sizeLabel, areaLabel } = require('../utils/billing');
 const { protect } = require('../middleware/auth');
-const { requirePermission } = require('../middleware/requirePermission');
+const { requirePermission, userCan } = require('../middleware/requirePermission');
 
 async function getCompanyInfo(user) {
   const settings = await businessSettings(user);
@@ -56,6 +56,8 @@ async function getCompanyInfo(user) {
 const { createTransporter, getFromAddress, sendMailErrorResponse } = require('../utils/mailer');
 const { sendWhatsAppMessage, buildTemplateVariables } = require('../utils/metaWhatsApp');
 
+const { resolveLinePrices, PricingError } = require('../services/pricingService');
+
 const router = express.Router();
 
 const quotationValidation = [
@@ -69,7 +71,7 @@ const quotationValidation = [
   body('items.*.unit').optional({ values: 'falsy' }).isIn(Quotation.schema.path('items').schema.path('unit').enumValues).withMessage('Invalid unit'),
   body('items.*.length').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Length cannot be negative'),
   body('items.*.width').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Width cannot be negative'),
-  body('items.*.tax_rate').optional({ values: 'null' }).custom((v) => parseGstRate(v) !== null).withMessage('GST rate must be from 0 to 100%'),
+  body('items.*.tax_rate').optional({ values: 'null' }).custom((v) => v !== '' && parseGstRate(v) !== null).withMessage('Enter a GST rate from 0 to 100% (0 if the item carries no GST); a blank rate is not treated as 0'),
   body('design_charge').optional({ values: 'falsy' }).custom((v) => parseDesignCharge(v) !== null).withMessage('Design charge must be an amount of 0 or more'),
   body('design_charge_tax_rate').optional({ values: 'null' }).custom((v) => parseGstRate(v) !== null).withMessage('The design charge GST rate must be from 0 to 100%'),
   body('discount_amount').optional({ values: 'falsy' }).isFloat({ min: 0 }).withMessage('Discount cannot be negative'),
@@ -137,7 +139,7 @@ router.get('/', protect, async (req, res) => {
     const skip = (Number(page) - 1) * Number(limit);
     const quotations = await Quotation.find(filter)
       .populate('customer_id', 'name email phone')
-      .sort({ createdAt: -1 })
+      .sort({ createdAt: -1, _id: -1 })
       .skip(skip)
       .limit(Number(limit));
 
@@ -201,7 +203,14 @@ router.post('/', protect, requirePermission('Quotations: Create & Edit'), quotat
     // are length × width × quantity × rate; the discount comes off before tax;
     // GST at each line's rate and the design charge's own). Client totals are
     // ignored.
-    const priced = pricedQuotation({ ...req.body, items });
+    let resolvedItems;
+    try {
+      resolvedItems = await resolveLinePrices(items, { user: req.user, customerId: req.body.customer_id, canOverride: userCan(req.user, 'Pricing Master: Override Price'), keys: 'snake' });
+    } catch (e) {
+      if (e instanceof PricingError) return res.status(e.status).json({ status: 'error', code: e.code, message: e.message });
+      throw e;
+    }
+    const priced = pricedQuotation({ ...req.body, items: resolvedItems });
     if (priced.error) return res.status(400).json({ status: 'error', message: priced.error });
 
     const quotationNumber = await Quotation.generateQuotationNumber(req.user._id, req.user.dataScope);
@@ -253,7 +262,14 @@ router.put('/:id', protect, requirePermission('Quotations: Create & Edit'), quot
       : null;
     if (!customer) return res.status(404).json({ status: 'error', message: 'Customer not found' });
 
-    const priced = pricedQuotation(req.body);
+    let resolvedItems;
+    try {
+      resolvedItems = await resolveLinePrices(req.body.items, { user: req.user, customerId: req.body.customer_id, canOverride: userCan(req.user, 'Pricing Master: Override Price'), keys: 'snake', existing: (existing.items || []).map((i) => (i.toObject ? i.toObject() : i)) });
+    } catch (e) {
+      if (e instanceof PricingError) return res.status(e.status).json({ status: 'error', code: e.code, message: e.message });
+      throw e;
+    }
+    const priced = pricedQuotation({ ...req.body, items: resolvedItems });
     if (priced.error) return res.status(400).json({ status: 'error', message: priced.error });
 
     const { valid_until, payment_link, terms_conditions, notes, shipping_address } = req.body;
@@ -338,6 +354,7 @@ router.patch('/:id/status', protect, requirePermission('Quotations: Change Statu
 // Raises an invoice from an accepted quotation. The quotation itself is left
 // intact as a record and marked 'converted' so it can't be billed twice.
 router.post('/:id/convert-to-invoice', protect, requirePermission('Quotations: Convert to Invoice'), async (req, res) => {
+  let claimedId = null;
   try {
     const Invoice = require('../models/Invoice');
 
@@ -371,6 +388,32 @@ router.post('/:id/convert-to-invoice', protect, requirePermission('Quotations: C
     if (!customer) {
       return res.status(400).json({ status: 'error', message: 'The customer on this quotation no longer exists' });
     }
+
+    // Claim the quotation atomically. Only one request can hold the claim, so
+    // two simultaneous conversions cannot both raise an invoice. A claim older
+    // than a minute is a crashed attempt and may be taken over.
+    const claim = await Quotation.findOneAndUpdate(
+      {
+        ...filter,
+        status: { $nin: ['converted', 'rejected', 'expired', 'closed'] },
+        $or: [{ conversionLockAt: { $exists: false } }, { conversionLockAt: null }, { conversionLockAt: { $lt: new Date(Date.now() - 60 * 1000) } }]
+      },
+      { $set: { conversionLockAt: new Date() } },
+      { new: true, projection: { _id: 1 } }
+    );
+    if (!claim) {
+      const current = await Quotation.findOne(filter).select('status convertedInvoiceId convertedInvoiceNumber');
+      if (current && current.status === 'converted') {
+        return res.status(409).json({
+          status: 'error',
+          code: 'ALREADY_CONVERTED',
+          message: `Already converted to invoice ${current.convertedInvoiceNumber}`,
+          data: { invoiceId: current.convertedInvoiceId, invoiceNumber: current.convertedInvoiceNumber }
+        });
+      }
+      return res.status(409).json({ status: 'error', code: 'CONVERSION_IN_PROGRESS', message: 'This quotation is already being converted. Wait a moment and refresh before trying again.' });
+    }
+    claimedId = claim._id;
 
     // The lines, the design charge and their GST rates carry over as they were
     // quoted, so the invoice comes to the quoted total.
@@ -424,16 +467,32 @@ router.post('/:id/convert-to-invoice', protect, requirePermission('Quotations: C
       });
     }
 
-    quotation.status = 'converted';
-    quotation.convertedInvoiceId = invoice._id;
-    quotation.convertedInvoiceNumber = invoice.invoiceNumber;
-    quotation.convertedAt = new Date();
-    await quotation.save();
+    const convertedAt = new Date();
+    const linked = await Quotation.findOneAndUpdate(
+      { _id: quotation._id, status: { $nin: ['converted', 'rejected', 'expired', 'closed'] } },
+      {
+        $set: {
+          statusBeforeConversion: ['draft', 'sent', 'approved'].includes(quotation.status) ? quotation.status : 'approved',
+          status: 'converted',
+          convertedInvoiceId: invoice._id,
+          convertedInvoiceNumber: invoice.invoiceNumber,
+          convertedAt
+        },
+        $push: { conversionHistory: { invoiceId: invoice._id, invoiceNumber: invoice.invoiceNumber, convertedAt } }
+      },
+      { new: true }
+    ).catch(() => null);
+    if (!linked) {
+      // The quotation could not be linked: remove the draft just raised so no
+      // orphan invoice is left behind. (Its number is spent and not reused.)
+      await Invoice.deleteOne({ _id: invoice._id, status: 'draft' });
+      return res.status(409).json({ status: 'error', code: 'CONVERSION_FAILED', message: 'The quotation changed while it was being converted. No invoice was created; please try again.' });
+    }
 
     res.status(201).json({
       status: 'success',
       message: `Quotation ${quotation.quotationNumber} converted to invoice ${invoice.invoiceNumber}`,
-      data: { invoice, quotation }
+      data: { invoice, quotation: linked }
     });
   } catch (err) {
     console.error('Convert quotation to invoice error:', err);
@@ -442,6 +501,9 @@ router.post('/:id/convert-to-invoice', protect, requirePermission('Quotations: C
       message: 'Server error while converting quotation to invoice',
       error: err.message
     });
+  } finally {
+    // Whatever happened, the claim ends with the attempt.
+    if (claimedId) await Quotation.updateOne({ _id: claimedId }, { $unset: { conversionLockAt: '' } }).catch(() => {});
   }
 });
 

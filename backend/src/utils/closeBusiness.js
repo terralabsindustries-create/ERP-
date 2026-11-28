@@ -24,7 +24,10 @@ const NumberSequence = require('../models/NumberSequence');
 // Fields that point a record at the login that made it or the business.
 const MEMBER_FIELDS = ['userId', 'createdBy', 'businessId'];
 // Handled separately below.
-const SKIP = new Set(['User', 'OTP', 'NumberSequence']);
+// ActivityLog: the audit trail is append-only (models/ActivityLog.js) and is
+// never removed by application code, closing a business included; it ages out
+// only through audit retention (scripts/audit-retention.js).
+const SKIP = new Set(['User', 'OTP', 'NumberSequence', 'ActivityLog']);
 
 const UPLOADS_ROOT = path.resolve(process.cwd(), 'uploads');
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

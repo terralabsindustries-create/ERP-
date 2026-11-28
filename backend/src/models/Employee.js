@@ -78,6 +78,17 @@ const employeeSchema = new mongoose.Schema({
     other: { type: Number, default: 0, min: 0 }
   },
 
+  // Statutory contributions are opt-in per employee (config/statutory.js).
+  // When on, payroll works the PF / ESI deductions out instead of using the
+  // fixed amounts above.
+  statutory: {
+    pfApplicable: { type: Boolean, default: false },
+    // Contribute PF on the full basic instead of the ₹15,000 ceiling.
+    pfOnFullWage: { type: Boolean, default: false },
+    esiApplicable: { type: Boolean, default: false },
+    disability: { type: Boolean, default: false }
+  },
+
   // Bank / payment details
   bankDetails: {
     accountName: { type: String, trim: true },

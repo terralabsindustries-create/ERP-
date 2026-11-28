@@ -45,6 +45,8 @@ export interface DocumentSavedDialogProps {
   loadPdf?: (signal: AbortSignal) => Promise<PdfFile>;
   /** The ways to send it. Empty or left out, Send is not shown. */
   sendOptions?: SendOption[];
+  /** An optional follow-up action below the document actions. */
+  additionalAction?: { label: string; icon: LucideIcon; onSelect: () => void; loading?: boolean };
 }
 
 const ACTION_COLUMNS = ["", "sm:grid-cols-1", "sm:grid-cols-2", "sm:grid-cols-3"];
@@ -71,7 +73,8 @@ export function DocumentSavedDialog({
   documentKey,
   documentName,
   loadPdf,
-  sendOptions = []
+  sendOptions = [],
+  additionalAction
 }: DocumentSavedDialogProps) {
   const { toast } = useToast();
   const [busy, setBusy] = useState<"print" | "download" | null>(null);
@@ -220,6 +223,13 @@ export function DocumentSavedDialog({
             )}
             {sendButton}
           </div>
+        )}
+
+        {additionalAction && (
+          <Button className="w-full" onClick={additionalAction.onSelect} disabled={additionalAction.loading}>
+            {additionalAction.loading ? <Loader2 className="animate-spin" /> : <additionalAction.icon />}
+            {additionalAction.loading ? "Loading…" : additionalAction.label}
+          </Button>
         )}
 
         <DialogFooter className="pt-0">

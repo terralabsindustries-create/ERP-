@@ -13,7 +13,7 @@ const activityLogSchema = new mongoose.Schema({
   },
   entityType: {
     type: String,
-    enum: ['customer', 'job', 'invoice', 'payment', 'inventory', 'vendor', 'staff', 'task', 'delivery', 'emergency_order', 'walk_in_job', 'proof', 'time_entry', 'event', 'discount_rule', 'customer_pricing', 'hsn_code', 'account_transaction', 'cheque', 'cost', 'user', 'access_role', 'team', 'system'],
+    enum: ['customer', 'job', 'invoice', 'payment', 'inventory', 'vendor', 'staff', 'task', 'delivery', 'emergency_order', 'walk_in_job', 'proof', 'time_entry', 'event', 'discount_rule', 'customer_pricing', 'hsn_code', 'account_transaction', 'cheque', 'cost', 'user', 'access_role', 'team', 'system', 'payroll', 'purchase_order', 'settings', 'product_rate'],
     required: [true, 'Entity type is required']
   },
   entityId: {
@@ -38,7 +38,7 @@ const activityLogSchema = new mongoose.Schema({
   // Action details
   actionType: {
     type: String,
-    enum: ['create', 'read', 'update', 'delete', 'login', 'logout', 'export', 'import', 'approve', 'reject', 'assign', 'complete', 'cancel', 'start', 'pause', 'stop', 'upload', 'download', 'send', 'receive'],
+    enum: ['create', 'read', 'update', 'delete', 'login', 'logout', 'export', 'import', 'approve', 'reject', 'assign', 'complete', 'cancel', 'start', 'pause', 'stop', 'upload', 'download', 'send', 'receive', 'reverse', 'correct'],
     required: [true, 'Action type is required']
   },
   // Changes made (for update actions)
@@ -92,7 +92,19 @@ const activityLogSchema = new mongoose.Schema({
   // via the compound { dataScope: 1, createdAt: -1 } index.
   dataScope: {
     type: String
-  }
+  },
+  // Tenant the event belongs to: the dataScope, or the owning user's id for
+  // accounts that predate dataScope. Set at write time, never changed.
+  tenantId: { type: String, index: true },
+  // Ties every record written while one request was handled together (and to
+  // the X-Correlation-ID the caller sent, if any). See utils/auditContext.js.
+  correlationId: { type: String, index: true },
+  // Why a document was cancelled, reversed or corrected.
+  reason: { type: String, trim: true, maxlength: 500 },
+  // Protected events are the financial / stock / permission / payroll trail.
+  // They are kept for the long retention period and can never be removed by
+  // the application, only by the retention job once past that period.
+  protected: { type: Boolean, default: false }
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
@@ -128,28 +140,58 @@ activityLogSchema.virtual('timeAgo').get(function() {
   return this.createdAt.toLocaleDateString();
 });
 
+/*
+  Append-only. Entries are written once and never changed or removed through
+  the application: every update/replace/delete path on this model (documents,
+  queries, bulk) is refused, whoever the caller is — including admins. The only
+  removal is ActivityLog.purgeExpired() (see scripts/audit-retention.js), which
+  works at the driver level and only for entries past their retention period.
+*/
+const IMMUTABLE_MESSAGE = 'Audit log entries are append-only and cannot be modified or deleted.';
+const refuse = function refuse(next) {
+  const error = new Error(IMMUTABLE_MESSAGE);
+  error.code = 'AUDIT_IMMUTABLE';
+  error.statusCode = 403;
+  next(error);
+};
+['updateOne', 'updateMany', 'findOneAndUpdate', 'findOneAndReplace', 'replaceOne', 'findOneAndDelete', 'deleteMany'].forEach((op) =>
+  activityLogSchema.pre(op, { document: false, query: true }, refuse)
+);
+activityLogSchema.pre('deleteOne', { document: true, query: true }, refuse);
+activityLogSchema.pre('save', function onSave(next) {
+  return this.isNew ? next() : refuse(next);
+});
+activityLogSchema.pre('bulkWrite', function onBulk(next, ops) {
+  return (ops || []).every((op) => op.insertOne) ? next() : refuse(next);
+});
+
+// Never store credentials or secrets in an audit record, however a caller
+// builds `changes` / `metadata`.
+const SENSITIVE_KEY = /pass(word|wd)?|secret|token|otp|api[-_]?key|authorization|credential|cvv|card[-_]?number|signature|private[-_]?key|hash/i;
+function redact(value, depth = 0) {
+  if (value === null || value === undefined || depth > 6) return value;
+  if (value instanceof Date || value instanceof mongoose.Types.ObjectId) return value;
+  if (Array.isArray(value)) return value.map((v) => redact(v, depth + 1));
+  if (typeof value.toObject === 'function') return redact(value.toObject(), depth + 1);
+  if (typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = SENSITIVE_KEY.test(k) ? '[redacted]' : redact(v, depth + 1);
+    return out;
+  }
+  return value;
+}
+
+// Financial, stock, permission, payroll and approval events. Long retention.
+const PROTECTED_ENTITIES = new Set(['invoice', 'payment', 'inventory', 'account_transaction', 'cheque', 'user', 'access_role', 'payroll', 'purchase_order', 'settings', 'proof']);
+
 // Static method to log activity
 activityLogSchema.statics.logActivity = async function(data) {
+  const { currentContext } = require('../utils/auditContext');
+  const ctx = currentContext();
   const {
-    action,
-    description,
-    entityType,
-    entityId,
-    entityName,
-    performedBy,
-    performedByName,
-    actionType,
-    changes,
-    ipAddress,
-    userAgent,
-    relatedCustomer,
-    relatedJob,
-    relatedInvoice,
-    metadata,
-    severity = 'low',
-    tags = [],
-    userId,
-    dataScope
+    action, description, entityType, entityId, entityName, performedBy, performedByName, actionType,
+    changes, ipAddress, userAgent, relatedCustomer, relatedJob, relatedInvoice, metadata,
+    severity = 'low', tags = [], userId, dataScope, reason, correlationId
   } = data;
 
   return this.create({
@@ -161,19 +203,49 @@ activityLogSchema.statics.logActivity = async function(data) {
     performedBy,
     performedByName,
     actionType,
-    changes,
-    ipAddress,
-    userAgent,
+    changes: changes ? redact(changes) : changes,
+    ipAddress: ipAddress || ctx.ipAddress,
+    userAgent: userAgent || ctx.userAgent,
     relatedCustomer,
     relatedJob,
     relatedInvoice,
-    metadata,
+    metadata: metadata ? redact(metadata) : metadata,
     severity,
     tags,
     userId,
-    dataScope
+    dataScope,
+    tenantId: dataScope || (userId ? String(userId) : undefined),
+    correlationId: correlationId || ctx.correlationId || require('crypto').randomUUID(),
+    reason: reason ? String(reason).slice(0, 500) : undefined,
+    protected: data.protected !== undefined ? Boolean(data.protected) : PROTECTED_ENTITIES.has(entityType) || severity === 'critical' || /settings|custom fields/i.test(action || '')
   });
 };
+
+/*
+  Retention. Ordinary entries are kept AUDIT_RETENTION_DAYS (default 365);
+  protected ones AUDIT_PROTECTED_RETENTION_DAYS (default 2922 ≈ 8 years, the
+  period Indian company law expects books and records to be kept). Nothing else
+  removes entries. Returns the counts; with dryRun nothing is deleted.
+*/
+activityLogSchema.statics.purgeExpired = async function({ dryRun = true, now = new Date() } = {}) {
+  const days = (name, def) => Math.max(1, Number(process.env[name]) || def);
+  const ordinaryBefore = new Date(now.getTime() - days('AUDIT_RETENTION_DAYS', 365) * 864e5);
+  const protectedBefore = new Date(now.getTime() - days('AUDIT_PROTECTED_RETENTION_DAYS', 2922) * 864e5);
+  // Entries written before the `protected` flag existed are judged by their entity type,
+  // so legacy financial/permission history gets the long period without rewriting it.
+  const kinds = [...PROTECTED_ENTITIES];
+  const filter = {
+    $or: [
+      { protected: { $ne: true }, entityType: { $nin: kinds }, severity: { $ne: 'critical' }, createdAt: { $lt: ordinaryBefore } },
+      { $or: [{ protected: true }, { entityType: { $in: kinds } }, { severity: 'critical' }], createdAt: { $lt: protectedBefore } }
+    ]
+  };
+  const eligible = await this.collection.countDocuments(filter);
+  if (dryRun) return { dryRun: true, eligible, deleted: 0, ordinaryBefore, protectedBefore };
+  const result = await this.collection.deleteMany(filter);
+  return { dryRun: false, eligible, deleted: result.deletedCount, ordinaryBefore, protectedBefore };
+};
+activityLogSchema.statics.redact = redact;
 
 // Static method to get activity for an entity. scopeQuery is a tenant filter
 // built by the caller, e.g. { dataScope } or { userId } as a fallback.
